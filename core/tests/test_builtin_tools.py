@@ -1,11 +1,10 @@
-"""Builtin LLM tools (Task 7): create_booking_request, handover_to_operator, get_club_info."""
+"""Builtin LLM tools (Task 7): create_booking_request, handover_to_operator."""
 
 from datetime import UTC, datetime, timedelta
 
 from engine_fakes import ADMIN_JID, ADMIN_PHONE, CLIENT_JID, env  # noqa: F401
 
-from iler.settings_models import AllSettings, BotSettings, FaqItem, LlmSettings, NotifySettings, SenetSettings
-from iler.settings_models import ServiceItem
+from iler.settings_models import AllSettings, BotSettings, LlmSettings, NotifySettings, SenetSettings
 from iler.tools import registry
 from iler.tools.base import ToolContext
 
@@ -26,7 +25,8 @@ def test_builtin_tools_registered_and_enabled():
     names = {t.name for t in registry.enabled_tools(
         AllSettings(bot=BotSettings(), llm=LlmSettings(), notify=NotifySettings(), senet=SenetSettings())
     )}
-    assert {"create_booking_request", "handover_to_operator", "get_club_info"} <= names
+    assert {"create_booking_request", "handover_to_operator"} <= names
+    assert "get_club_info" not in names  # removed: the business prompt carries all business info
     tool = registry.get("create_booking_request")
     assert set(tool.parameters["required"]) == {"date", "time", "duration_hours", "seats"}
 
@@ -51,22 +51,6 @@ async def test_handover_dry_run_changes_nothing(env, pool):
     assert res.content["status"] == "handed_over"
     assert await pool.fetchval("SELECT status FROM conversations") == "active"
     assert env.gw.sent == []
-
-
-async def test_club_info_returns_section():
-    bot = BotSettings(
-        services=[ServiceItem(name="Общий зал", price="800 ₸/час"), ServiceItem(name="VIP", price="1500 ₸/час")],
-        faq=[FaqItem(q="Какие видеокарты?", a="RTX 4070 во всех ПК"), FaqItem(q="Есть парковка?", a="Да")],
-        address="ул. Абая 1",
-    )
-    tool = registry.get("get_club_info")
-    prices = (await tool.run(_ctx(None, bot=bot), {"topic": "prices"})).content
-    assert prices["section"] == "services"
-    assert {"name": "VIP", "price": "1500 ₸/час", "note": ""} in prices["items"]
-    addr = (await tool.run(_ctx(None, bot=bot), {"topic": "address"})).content
-    assert addr["address"] == "ул. Абая 1"
-    hw = (await tool.run(_ctx(None, bot=bot), {"topic": "видеокарты"})).content
-    assert hw["matches"] == [{"q": "Какие видеокарты?", "a": "RTX 4070 во всех ПК"}]
 
 
 async def test_booking_tool_dry_run_simulated(env, pool):

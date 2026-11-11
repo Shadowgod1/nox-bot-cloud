@@ -125,7 +125,7 @@
 ],
 [
 "post",
-"/api/templates/{template_id}/apply"
+"/api/templates/{template_id}/render"
 ],
 [
 "get",

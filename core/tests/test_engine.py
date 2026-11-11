@@ -9,7 +9,7 @@ from iler import events, inbound
 from iler.engine import admission, handler, turn
 from iler.llm.base import ChatMessage, LlmError, LlmResponse
 from iler.llm.fake import FakeLLM
-from iler.settings_models import DayHours, NotifySettings, ServiceItem, WeeklyHours
+from iler.settings_models import DayHours, NotifySettings, WeeklyHours
 
 
 def _user_texts(call) -> list[str]:
@@ -145,8 +145,8 @@ def test_within_hours():
     assert not admission.within_hours(hours, datetime(2026, 11, 12, 12, 0))
 
 
-async def test_prompt_contains_tz_now_and_services(env):
-    await env.set_bot(services=[ServiceItem(name="VIP-зал", price="1500 ₸/час")], address="ул. Абая 1")
+async def test_prompt_contains_tz_now_and_business_prompt(env):
+    await env.set_bot(prompt="Ты — администратор клуба. VIP-зал — 1500 ₸/час. Адрес: ул. Абая 1.")
     await handler.handle_incoming(make_msg("Сколько стоит?"))
     await env.idle()
     system = env.llm.calls[0]["messages"][0]
@@ -157,7 +157,10 @@ async def test_prompt_contains_tz_now_and_services(env):
     from zoneinfo import ZoneInfo
 
     assert datetime.now(ZoneInfo("Asia/Almaty")).strftime("%d.%m.%Y") in system.content
-    assert "Айдар" in system.content
+    # the WhatsApp push name is client-controlled: it goes to the user side as quoted data, never the system prompt
+    assert "Айдар" not in system.content
+    first_user = env.llm.calls[0]["messages"][1]
+    assert first_user.role == "user" and "«Айдар»" in first_user.content and "Сколько стоит?" in first_user.content
 
 
 async def test_history_limited_to_memory_messages(env, pool):

@@ -14,6 +14,7 @@ import type {
   NotifySettings,
   RestoreResult,
   SenetSettings,
+  TemplateField,
   TemplateMeta,
   UpdateStatus,
   User,
@@ -77,15 +78,20 @@ const s: State = {
   bot: {
     enabled: true,
     name: 'Ассистент клуба',
-    persona: 'Дружелюбный администратор компьютерного клуба. Отвечает коротко и по делу.',
-    instructions: 'Отвечай на вопросы о ценах, зонах и свободных местах.\nЕсли клиент хочет забронировать — уточни дату, время, длительность и число мест, затем создай заявку.',
-    services: [
-      { name: 'Стандарт, 1 час', price: '800 ₸', note: 'RTX 4060, 165 Гц' },
-      { name: 'VIP, 1 час', price: '1 200 ₸', note: 'RTX 4080, 240 Гц' },
-      { name: 'Ночной пакет 23:00–08:00', price: '4 500 ₸', note: '' },
-    ],
-    faq: [{ q: 'Можно со своей едой?', a: 'Напитки можно, еду — только в лаунж-зоне.' }],
-    address: 'Алматы, ул. Абая 10, 2 этаж',
+    template_id: 'computer_club',
+    template_values: {
+      business_name: 'CyberArena',
+      address: 'Алматы, ул. Абая 10, 2 этаж',
+      phone: '+7 701 555 12 34',
+      hours: 'Круглосуточно',
+      zones: 'Стандарт — 30 ПК, RTX 4060, 165 Гц\nVIP — 12 ПК, RTX 4080, 240 Гц',
+      prices: 'Стандарт — 800 ₸/час\nVIP — 1 200 ₸/час\nНочной пакет 23:00–08:00 — 4 500 ₸',
+      rules: '',
+      payment: 'Наличные, карта, Kaspi',
+      extra: '',
+    },
+    prompt: '',
+    prompt_edited: false,
     hours: { always_open: false, mon: day, tue: day, wed: day, thu: day, fri: { ...day, close: '24:00' }, sat: { open: '00:00', close: '24:00', closed: false }, sun: { open: '00:00', close: '24:00', closed: false } },
     after_hours_mode: 'reply',
     after_hours_message: '',
@@ -186,7 +192,7 @@ function addMessage(conversation_id: number, author: Message['author'], text: st
   return msg
 }
 
-type Handler = (m: RegExpMatchArray, body: Record<string, unknown>, url: URL) => Response | Promise<Response>
+type Handler = (m: RegExpMatchArray, body: Record<string, unknown>, url: URL, init?: RequestInit) => Response | Promise<Response>
 const routes: [string, RegExp, Handler][] = []
 const on = (method: string, pattern: string, h: Handler) =>
   routes.push([method, new RegExp(`^${pattern.replace(/:(\w+)/g, '([^/]+)')}$`), h])
@@ -194,14 +200,19 @@ const on = (method: string, pattern: string, h: Handler) =>
 /* ---------- setup / auth ---------- */
 
 on('GET', '/api/setup/state', () => json({ needs_setup: s.needsSetup }))
-on('POST', '/api/setup/owner', (_m, b) => {
+on('POST', '/api/setup/owner', (_m, b, _url, init) => {
   if (!s.needsSetup) return fail(409, 'already_set_up', 'Setup is already complete')
+  // Like core: the one-time installer token comes in X-ILER-Setup-Token (open /setup?token=anything in the mock).
+  const token = new Headers(init?.headers).get('X-ILER-Setup-Token')
+  if (!token) return fail(403, 'setup_token_required', 'Setup token required')
+  if (token === 'bad') return fail(403, 'setup_token_invalid', 'Setup token invalid')
   if (String(b.password ?? '').length < 10) return fail(422, 'validation_error', 'body.password: Value error, password must be at least 10 characters')
   s.needsSetup = false
   s.user = { id: 1, email: String(b.email).trim().toLowerCase(), name: String(b.name ?? ''), role: 'owner' }
   s.users = [{ ...s.user, created_at: new Date().toISOString(), last_login_at: null }]
   s.wa = { status: 'close', phone: null, last_error: null }
   s.llm._openai = null
+  s.bot = { ...s.bot, prompt: '', template_id: null, template_values: {}, prompt_edited: false }
   login() // core sets the session + CSRF cookies here
   return json(s.user)
 })
@@ -425,15 +436,78 @@ on('POST', '/api/test-chat', async (_m, b) => {
 
 /* ---------- templates ---------- */
 
-on('GET', '/api/templates', () =>
-  json([
-    { id: 'computer_club', name: 'Компьютерный клуб', description: 'Цены по зонам, свободные места, заявки на бронь, ночные пакеты.' },
-    { id: 'generic', name: 'Универсальный', description: 'Вежливый ассистент: ответы на вопросы, приём заявок, передача оператору.' },
-  ] satisfies TemplateMeta[]),
-)
-on('POST', '/api/templates/:id/apply', (m) => {
-  if (!['computer_club', 'generic'].includes(decodeURIComponent(m[1]))) return fail(404, 'not_found', 'Template not found')
-  return json(s.bot) // core returns the resulting BotSettings
+const f = (key: string, label: string, type: TemplateField['type'], required: boolean, placeholder = ''): TemplateField => ({ key, label, type, required, placeholder, hint: '' })
+const COMMON_HEAD = [
+  f('business_name', 'Название', 'text', true, 'CyberArena'),
+  f('address', 'Адрес', 'text', true, 'Алматы, ул. Абая 10'),
+  f('phone', 'Телефон для связи', 'phone', false, '+7 701 000 00 00'),
+  f('hours', 'Часы работы', 'text', true, 'Ежедневно 10:00–21:00'),
+]
+const EXTRA = f('extra', 'Дополнительно (акции, парковка, правила)', 'textarea', false)
+const TEMPLATES: (TemplateMeta & { prompt: string })[] = [
+  {
+    id: 'computer_club',
+    name: 'Компьютерный клуб',
+    description: 'Зоны, железо и цены, заявки на бронь, свободные места (если подключён SENET).',
+    fields: [...COMMON_HEAD, f('zones', 'Зоны и железо', 'textarea', true, 'Общий зал — 20 ПК, RTX 4060'), f('prices', 'Тарифы и пакеты', 'textarea', true, 'Общий зал — 800 ₸/час'), f('rules', 'Правила клуба', 'textarea', false), f('payment', 'Способы оплаты', 'text', false), EXTRA],
+    defaults: { name: 'Администратор клуба', greeting: 'Привет! Я администратор клуба 🎮' },
+    prompt: 'Ты — администратор компьютерного клуба «{{business_name}}» в WhatsApp.\n\nАдрес: {{address}}\nЧасы работы: {{hours}}\n{{#phone}}Телефон: {{phone}}{{/phone}}\n\nЗоны и железо:\n{{zones}}\n\nТарифы:\n{{prices}}\n{{#rules}}\nПравила:\n{{rules}}\n{{/rules}}{{#payment}}\nОплата: {{payment}}\n{{/payment}}{{#extra}}\nДополнительно:\n{{extra}}{{/extra}}\n\nБронь — только через create_booking_request; сложные вопросы — handover_to_operator.',
+  },
+  {
+    id: 'beauty_salon',
+    name: 'Салон красоты / барбершоп',
+    description: 'Услуги и цены, мастера, заявки на запись на удобное время.',
+    fields: [...COMMON_HEAD, f('services', 'Услуги и цены', 'textarea', true, 'Стрижка — 5000 ₸'), f('masters', 'Мастера', 'textarea', false), EXTRA],
+    defaults: { name: 'Администратор' },
+    prompt: 'Ты — администратор «{{business_name}}».\nАдрес: {{address}}\nЧасы работы: {{hours}}\n\nУслуги и цены:\n{{services}}\n{{#masters}}\nМастера:\n{{masters}}{{/masters}}',
+  },
+  {
+    id: 'clinic',
+    name: 'Клиника / стоматология',
+    description: 'Услуги, врачи, заявки на приём. Не даёт медицинских советов.',
+    fields: [...COMMON_HEAD, f('services', 'Услуги и цены', 'textarea', true), f('doctors', 'Врачи и специализации', 'textarea', false), EXTRA],
+    defaults: { name: 'Администратор клиники' },
+    prompt: 'Ты — администратор клиники «{{business_name}}». Никогда не ставь диагнозы.\nАдрес: {{address}}\n\nУслуги и цены:\n{{services}}',
+  },
+  {
+    id: 'generic',
+    name: 'Универсальный бизнес',
+    description: 'Консультации, сбор заявок, передача клиента менеджеру.',
+    fields: [f('business_name', 'Название компании', 'text', true), f('activity', 'Чем вы занимаетесь', 'textarea', true), f('services', 'Товары / услуги и цены', 'textarea', true), EXTRA],
+    defaults: { name: 'Ассистент' },
+    prompt: 'Ты — онлайн-консультант компании «{{business_name}}».\n\n{{activity}}\n\nТовары и услуги:\n{{services}}',
+  },
+]
+
+/** Same logic-less renderer as core (templates_loader.render). */
+function renderPrompt(tpl: string, values: Record<string, string>): string {
+  const filled = (k: string) => Boolean((values[k] ?? '').trim())
+  let text = tpl
+  for (let i = 0; i < 10; i++) {
+    const next = text.replace(/\{\{([#^])\s*([a-z][a-z0-9_]*)\s*\}\}([\s\S]*?)\{\{\/\s*\2\s*\}\}/g, (_m, kind: string, key: string, body: string) =>
+      filled(key) === (kind === '#') ? body : '',
+    )
+    if (next === text) break
+    text = next
+  }
+  text = text.replace(/\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/g, (_m, key: string) => (values[key] ?? '').trim())
+  return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+s.bot.prompt = renderPrompt(TEMPLATES[0].prompt, s.bot.template_values)
+
+on('GET', '/api/templates', () => json(TEMPLATES.map(({ prompt: _p, ...meta }) => meta) satisfies TemplateMeta[]))
+on('POST', '/api/templates/:id/render', (m, b) => {
+  const t = TEMPLATES.find((x) => x.id === decodeURIComponent(m[1]))
+  if (!t) return fail(404, 'not_found', 'Template not found')
+  const values = (b.values ?? {}) as Record<string, unknown>
+  const keys = new Set(t.fields.map((x) => x.key))
+  for (const [k, v] of Object.entries(values)) {
+    if (!keys.has(k)) return fail(422, 'validation_error', `unknown field: ${k}`)
+    if (typeof v !== 'string' || v.length > 4000) return fail(422, 'validation_error', `field ${k}: invalid`)
+  }
+  const vals = values as Record<string, string>
+  return json({ prompt: renderPrompt(t.prompt, vals), missing: t.fields.filter((x) => x.required && !(vals[x.key] ?? '').trim()).map((x) => x.key) })
 })
 
 /* ---------- users ---------- */
@@ -526,7 +600,7 @@ export async function mockFetch(input: string, init: RequestInit = {}): Promise<
     const match = url.pathname.match(re)
     if (match) {
       const body = typeof init.body === 'string' && init.body ? (JSON.parse(init.body) as Record<string, unknown>) : {}
-      return h(match, body, url)
+      return h(match, body, url, init)
     }
   }
   return fail(404, 'not_found', `Mock: no handler for ${method} ${url.pathname}`)

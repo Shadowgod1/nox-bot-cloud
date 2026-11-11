@@ -125,7 +125,7 @@ export function WhatsAppConnect({ onConnected }: { onConnected?: (s: WhatsAppSta
           </div>
           <div className="flex flex-col gap-3 text-sm text-ink-2">
             <ol className="list-decimal space-y-1.5 pl-5 marker:text-ink-3">
-              <li>Откройте WhatsApp на телефоне клуба.</li>
+              <li>Откройте WhatsApp на рабочем телефоне.</li>
               <li>
                 Меню <span className="text-ink">⋮</span> или «Настройки» → «Связанные устройства» → «Привязка устройства».
               </li>
@@ -153,7 +153,7 @@ export function WhatsAppConnect({ onConnected }: { onConnected?: (s: WhatsAppSta
               void requestCode()
             }}
           >
-            <Field label="Номер WhatsApp клуба" hint="В международном формате, например +7 701 123 45 67" className="w-full max-w-xs">
+            <Field label="Рабочий номер WhatsApp" hint="В международном формате, например +7 701 123 45 67" className="w-full max-w-xs">
               <Input inputMode="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+7 7__ ___ __ __" />
             </Field>
             <Button type="submit" variant="primary" loading={busy} disabled={phone.replace(/\D/g, '').length < 10} icon={<Smartphone className="size-4" aria-hidden />} className="mb-[26px]">

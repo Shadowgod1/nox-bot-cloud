@@ -1,32 +1,35 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { ChevronDown, CircleAlert, PenLine, WandSparkles } from 'lucide-react'
 import { api } from '../../api/client'
 import { WEEKDAYS, type AfterHoursMode, type BotSettings, type DayHours, type TemplateMeta } from '../../api/types'
 import { useLoad } from '../../hooks/useLoad'
 import { PageBody } from '../../components/Layout'
 import { PromptEditor } from '../../components/PromptEditor'
-import { Button, ErrorState, Field, Input, PageHeader, Panel, Select, Spinner, Switch, Textarea, cx } from '../../components/ui'
+import { OVERWRITE_CONFIRM, TemplateFields, TemplatePicker, missingRequired, renderTemplate, valuesFor } from '../../components/TemplateBuilder'
+import { Badge, Button, ErrorState, Field, Input, PageHeader, Panel, Select, Spinner, Switch, Textarea, cx } from '../../components/ui'
 import { toast } from '../../components/toast'
 import { ru } from '../../i18n/ru'
 
-const SECTIONS = [
-  ['profile', 'Профиль'],
-  ['instructions', 'Инструкции'],
-  ['services', 'Услуги и цены'],
-  ['faq', 'Частые вопросы'],
-  ['hours', 'Адрес и часы'],
-  ['behavior', 'Поведение'],
-  ['templates', 'Ответы по заявкам'],
-] as const
 
 export function BotSettingsPage() {
   const { data, error, loading, reload, setData } = useLoad(() => api.get<BotSettings>('/api/settings/bot', { silent: true }))
+  const templates = useLoad(() => api.get<TemplateMeta[]>('/api/templates', { silent: true }))
   const [form, setForm] = useState<BotSettings | null>(null)
+  const [choice, setChoice] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [building, setBuilding] = useState(false)
+  const [showErrors, setShowErrors] = useState(false)
+  const promptRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (data) setForm(structuredClone(data))
   }, [data])
+
+  // Picker follows the stored template; falls back to the first one when none was used yet.
+  useEffect(() => {
+    if (!templates.data?.length || !data) return
+    setChoice((cur) => cur ?? (templates.data!.some((t) => t.id === data.template_id) ? data.template_id : templates.data![0].id))
+  }, [templates.data, data])
 
   const dirty = useMemo(() => !!form && !!data && JSON.stringify(form) !== JSON.stringify(data), [form, data])
 
@@ -46,18 +49,37 @@ export function BotSettingsPage() {
     const n = Number.parseInt(v, 10)
     return Number.isNaN(n) ? fallback : Math.min(max, Math.max(min, n))
   }
+  const template = templates.data?.find((t) => t.id === choice) ?? null
+  const usedTemplate = templates.data?.find((t) => t.id === form.template_id) ?? null
+
+  async function build() {
+    if (!form || !template) return
+    if (missingRequired(template, form.template_values).length) {
+      setShowErrors(true)
+      return
+    }
+    if (form.prompt.trim() && form.prompt_edited && !window.confirm(OVERWRITE_CONFIRM)) return
+    setBuilding(true)
+    try {
+      const values = valuesFor(template, form.template_values)
+      const r = await renderTemplate(template, values)
+      setForm((f) => (f ? { ...f, prompt: r.prompt, prompt_edited: false, template_id: template.id, template_values: values } : f))
+      setShowErrors(r.missing.length > 0)
+      toast.success('Промпт собран. Проверьте его и сохраните.')
+      requestAnimationFrame(() => promptRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+    } catch {
+      /* toast */
+    } finally {
+      setBuilding(false)
+    }
+  }
 
   async function save() {
     if (!form) return
     setSaving(true)
     try {
-      const clean: BotSettings = {
-        ...form,
-        services: form.services.filter((s) => s.name.trim()),
-        faq: form.faq.filter((f) => f.q.trim() && f.a.trim()),
-      }
-      const saved = await api.put<BotSettings>('/api/settings/bot', clean)
-      setData(saved && typeof saved === 'object' ? saved : clean)
+      const saved = await api.put<BotSettings>('/api/settings/bot', form)
+      setData(saved && typeof saved === 'object' ? saved : form)
       toast.success(ru.common.saved)
     } catch {
       /* toast */
@@ -66,137 +88,124 @@ export function BotSettingsPage() {
     }
   }
 
+  const promptEmpty = !form.prompt.trim()
+
   return (
     <PageBody wide>
       <PageHeader
         title="Настройки бота"
-        description="Как бот представляется, что знает о клубе и как себя ведёт. Изменения применяются к новым сообщениям сразу после сохранения."
-        actions={<TemplateApply onApplied={reload} />}
+        description="Промпт — главное: из него бот знает всё о вашем бизнесе. Изменения применяются к новым сообщениям сразу после сохранения."
       />
 
-      <div className="grid gap-8 lg:grid-cols-[180px_minmax(0,1fr)]">
-        <nav aria-label="Разделы настроек" className="hidden lg:block">
-          <ul className="sticky top-6 flex flex-col gap-0.5 text-sm">
-            {SECTIONS.map(([id, label]) => (
-              <li key={id}>
-                <a href={`#${id}`} className="block rounded-[6px] px-2.5 py-1.5 text-ink-2 no-underline hover:bg-sunken hover:text-ink">
-                  {label}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </nav>
+      <form
+        className="mx-auto flex max-w-[880px] min-w-0 flex-col gap-5 pb-24"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void save()
+        }}
+      >
+        {promptEmpty && (
+          <div role="status" className="flex items-start gap-3 rounded-[10px] border border-warn/40 bg-warn-soft px-4 py-3 text-sm text-ink">
+            <CircleAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden />
+            <p>
+              Бот не отвечает клиентам, пока промпт пуст. Выберите шаблон, заполните данные и нажмите «Собрать промпт из шаблона» — или
+              напишите промпт сами.
+            </p>
+          </div>
+        )}
 
-        <form
-          className="flex min-w-0 flex-col gap-5 pb-24"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void save()
-          }}
+        <Panel
+          id="template"
+          title="Шаблон"
+          description="Тип бизнеса и его данные. Промпт собирается из них, но живёт отдельно: шаблон не меняет его, пока вы не соберёте заново."
+          className="scroll-mt-6"
         >
-          <Panel id="profile" title="Профиль" className="scroll-mt-6">
-            <div className="grid gap-5">
+          {templates.loading ? (
+            <Spinner />
+          ) : templates.error ? (
+            <ErrorState message={templates.error.message} onRetry={templates.reload} />
+          ) : !templates.data?.length || !template ? (
+            <p className="py-2 text-sm text-ink-2">Шаблоны не найдены. Промпт можно написать вручную ниже.</p>
+          ) : (
+            <div className="flex flex-col gap-6">
+              <TemplatePicker
+                templates={templates.data}
+                value={choice}
+                onChange={(id) => {
+                  setChoice(id)
+                  setShowErrors(false)
+                }}
+              />
+              <TemplateFields
+                template={template}
+                values={form.template_values}
+                showErrors={showErrors}
+                onChange={(k, v) => set('template_values', { ...form.template_values, [k]: v })}
+              />
+              <div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
+                <Button icon={<WandSparkles className="size-4" aria-hidden />} loading={building} onClick={build} variant={promptEmpty ? 'primary' : 'secondary'}>
+                  Собрать промпт из шаблона
+                </Button>
+                <span className="text-[13px] text-ink-2">
+                  {promptEmpty ? 'Готовый текст появится ниже.' : 'Текущий промпт будет заменён.'}
+                </span>
+              </div>
+            </div>
+          )}
+        </Panel>
+
+        <div ref={promptRef} className="scroll-mt-6">
+          <Panel
+            id="prompt"
+            title="Промпт бота"
+            description="Именно этот текст бот использует в разговоре: кто он, что знает о бизнесе и как отвечает."
+            actions={
+              form.prompt_edited ? (
+                <Badge tone="warn">
+                  <PenLine className="size-3" aria-hidden /> Изменён вручную
+                </Badge>
+              ) : usedTemplate && !promptEmpty ? (
+                <Badge>Из шаблона «{usedTemplate.name}»</Badge>
+              ) : undefined
+            }
+          >
+            <PromptEditor
+              label="Текст промпта"
+              value={form.prompt}
+              onChange={(v) => setForm((f) => (f ? { ...f, prompt: v, prompt_edited: true } : f))}
+              minRows={18}
+              maxLength={20000}
+              placeholder={'Ты — администратор «…». Адрес: …\nУслуги и цены:\n…'}
+              hint="Пишите обычным языком. Цены, адреса и правила бот берёт только отсюда."
+            />
+          </Panel>
+        </div>
+
+        <Collapsible
+          id="behavior"
+          title="Поведение"
+          description="Имя, приветствие, часы работы, паузы и ответы по заявкам."
+        >
+          <div className="flex flex-col divide-y divide-line">
+            <div className="grid gap-5 pb-6">
               <Switch
                 checked={form.enabled}
                 onChange={(v) => set('enabled', v)}
                 label="Бот отвечает клиентам"
                 description="Если выключить, входящие продолжат сохраняться в «Диалогах»."
               />
-              <Field label="Имя бота" hint="Так бот называет себя в переписке.">
-                <Input value={form.name} onChange={(e) => set('name', e.target.value)} maxLength={80} />
-              </Field>
-              <Field label="Персона" hint="Тон и характер: кто он, как обращается к клиентам, насколько формально пишет.">
-                <Textarea rows={3} value={form.persona} onChange={(e) => set('persona', e.target.value)} />
-              </Field>
-              <Field label="Приветствие" hint="Первое сообщение новому клиенту. Оставьте пустым, чтобы бот здоровался сам.">
-                <Textarea rows={2} value={form.greeting} onChange={(e) => set('greeting', e.target.value)} />
-              </Field>
+              <div className="grid gap-5 md:grid-cols-2">
+                <Field label="Имя бота" hint="Так бот называет себя в переписке.">
+                  <Input value={form.name} onChange={(e) => set('name', e.target.value)} maxLength={80} />
+                </Field>
+                <Field label="Приветствие" hint="Первое сообщение новому клиенту. Пусто — бот здоровается сам.">
+                  <Textarea rows={2} value={form.greeting} onChange={(e) => set('greeting', e.target.value)} className="min-h-9" />
+                </Field>
+              </div>
             </div>
-          </Panel>
 
-          <Panel
-            id="instructions"
-            title="Инструкции"
-            description="Правила для бота: что делать, о чём молчать, когда передавать оператору. Пишите простыми фразами, по одному правилу на строку."
-            className="scroll-mt-6"
-          >
-            <PromptEditor
-              label="Текст инструкций"
-              value={form.instructions}
-              onChange={(v) => set('instructions', v)}
-              minRows={10}
-              placeholder={'Например:\nОтвечай коротко, до трёх предложений.\nНе обещай скидки — предложи связаться с администратором.'}
-            />
-          </Panel>
-
-          <Panel
-            id="services"
-            title="Услуги и цены"
-            description="Бот называет цены только из этого списка."
-            className="scroll-mt-6"
-            actions={
-              <Button size="sm" icon={<Plus className="size-3.5" aria-hidden />} onClick={() => set('services', [...form.services, { name: '', price: '', note: '' }])}>
-                Добавить услугу
-              </Button>
-            }
-          >
-            {form.services.length === 0 ? (
-              <p className="py-2 text-sm text-ink-2">Услуг пока нет. Добавьте хотя бы основные тарифы.</p>
-            ) : (
-              <div className="flex flex-col gap-2">
-                <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,2fr)_36px] gap-2 text-[12px] font-medium text-ink-3 md:grid">
-                  <span>Название</span>
-                  <span>Цена</span>
-                  <span>Примечание</span>
-                </div>
-                {form.services.map((s, i) => (
-                  <div key={i} className="grid grid-cols-2 gap-2 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,2fr)_36px]">
-                    <Input aria-label={`Услуга ${i + 1}: название`} placeholder="Стандарт, 1 час" value={s.name} onChange={(e) => set('services', form.services.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} className="col-span-2 md:col-span-1" />
-                    <Input aria-label={`Услуга ${i + 1}: цена`} placeholder="800 ₸" value={s.price} onChange={(e) => set('services', form.services.map((x, j) => (j === i ? { ...x, price: e.target.value } : x)))} />
-                    <Input aria-label={`Услуга ${i + 1}: примечание`} placeholder="RTX 4060, 165 Гц" value={s.note} onChange={(e) => set('services', form.services.map((x, j) => (j === i ? { ...x, note: e.target.value } : x)))} />
-                    <IconRemove label={`Удалить услугу ${s.name || i + 1}`} onClick={() => set('services', form.services.filter((_, j) => j !== i))} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </Panel>
-
-          <Panel
-            id="faq"
-            title="Частые вопросы"
-            description="Готовые ответы, которые бот использует дословно или близко к тексту."
-            className="scroll-mt-6"
-            actions={
-              <Button size="sm" icon={<Plus className="size-3.5" aria-hidden />} onClick={() => set('faq', [...form.faq, { q: '', a: '' }])}>
-                Добавить вопрос
-              </Button>
-            }
-          >
-            {form.faq.length === 0 ? (
-              <p className="py-2 text-sm text-ink-2">Вопросов пока нет.</p>
-            ) : (
-              <div className="flex flex-col divide-y divide-line">
-                {form.faq.map((f, i) => (
-                  <div key={i} className="grid gap-2 py-3 first:pt-0 last:pb-0 md:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)_36px]">
-                    <Input aria-label={`Вопрос ${i + 1}`} placeholder="Вопрос" value={f.q} onChange={(e) => set('faq', form.faq.map((x, j) => (j === i ? { ...x, q: e.target.value } : x)))} />
-                    <Textarea aria-label={`Ответ ${i + 1}`} placeholder="Ответ" rows={2} value={f.a} onChange={(e) => set('faq', form.faq.map((x, j) => (j === i ? { ...x, a: e.target.value } : x)))} className="min-h-9" />
-                    <IconRemove label={`Удалить вопрос ${i + 1}`} onClick={() => set('faq', form.faq.filter((_, j) => j !== i))} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </Panel>
-
-          <Panel id="hours" title="Адрес и часы работы" className="scroll-mt-6">
-            <div className="grid gap-5">
-              <Field label="Адрес" hint="Можно добавить ориентир и как пройти.">
-                <Textarea rows={2} value={form.address} onChange={(e) => set('address', e.target.value)} />
-              </Field>
-              <Switch
-                checked={form.hours.always_open}
-                onChange={(v) => set('hours', { ...form.hours, always_open: v })}
-                label="Работаем круглосуточно"
-              />
+            <SubSection title="Часы работы">
+              <Switch checked={form.hours.always_open} onChange={(v) => set('hours', { ...form.hours, always_open: v })} label="Работаем круглосуточно" />
               {!form.hours.always_open && (
                 <fieldset className="rounded-[9px] border border-line">
                   <legend className="sr-only">Часы по дням недели</legend>
@@ -212,7 +221,7 @@ export function BotSettingsPage() {
                             Выходной
                           </label>
                           <div className={cx('flex items-center gap-2', h.closed && 'opacity-40')}>
-                            <Input type="time" aria-label={`${ru.weekdays[d]}: открытие`} value={h.open} disabled={h.closed} onChange={(e) => setDay({ open: e.target.value })} className="tabular w-[110px]" />
+                            <Input type="time" required aria-label={`${ru.weekdays[d]}: открытие`} value={h.open} disabled={h.closed} onChange={(e) => e.target.value && setDay({ open: e.target.value })} className="tabular w-[110px]" />
                             <span className="text-ink-3" aria-hidden>—</span>
                             <TimeOrMidnight label={`${ru.weekdays[d]}: закрытие`} value={h.close} disabled={h.closed} onChange={(v) => setDay({ close: v })} />
                           </div>
@@ -236,40 +245,33 @@ export function BotSettingsPage() {
                   </Field>
                 )}
               </div>
-            </div>
-          </Panel>
+            </SubSection>
 
-          <Panel id="behavior" title="Поведение" className="scroll-mt-6">
-            <div className="grid gap-5 md:grid-cols-3">
-              <Field label="Задержка склейки, сек" hint="Бот ждёт, пока клиент допишет несколько сообщений подряд. От 3 до 120.">
-                <Input type="number" min={3} max={120} value={form.buffer_delay_seconds} onChange={(e) => set('buffer_delay_seconds', clamp(e.target.value, 3, 120, 8))} className="tabular" />
-              </Field>
-              <Field label="Пауза после оператора, мин" hint="Сколько бот молчит после ответа человека в диалоге.">
-                <Input type="number" min={1} max={1440} value={form.handover_pause_minutes} onChange={(e) => set('handover_pause_minutes', clamp(e.target.value, 1, 1440, 60))} className="tabular" />
-              </Field>
-              <Field label="Память, сообщений" hint="Сколько последних сообщений бот учитывает в ответе.">
-                <Input type="number" min={2} max={100} value={form.memory_messages} onChange={(e) => set('memory_messages', clamp(e.target.value, 2, 100, 20))} className="tabular" />
-              </Field>
-            </div>
-          </Panel>
+            <SubSection title="Темп и память">
+              <div className="grid gap-5 md:grid-cols-3">
+                <Field label="Задержка склейки, сек" hint="Бот ждёт, пока клиент допишет несколько сообщений подряд. От 3 до 120.">
+                  <Input type="number" min={3} max={120} value={form.buffer_delay_seconds} onChange={(e) => set('buffer_delay_seconds', clamp(e.target.value, 3, 120, 8))} className="tabular" />
+                </Field>
+                <Field label="Пауза после оператора, мин" hint="Сколько бот молчит после ответа человека в диалоге.">
+                  <Input type="number" min={1} max={1440} value={form.handover_pause_minutes} onChange={(e) => set('handover_pause_minutes', clamp(e.target.value, 1, 1440, 60))} className="tabular" />
+                </Field>
+                <Field label="Память, сообщений" hint="Сколько последних сообщений бот учитывает в ответе.">
+                  <Input type="number" min={2} max={100} value={form.memory_messages} onChange={(e) => set('memory_messages', clamp(e.target.value, 2, 100, 20))} className="tabular" />
+                </Field>
+              </div>
+            </SubSection>
 
-          <Panel
-            id="templates"
-            title="Ответы по заявкам"
-            description="Сообщения клиенту после решения администратора."
-            className="scroll-mt-6"
-          >
-            <div className="grid gap-5">
+            <SubSection title="Ответы по заявкам" description="Сообщения клиенту после решения администратора.">
               <PromptEditor
-                label="Бронь подтверждена"
+                label="Заявка подтверждена"
                 minRows={2}
                 maxLength={1000}
                 value={form.booking_confirm_template}
                 onChange={(v) => set('booking_confirm_template', v)}
-                variables={[{ token: '{details}', title: 'Детали брони и комментарий администратора' }]}
+                variables={[{ token: '{details}', title: 'Детали заявки и комментарий администратора' }]}
               />
               <PromptEditor
-                label="Бронь отклонена"
+                label="Заявка отклонена"
                 minRows={2}
                 maxLength={1000}
                 value={form.booking_reject_template}
@@ -277,50 +279,79 @@ export function BotSettingsPage() {
                 variables={[{ token: '{reason}', title: 'Причина, указанная администратором' }]}
               />
               <div className="grid gap-4 md:grid-cols-[200px_minmax(0,1fr)]">
-                <Field label="Ждать ответа админа, мин" hint="Потом клиенту уйдёт сообщение ниже.">
+                <Field label="Ждать ответа админа, мин" hint="Потом клиенту уйдёт сообщение справа.">
                   <Input type="number" min={1} max={240} value={form.booking_request_timeout_min} onChange={(e) => set('booking_request_timeout_min', clamp(e.target.value, 1, 240, 15))} className="tabular" />
                 </Field>
                 <Field label="Если администратор не успел ответить">
                   <Textarea rows={2} value={form.booking_timeout_message} onChange={(e) => set('booking_timeout_message', e.target.value)} />
                 </Field>
               </div>
-            </div>
-          </Panel>
-
-          <div
-            className={cx(
-              'sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border px-4 py-3 transition-[opacity,transform] duration-200 ease-out',
-              dirty ? 'border-line-strong bg-surface shadow-[var(--shadow-pop)]' : 'pointer-events-none translate-y-2 border-transparent opacity-0',
-            )}
-            aria-hidden={!dirty}
-          >
-            <span className="text-sm text-ink-2">{ru.common.unsaved}</span>
-            <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => data && setForm(structuredClone(data))} tabIndex={dirty ? 0 : -1}>
-                {ru.common.discard}
-              </Button>
-              <Button type="submit" variant="primary" loading={saving} tabIndex={dirty ? 0 : -1}>
-                {ru.common.save}
-              </Button>
-            </div>
+            </SubSection>
           </div>
-        </form>
-      </div>
+        </Collapsible>
+
+        <div
+          className={cx(
+            'sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border px-4 py-3 transition-[opacity,transform] duration-200 ease-out',
+            dirty ? 'border-line-strong bg-surface shadow-[var(--shadow-pop)]' : 'pointer-events-none translate-y-2 border-transparent opacity-0',
+          )}
+          aria-hidden={!dirty}
+        >
+          <span className="text-sm text-ink-2">{ru.common.unsaved}</span>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => data && setForm(structuredClone(data))} tabIndex={dirty ? 0 : -1}>
+              {ru.common.discard}
+            </Button>
+            <Button type="submit" variant="primary" loading={saving} tabIndex={dirty ? 0 : -1}>
+              {ru.common.save}
+            </Button>
+          </div>
+        </div>
+      </form>
     </PageBody>
   )
 }
 
-function IconRemove({ label, onClick }: { label: string; onClick: () => void }) {
+function SubSection({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      className="grid size-9 place-items-center rounded-[7px] text-ink-3 hover:bg-danger-soft hover:text-danger"
-    >
-      <Trash2 className="size-4" aria-hidden />
-    </button>
+    <div className="grid gap-4 py-6 last:pb-0">
+      <div>
+        <h3 className="text-sm font-semibold text-ink">{title}</h3>
+        {description && <p className="mt-0.5 text-[13px] text-ink-2">{description}</p>}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+/** Panel whose body can be folded away; technical settings stay out of the way until needed. */
+function Collapsible({ id, title, description, children }: { id: string; title: string; description: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false)
+  const bodyId = useId()
+  return (
+    <section id={id} className="scroll-mt-6 rounded-[var(--radius-panel)] border border-line bg-surface">
+      <h2>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-panel)] px-5 py-4 text-left hover:bg-sunken/60"
+        >
+          <span className="min-w-0">
+            <span className="block text-[15px] font-semibold text-ink">{title}</span>
+            <span className="mt-0.5 block text-[13px] font-normal text-ink-2">{description}</span>
+          </span>
+          <ChevronDown className={cx('size-4 shrink-0 text-ink-3 transition-transform duration-200 ease-out', open && 'rotate-180')} aria-hidden />
+        </button>
+      </h2>
+      {/* Mounted only when open: auto-growing editors cannot measure themselves inside a hidden subtree. */}
+      {open && (
+        <div id={bodyId} className="border-t border-line px-5 py-5">
+          {children}
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -329,54 +360,11 @@ function TimeOrMidnight({ label, value, onChange, disabled }: { label: string; v
   const midnight = value === '24:00'
   return (
     <span className="flex items-center gap-2">
-      {!midnight && <Input type="time" aria-label={label} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} className="tabular w-[110px]" />}
+      {!midnight && <Input type="time" required aria-label={label} value={value} disabled={disabled} onChange={(e) => e.target.value && onChange(e.target.value)} className="tabular w-[110px]" />}
       <label className="flex items-center gap-1.5 text-[13px] text-ink-2">
         <input type="checkbox" checked={midnight} disabled={disabled} onChange={(e) => onChange(e.target.checked ? '24:00' : '23:00')} className="accent-[var(--color-accent)]" />
         до конца дня
       </label>
     </span>
-  )
-}
-
-function TemplateApply({ onApplied }: { onApplied: () => void }) {
-  const list = useLoad(() => api.get<TemplateMeta[]>('/api/templates', { silent: true }))
-  const [choice, setChoice] = useState('')
-  const [busy, setBusy] = useState(false)
-  if (!list.data?.length) return null
-
-  async function apply() {
-    const t = list.data?.find((x) => x.id === choice)
-    if (!t) return
-    if (!window.confirm(`Применить шаблон «${t.name}»? Текущие настройки бота будут заменены.`)) return
-    setBusy(true)
-    try {
-      await api.post(`/api/templates/${encodeURIComponent(t.id)}/apply`)
-      toast.success(`Шаблон «${t.name}» применён`)
-      onApplied()
-      setChoice('')
-    } catch {
-      /* toast */
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="flex items-center gap-2">
-      <label htmlFor="tpl" className="sr-only">
-        Шаблон
-      </label>
-      <Select id="tpl" value={choice} onChange={(e) => setChoice(e.target.value)} className="h-8 w-auto text-[13px]">
-        <option value="">Шаблон…</option>
-        {list.data.map((t) => (
-          <option key={t.id} value={t.id}>
-            {t.name}
-          </option>
-        ))}
-      </Select>
-      <Button size="sm" onClick={apply} disabled={!choice} loading={busy}>
-        Применить
-      </Button>
-    </div>
   )
 }
