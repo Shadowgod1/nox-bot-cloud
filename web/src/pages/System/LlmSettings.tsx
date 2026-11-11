@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Zap } from 'lucide-react'
 import { api } from '../../api/client'
-import type { CheckResult, LlmProvider, LlmSettings } from '../../api/types'
+import type { LlmProvider, LlmSettings, LlmTestResult } from '../../api/types'
 import { useLoad } from '../../hooks/useLoad'
 import { SecretInput, secretPayload, secretState, type SecretState } from '../../components/SecretInput'
-import { Button, CheckLine, ErrorState, Field, Input, Panel, Select, Spinner } from '../../components/ui'
+import { Button, CheckLine, type CheckView, ErrorState, Field, Input, Panel, Select, Spinner } from '../../components/ui'
 import { toast } from '../../components/toast'
 import { ru } from '../../i18n/ru'
 
@@ -31,7 +31,7 @@ export function LlmSettingsPanel() {
   const [form, setForm] = useState<Form | null>(null)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
-  const [check, setCheck] = useState<CheckResult | null>(null)
+  const [check, setCheck] = useState<CheckView | null>(null)
 
   useEffect(() => {
     if (data) setForm(toForm(data))
@@ -59,10 +59,13 @@ export function LlmSettingsPanel() {
   }
 
   async function test() {
+    if (!form) return
     setTesting(true)
     setCheck(null)
     try {
-      if (await save()) setCheck(await api.post<CheckResult>('/api/settings/llm/test', { provider: form?.provider }))
+      // Core checks the unsaved form values (masked keys fall back to the stored ones); nothing is saved.
+      const r = await api.post<LlmTestResult>('/api/settings/llm/test', toPayload(form))
+      setCheck({ ok: r.ok, message: r.ok ? undefined : r.error })
     } catch {
       /* toast */
     } finally {
@@ -127,7 +130,7 @@ export function LlmSettingsPanel() {
             {ru.common.save}
           </Button>
           <Button onClick={test} loading={testing} icon={<Zap className="size-4" aria-hidden />}>
-            Сохранить и проверить
+            Проверить
           </Button>
           <CheckLine result={check} />
         </div>

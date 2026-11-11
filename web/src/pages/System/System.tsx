@@ -1,7 +1,19 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArchiveRestore, Download, HardDriveDownload, LogOut, RefreshCw, Trash2, UserPlus } from 'lucide-react'
 import { api } from '../../api/client'
-import type { BackupInfo, Role, UpdateState, UpdateStatus, User, VersionInfo } from '../../api/types'
+import type {
+  BackupInfo,
+  BackupList,
+  Ok,
+  RestoreResult,
+  Role,
+  UpdateState,
+  UpdateStatus,
+  User,
+  UserCreate,
+  UserListItem,
+  VersionInfo,
+} from '../../api/types'
 import { useAuth } from '../../hooks/useAuth'
 import { useLoad } from '../../hooks/useLoad'
 import { PageBody } from '../../components/Layout'
@@ -37,13 +49,13 @@ export function System() {
 
 function UsersPanel() {
   const { user: me } = useAuth()
-  const list = useLoad(() => api.get<User[]>('/api/users', { silent: true }))
+  const list = useLoad(() => api.get<UserListItem[]>('/api/users', { silent: true }))
   const [adding, setAdding] = useState(false)
 
-  async function remove(u: User) {
+  async function remove(u: UserListItem) {
     if (!window.confirm(`Удалить пользователя ${u.email}? Он сразу потеряет доступ к админке.`)) return
     try {
-      await api.del(`/api/users/${u.id}`)
+      await api.del<Ok>(`/api/users/${u.id}`)
       list.setData((d) => d?.filter((x) => x.id !== u.id))
       toast.success('Пользователь удалён')
     } catch {
@@ -68,7 +80,8 @@ function UsersPanel() {
         <NewUserForm
           onCancel={() => setAdding(false)}
           onCreated={(u) => {
-            list.setData((d) => [...(d ?? []), u])
+            // POST /api/users returns the bare User; fill the list-only fields locally.
+            list.setData((d) => [...(d ?? []), { ...u, created_at: new Date().toISOString(), last_login_at: null }])
             setAdding(false)
           }}
         />
@@ -118,7 +131,8 @@ function NewUserForm({ onCancel, onCreated }: { onCancel: () => void; onCreated:
     if (short || !email.trim()) return
     setBusy(true)
     try {
-      const u = await api.post<User>('/api/users', { name: name.trim(), email: email.trim(), password, role })
+      const body: UserCreate = { name: name.trim(), email: email.trim(), password, role }
+      const u = await api.post<User>('/api/users', body)
       toast.success('Пользователь создан. Передайте ему пароль лично.')
       onCreated(u)
     } catch {
@@ -162,26 +176,33 @@ function NewUserForm({ onCancel, onCreated }: { onCancel: () => void; onCreated:
 const ACTIVE: UpdateState[] = ['queued', 'backup', 'pulling', 'restarting']
 export const UPDATE_POLL_MS = 2000
 
+const isActive = (s: UpdateState | string | null | undefined) => !!s && (ACTIVE as string[]).includes(s)
+
 function UpdatePanel() {
   const version = useLoad(() => api.get<VersionInfo>('/api/system/version', { silent: true }))
   const [status, setStatus] = useState<UpdateStatus | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  const active = status ? ACTIVE.includes(status.state) : false
+  const active = isActive(status?.state)
+  // True while an update is (or was just seen) running: only then do failed polls keep retrying.
+  const running = useRef(false)
 
   async function poll(id: string | null) {
     try {
+      // Without job_id core reports the last persisted job ({job_id: null, state: null} if none).
       const s = await api.get<UpdateStatus>(`/api/system/update/status${id ? `?job_id=${encodeURIComponent(id)}` : ''}`, { silent: true, noAuthRedirect: true })
       setStatus(s)
-      if (ACTIVE.includes(s.state)) {
-        timer.current = setTimeout(() => void poll(id), UPDATE_POLL_MS)
+      if (s.job_id && !id) setJobId((j) => j ?? (isActive(s.state) ? s.job_id : null))
+      running.current = isActive(s.state)
+      if (running.current) {
+        timer.current = setTimeout(() => void poll(id ?? s.job_id), UPDATE_POLL_MS)
       } else if (s.state === 'healthy') {
         void version.reload()
       }
     } catch {
-      // Core restarts during an update: keep polling until it is back.
-      timer.current = setTimeout(() => void poll(id), UPDATE_POLL_MS * 2)
+      // Core / updater restart during an update: keep polling until it is back. Otherwise stay quiet.
+      if (running.current) timer.current = setTimeout(() => void poll(id), UPDATE_POLL_MS * 2)
     }
   }
 
@@ -196,10 +217,10 @@ function UpdatePanel() {
     if (!window.confirm(`Обновить ILER${v?.available ? ` до версии ${v.available}` : ''}? Перед обновлением создаётся резервная копия. Бот будет недоступен 1–3 минуты.`)) return
     setStarting(true)
     try {
-      const r = await api.post<{ job_id?: string }>('/api/system/update')
-      const id = r?.job_id ?? null
+      const { job_id: id } = await api.post<{ job_id: string }>('/api/system/update')
       setJobId(id)
-      setStatus({ state: 'queued' })
+      setStatus({ job_id: id, state: 'queued', log: '' })
+      running.current = true
       clearTimeout(timer.current)
       timer.current = setTimeout(() => void poll(id), UPDATE_POLL_MS)
     } catch {
@@ -224,24 +245,29 @@ function UpdatePanel() {
             <dl className="flex flex-wrap gap-x-8 gap-y-1 text-sm">
               <div>
                 <dt className="text-[13px] text-ink-2">Установлена</dt>
-                <dd className="tabular font-medium text-ink">{v?.current ?? '—'}</dd>
+                <dd className="tabular font-medium text-ink">{v?.current ?? v?.core_version ?? '—'}</dd>
               </div>
               <div>
                 <dt className="text-[13px] text-ink-2">Доступна</dt>
-                <dd className="tabular font-medium text-ink">{v?.available ?? 'Последняя версия'}</dd>
+                <dd className="tabular font-medium text-ink">
+                  {v && !v.updater_available ? 'Неизвестно' : (v?.available ?? 'Последняя версия')}
+                </dd>
               </div>
             </dl>
             <Button
               variant={v?.available ? 'primary' : 'secondary'}
               onClick={start}
               loading={starting}
-              disabled={active || !v?.available}
+              disabled={active || !v?.available || !v.updater_available}
               icon={<RefreshCw className="size-4" aria-hidden />}
             >
               {active ? 'Обновляется…' : 'Обновить'}
             </Button>
           </div>
-          {status && status.state !== 'idle' && (jobId || active || status.log) && (
+          {v && !v.updater_available && (
+            <p className="text-[13px] text-ink-2">Сервис обновлений недоступен: проверка и установка обновлений сейчас невозможны.</p>
+          )}
+          {status?.state && (jobId || active || status.state === 'failed' || status.state === 'rolled_back') && (
             <div className="rounded-[9px] border border-line bg-sunken p-3.5" role="status" aria-live="polite">
               <div className="flex items-center gap-2">
                 <Badge tone={tone} dot>
@@ -267,16 +293,15 @@ function UpdatePanel() {
 /* ---------- Backups ---------- */
 
 function BackupsPanel() {
-  const list = useLoad(() => api.get<BackupInfo[] | { items: BackupInfo[] }>('/api/backups', { silent: true }).then((r) => (Array.isArray(r) ? r : r.items)))
+  const list = useLoad(() => api.get<BackupList>('/api/backups', { silent: true }).then((r) => r.items))
   const [creating, setCreating] = useState(false)
   const [restoring, setRestoring] = useState<string | null>(null)
 
   async function create() {
     setCreating(true)
     try {
-      const b = await api.post<BackupInfo | undefined>('/api/backups')
-      if (b && typeof b === 'object' && 'name' in b) list.setData((d) => [b, ...(d ?? []).filter((x) => x.name !== b.name)])
-      else void list.reload()
+      const b = await api.post<BackupInfo>('/api/backups')
+      list.setData((d) => [b, ...(d ?? []).filter((x) => x.name !== b.name)])
       toast.success('Резервная копия создана')
     } catch {
       /* toast */
@@ -287,14 +312,15 @@ function BackupsPanel() {
 
   async function restore(b: BackupInfo) {
     const ok = window.confirm(
-      `Восстановить данные из копии от ${formatDateTime(b.created_at)}?\n\nВсе диалоги, заявки и настройки после этого момента будут потеряны. Сервисы перезапустятся.`,
+      `Восстановить данные из копии от ${formatDateTime(b.created_at)}?\n\nВсе диалоги, заявки и настройки после этого момента будут заменены данными из копии. Перед восстановлением автоматически создаётся страховочная копия текущих данных.`,
     )
     if (!ok) return
     setRestoring(b.name)
     try {
-      await api.post(`/api/backups/${encodeURIComponent(b.name)}/restore`)
-      toast.success('Восстановление запущено. Страница обновится через минуту.')
-      setTimeout(() => window.location.reload(), 60_000)
+      // Synchronous: core answers once the databases are restored.
+      const r = await api.post<RestoreResult>(`/api/backups/${encodeURIComponent(b.name)}/restore`)
+      toast.success(`Данные восстановлены. Страховочная копия: ${r.safety_backup}. Страница сейчас обновится.`)
+      setTimeout(() => window.location.reload(), 4000)
     } catch {
       /* toast */
     } finally {

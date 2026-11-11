@@ -9,7 +9,8 @@ import { PageBody } from '../../components/Layout'
 import { WhatsAppConnect } from '../../components/WhatsAppConnect'
 import { Badge, Button, ErrorState, PageHeader, Panel, Spinner, Switch } from '../../components/ui'
 import { toast } from '../../components/toast'
-import { formatDateTime, plural, ru } from '../../i18n/ru'
+import { useAuth } from '../../hooks/useAuth'
+import { plural, ru } from '../../i18n/ru'
 
 const waTone = { open: 'ok', connecting: 'warn', close: 'danger', degraded: 'danger' } as const
 
@@ -19,15 +20,23 @@ export function Dashboard() {
   const [connecting, setConnecting] = useState(params.get('connect') === '1')
   const [toggling, setToggling] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+  const { isOwner } = useAuth()
 
-  useEvent('whatsapp.status', (wa) => setData((d) => (d ? { ...d, whatsapp: wa } : d)))
+  // The dashboard payload has no last_error; it comes with the live `whatsapp.status` event.
+  const [waError, setWaError] = useState<string | null>(null)
+
+  useEvent('whatsapp.status', (wa) => {
+    setWaError(wa.last_error)
+    setData((d) => (d ? { ...d, whatsapp: { status: wa.status, phone: wa.phone } } : d))
+  })
 
   async function toggleBot(enabled: boolean) {
     setToggling(true)
     try {
+      // PUT /api/settings/bot replaces the whole object: send the current settings with `enabled` changed.
       const bot = await api.get<BotSettings>('/api/settings/bot')
-      await api.put('/api/settings/bot', { ...bot, enabled })
-      setData((d) => (d ? { ...d, bot_enabled: enabled } : d))
+      const saved = await api.put<BotSettings>('/api/settings/bot', { ...bot, enabled })
+      setData((d) => (d ? { ...d, bot_enabled: saved.enabled } : d))
       toast.success(enabled ? 'Бот включён' : 'Бот выключен: сообщения сохраняются, но ответов не будет')
     } catch {
       /* toast */
@@ -41,7 +50,8 @@ export function Dashboard() {
     setLoggingOut(true)
     try {
       await api.post('/api/whatsapp/logout')
-      setData((d) => (d ? { ...d, whatsapp: { status: 'close', phone: null, last_error: null } } : d))
+      setWaError(null)
+      setData((d) => (d ? { ...d, whatsapp: { status: 'close', phone: null } } : d))
     } catch {
       /* toast */
     } finally {
@@ -55,6 +65,8 @@ export function Dashboard() {
 
   const wa = data.whatsapp
   const t = data.today
+  const e24 = data.errors_24h
+  const errorsTotal = e24.llm + e24.send
 
   return (
     <PageBody>
@@ -81,7 +93,8 @@ export function Dashboard() {
           ) : connecting ? (
             <WhatsAppConnect
               onConnected={(s: WhatsAppStatus) => {
-                setData((d) => (d ? { ...d, whatsapp: s } : d))
+                setWaError(null)
+                setData((d) => (d ? { ...d, whatsapp: { status: s.status, phone: s.phone } } : d))
                 setConnecting(false)
                 if (params.has('connect')) setParams({}, { replace: true })
               }}
@@ -92,7 +105,7 @@ export function Dashboard() {
                 {wa.status === 'degraded'
                   ? 'Сессия открыта, но отправка сообщений не проходит. Переподключите номер.'
                   : 'Номер не подключён. Клиенты пишут, но бот их не видит.'}
-                {wa.last_error && <span className="mt-1 block text-[13px] text-danger">{wa.last_error}</span>}
+                {waError && <span className="mt-1 block text-[13px] text-danger">{waError}</span>}
               </p>
               <Button variant="primary" onClick={() => setConnecting(true)}>
                 Подключить WhatsApp
@@ -120,43 +133,51 @@ export function Dashboard() {
         <h2 id="today-h" className="border-b border-line px-5 py-3.5 text-[15px] font-semibold">
           Сегодня
         </h2>
-        <dl className="grid grid-cols-2 divide-line md:grid-cols-4 md:divide-x">
+        <dl className="grid grid-cols-2 divide-line md:grid-cols-5 md:divide-x">
           <Stat label={plural(t.conversations, ['диалог', 'диалога', 'диалогов'])} value={t.conversations} to="/conversations" />
-          <Stat label={plural(t.replies, ['ответ бота', 'ответа бота', 'ответов бота'])} value={t.replies} />
-          <Stat label={plural(t.bookings, ['заявка', 'заявки', 'заявок'])} value={t.bookings} to="/bookings" />
+          <Stat label={plural(t.client_messages, ['сообщение клиентов', 'сообщения клиентов', 'сообщений клиентов'])} value={t.client_messages} />
+          <Stat label={plural(t.bot_replies, ['ответ бота', 'ответа бота', 'ответов бота'])} value={t.bot_replies} />
+          <Stat label={`${plural(t.bookings_total, ['заявка', 'заявки', 'заявок'])} за день`} value={t.bookings_total} to="/bookings" />
           <Stat
-            label="ждут оператора"
-            value={t.needs_operator ?? 0}
-            to="/conversations"
-            attention={(t.needs_operator ?? 0) > 0}
+            label="заявок ждут решения"
+            value={t.bookings_pending}
+            to="/bookings"
+            attention={t.bookings_pending > 0}
           />
         </dl>
       </section>
 
-      <Panel title="Ошибки" description="Последние сбои модели, WhatsApp и интеграций." className="mt-5" bodyClassName="p-0">
-        {data.errors.length === 0 ? (
+      <Panel
+        title="Ошибки за 24 часа"
+        description="Сбои обращений к модели и неотправленные сообщения."
+        className="mt-5"
+        bodyClassName="p-0"
+        actions={
+          isOwner && errorsTotal > 0 ? (
+            <Link to="/system" className="inline-flex items-center gap-1 text-[13px] font-medium text-accent hover:underline">
+              Подробнее в «Системе» <ArrowRight className="size-3" aria-hidden />
+            </Link>
+          ) : undefined
+        }
+      >
+        {errorsTotal === 0 ? (
           <div className="flex items-center gap-2.5 px-5 py-4 text-sm text-ink-2">
             <CircleCheck className="size-4 text-ok" aria-hidden />
             Ошибок не было.
           </div>
         ) : (
-          <ul className="divide-y divide-line">
-            {data.errors.map((e, i) => (
-              <li key={i} className="grid gap-x-4 gap-y-0.5 px-5 py-3 text-sm sm:grid-cols-[150px_110px_1fr]">
-                <span className="tabular text-[13px] text-ink-3">{formatDateTime(e.at)}</span>
-                <span className="text-[13px] font-medium text-ink-2">{sourceLabel(e.source)}</span>
-                <span className="text-ink">{e.message}</span>
-              </li>
-            ))}
-          </ul>
+          <dl className="grid grid-cols-2 divide-x divide-line">
+            <Stat label={plural(e24.llm, ['сбой модели', 'сбоя модели', 'сбоев модели'])} value={e24.llm} attention={e24.llm > 0} />
+            <Stat
+              label={plural(e24.send, ['неотправленное сообщение', 'неотправленных сообщения', 'неотправленных сообщений'])}
+              value={e24.send}
+              attention={e24.send > 0}
+            />
+          </dl>
         )}
       </Panel>
     </PageBody>
   )
-}
-
-function sourceLabel(s: string) {
-  return ({ llm: 'Модель', whatsapp: 'WhatsApp', senet: 'SENET', smtp: 'Почта', tool: 'Инструмент' } as Record<string, string>)[s] ?? s
 }
 
 function Stat({ label, value, to, attention }: { label: string; value: number; to?: string; attention?: boolean }) {

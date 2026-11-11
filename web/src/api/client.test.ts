@@ -54,12 +54,14 @@ describe('api client', () => {
     expect(navigate).toHaveBeenCalledWith('/login')
   })
 
-  it('redirects to /setup when server says setup is required', async () => {
+  it('does not redirect on a 409 conflict (setup is detected via /api/setup/state)', async () => {
     fetchMock.mockResolvedValueOnce(
-      jsonResponse({ error: { code: 'setup_required', message: 'setup' } }, 409),
+      jsonResponse({ error: { code: 'already_set_up', message: 'Setup is already complete' } }, 409),
     )
-    await expect(api.get('/api/dashboard')).rejects.toBeInstanceOf(ApiError)
-    expect(navigate).toHaveBeenCalledWith('/setup')
+    const err = await api.post('/api/setup/owner', {}).catch((e) => e)
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(409)
+    expect(navigate).not.toHaveBeenCalled()
   })
 
   it('shows API error message as a toast', async () => {
@@ -73,6 +75,21 @@ describe('api client', () => {
     expect((err as ApiError).code).toBe('bad_request')
     expect(seen).toContain('Неверный номер')
     unsub()
+  })
+
+  it('translates known core error codes, keeping the detail where it helps', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'invalid_credentials', message: 'Wrong e-mail or password' } }, 401),
+    )
+    const e1 = await api.post('/api/auth/login', {}, { silent: true, noAuthRedirect: true }).catch((e) => e)
+    expect((e1 as ApiError).message).toBe('Неверный e-mail или пароль.')
+    expect((e1 as ApiError).code).toBe('invalid_credentials')
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'validation_error', message: 'body.text: text must not be blank' } }, 422),
+    )
+    const e2 = await api.post('/api/conversations/1/send', { text: ' ' }, { silent: true }).catch((e) => e)
+    expect((e2 as ApiError).message).toBe('Проверьте заполнение полей. (body.text: text must not be blank)')
   })
 
   it('does not toast when silent', async () => {

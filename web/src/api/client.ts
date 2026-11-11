@@ -5,8 +5,8 @@ import { ru } from '../i18n/ru'
  * Fetch wrapper for the iler-core API.
  * - always `credentials: 'include'` (session cookie `iler_session`);
  * - mutations carry `X-ILER-CSRF` = cookie `iler_csrf`;
- * - 401 -> /login, `setup_required` -> /setup;
- * - errors `{error:{code,message}}` become ApiError and a toast (unless `silent`).
+ * - 401 -> /login (first-run setup is detected via GET /api/setup/state, core has no "setup required" error);
+ * - errors `{error:{code,message}}` become ApiError (known codes get Russian text) and a toast (unless `silent`).
  */
 
 export class ApiError extends Error {
@@ -83,7 +83,11 @@ async function parseBody(res: Response): Promise<unknown> {
 function errorFrom(status: number, body: unknown): ApiError {
   const e = (body as { error?: { code?: unknown; message?: unknown } } | undefined)?.error
   if (e && typeof e.message === 'string') {
-    return new ApiError(status, typeof e.code === 'string' ? e.code : 'error', e.message)
+    const code = typeof e.code === 'string' ? e.code : 'error'
+    const text = ru.errorCodes[code]
+    if (!text) return new ApiError(status, code, e.message)
+    const withDetail = ru.errorDetail.includes(code) && e.message && e.message !== code
+    return new ApiError(status, code, withDetail ? `${text} (${e.message})` : text)
   }
   // FastAPI validation errors / plain detail strings.
   const detail = (body as { detail?: unknown } | undefined)?.detail
@@ -127,10 +131,6 @@ export async function request<T>(
 
   const err = errorFrom(res.status, data)
   const onPublic = PUBLIC_PATHS.includes(window.location.pathname)
-  if (err.code === 'setup_required') {
-    navigator('/setup')
-    throw err
-  }
   if (res.status === 401 && !opts.noAuthRedirect) {
     if (!onPublic) navigator('/login')
     throw err

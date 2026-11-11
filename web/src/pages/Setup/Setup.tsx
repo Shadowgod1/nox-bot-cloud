@@ -2,12 +2,12 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { Check, CheckCircle2 } from 'lucide-react'
 import { api, ApiError } from '../../api/client'
-import type { CheckResult, LlmProvider, LlmSettings, TemplateMeta, User } from '../../api/types'
+import type { LlmProvider, LlmSettings, LlmTestResult, TemplateMeta, User } from '../../api/types'
 import { useAuth } from '../../hooks/useAuth'
 import { useLoad } from '../../hooks/useLoad'
 import { AuthFrame } from '../Login/Login'
 import { WhatsAppConnect } from '../../components/WhatsAppConnect'
-import { Button, CheckLine, EmptyState, ErrorState, Field, Input, Spinner, cx } from '../../components/ui'
+import { Button, CheckLine, type CheckView, EmptyState, ErrorState, Field, Input, Spinner, cx } from '../../components/ui'
 
 const STEPS = ['Владелец', 'Языковая модель', 'Шаблон', 'WhatsApp', 'Готово'] as const
 
@@ -85,6 +85,7 @@ function StepHeader({ title, text }: { title: string; text: string }) {
 }
 
 function OwnerStep({ onDone }: { onDone: () => void }) {
+  const { refresh } = useAuth()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -106,17 +107,19 @@ function OwnerStep({ onDone }: { onDone: () => void }) {
     setBusy(true)
     try {
       const creds = { email: email.trim(), password }
+      // Core sets the session + CSRF cookies on success (same as /api/auth/login).
       await api.post<User>('/api/setup/owner', { ...creds, name: name.trim() })
-      // The owner endpoint normally opens a session; log in explicitly if it did not.
+      // Defensive only: if the cookie did not stick (e.g. blocked), log in explicitly.
       try {
-        await api.get('/api/auth/me', { silent: true, noAuthRedirect: true })
+        await api.get<User>('/api/auth/me', { silent: true, noAuthRedirect: true })
       } catch (err) {
-        if (err instanceof ApiError && err.status === 401) await api.post('/api/auth/login', creds, { noAuthRedirect: true })
+        if (err instanceof ApiError && err.status === 401) await api.post<User>('/api/auth/login', creds, { noAuthRedirect: true })
         else throw err
       }
       onDone()
-    } catch {
-      /* toast */
+    } catch (err) {
+      // 409 already_set_up: another owner was created meanwhile — the wizard is over, go to login.
+      if (err instanceof ApiError && err.code === 'already_set_up') void refresh()
     } finally {
       setBusy(false)
     }
@@ -156,7 +159,7 @@ function LlmStep({ onDone }: { onDone: () => void }) {
   const [provider, setProvider] = useState<LlmProvider>('openai')
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
-  const [check, setCheck] = useState<CheckResult | null>(null)
+  const [check, setCheck] = useState<CheckView | null>(null)
 
   async function verify(e: FormEvent) {
     e.preventDefault()
@@ -169,8 +172,10 @@ function LlmStep({ onDone }: { onDone: () => void }) {
         provider,
         [provider === 'openai' ? 'openai_key' : 'gemini_key']: key.trim(),
       }
-      await api.put('/api/settings/llm', payload)
-      setCheck(await api.post<CheckResult>('/api/settings/llm/test', { provider }))
+      // Test the unsaved key first (core saves nothing on /test), store it only when it works.
+      const r = await api.post<LlmTestResult>('/api/settings/llm/test', payload)
+      if (r.ok) await api.put<LlmSettings>('/api/settings/llm', payload)
+      setCheck({ ok: r.ok, message: r.ok ? undefined : r.error })
     } catch {
       /* toast */
     } finally {

@@ -312,8 +312,14 @@ export function Segmented<T extends string>({
   )
 }
 
+/** What a "Проверить" button shows: pages map the API test result (`{ok, error?, count?}`) to this. */
+export interface CheckView {
+  ok: boolean
+  message?: string
+}
+
 /** Inline result line for "Проверить" buttons. */
-export function CheckLine({ result }: { result: { ok: boolean; message?: string } | null }) {
+export function CheckLine({ result }: { result: CheckView | null }) {
   if (!result) return null
   return (
     <p role="status" className={cx('text-[13px]', result.ok ? 'text-ok' : 'text-danger')}>
