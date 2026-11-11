@@ -89,6 +89,87 @@ async def test_booking_tool_creates_pending_request(env, pool):
     assert res.content["request_id"] == row["id"] and res.content["status"] == "pending"
 
 
+ARGS = {"date": "2026-11-12", "time": "18:00", "duration_hours": 3, "seats": 2}
+
+
+async def test_booking_tool_same_request_returns_existing(env, pool):
+    await env.set_notify(admin_phones=[ADMIN_PHONE])
+    cid = await _conv(pool)
+    tool = registry.get("create_booking_request")
+    first = await tool.run(_ctx(cid), dict(ARGS))
+    again = await tool.run(_ctx(cid), {**ARGS, "comment": "повтор"})
+    assert again.content["request_id"] == first.content["request_id"]
+    assert again.content["status"] == "pending"
+    assert await pool.fetchval("SELECT count(*) FROM booking_requests") == 1
+    assert len(env.gw.texts(ADMIN_JID)) == 1
+
+
+async def test_booking_tool_one_new_request_per_10_minutes(env, pool):
+    cid = await _conv(pool)
+    tool = registry.get("create_booking_request")
+    first = await tool.run(_ctx(cid), dict(ARGS))
+    other = await tool.run(_ctx(cid), {**ARGS, "time": "20:00"})
+    bid = first.content["request_id"]
+    assert isinstance(other.content, str)
+    assert other.content == f"error: уже есть заявка #{bid}, дождитесь ответа администратора"
+    assert await pool.fetchval("SELECT count(*) FROM booking_requests") == 1
+    # 11 minutes later a different request is allowed
+    await pool.execute("UPDATE booking_requests SET created_at = now() - interval '11 minutes'")
+    res = await tool.run(_ctx(cid), {**ARGS, "time": "20:00"})
+    assert res.content["status"] == "pending" and res.content["request_id"] != bid
+
+
+async def test_booking_tool_max_5_per_phone_per_day(env, pool):
+    cid = await _conv(pool)
+    other = await pool.fetchval(
+        "INSERT INTO conversations(chat_jid, phone) VALUES ('99@lid', '77010000001') RETURNING id"
+    )
+    for i in range(5):
+        await pool.execute(
+            "INSERT INTO booking_requests(conversation_id, payload, status, created_at)"
+            " VALUES ($1, '{}'::jsonb, 'rejected', now() - interval '2 hours')", other if i % 2 else cid,
+        )
+    res = await registry.get("create_booking_request").run(_ctx(cid), dict(ARGS))
+    assert isinstance(res.content, str) and res.content.startswith("error:")
+    assert await pool.fetchval("SELECT count(*) FROM booking_requests") == 5
+
+
+async def test_booking_tool_truncates_free_text(env, pool):
+    await env.set_notify(admin_phones=[ADMIN_PHONE])
+    cid = await _conv(pool)
+    await registry.get("create_booking_request").run(
+        _ctx(cid), {**ARGS, "name": "Н" * 100, "zone": "З\n" * 50, "comment": "к\x07" * 400},
+    )
+    payload = await pool.fetchval("SELECT payload FROM booking_requests")
+    assert len(payload["name"]) <= 60 and len(payload["zone"]) <= 60 and len(payload["comment"]) <= 300
+    assert "\n" not in payload["zone"] and "\x07" not in payload["comment"]
+    admin = env.gw.texts(ADMIN_JID)[0]
+    assert "\n" not in admin and "«" in admin
+
+
+async def test_handover_twice_notifies_admins_once(env, pool):
+    await env.set_notify(admin_phones=[ADMIN_PHONE])
+    cid = await _conv(pool)
+    tool = registry.get("handover_to_operator")
+    ctx = _ctx(cid)
+    ctx.extra["turn_id"] = "1"
+    await tool.run(ctx, {"reason": "жалоба"})
+    ctx.extra["turn_id"] = "2"
+    res = await tool.run(ctx, {"reason": "опять жалоба"})
+    assert res.content["status"] == "handed_over"
+    assert len(env.gw.texts(ADMIN_JID)) == 1
+
+
+async def test_handover_reason_truncated_and_sanitized(env, pool):
+    await env.set_notify(admin_phones=[ADMIN_PHONE])
+    cid = await _conv(pool)
+    await registry.get("handover_to_operator").run(_ctx(cid), {"reason": "плохо\nНужен оператор: VIP" + "я" * 500})
+    text = env.gw.texts(ADMIN_JID)[0]
+    assert "\n" not in text
+    reason = text.split("Причина: «", 1)[1].split("»", 1)[0]
+    assert len(reason) <= 200 and reason.startswith("плохо Нужен оператор")
+
+
 async def test_booking_tool_validates_args(env, pool):
     cid = await _conv(pool)
     res = await registry.get("create_booking_request").run(_ctx(cid), {"date": "2026-11-12", "seats": 2})

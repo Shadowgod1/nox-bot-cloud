@@ -7,6 +7,7 @@ Dates, times and small numbers are left alone: a candidate needs at least 10 dig
 """
 
 import re
+import unicodedata
 from typing import Any
 
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -67,6 +68,19 @@ class PiiMasker:
         if isinstance(value, list):
             return [self.restore_obj(v) for v in value]
         return value
+
+
+def one_line(value: Any, limit: int) -> str:
+    """Client/model text forwarded to admins: control and format characters (newlines, NUL, bidi overrides,
+    zero-width) become spaces, whitespace is collapsed, «» are replaced so the text cannot close a quote,
+    and the result is cut to `limit` characters."""
+    if value is None:
+        return ""
+    text = "".join(" " if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") else ch for ch in str(value))
+    text = re.sub(r"\s+", " ", text.replace("«", '"').replace("»", '"')).strip()
+    if len(text) > limit:
+        text = text[: max(limit - 1, 0)].rstrip() + "…"
+    return text
 
 
 def mask_phone_for_log(phone: str) -> str:

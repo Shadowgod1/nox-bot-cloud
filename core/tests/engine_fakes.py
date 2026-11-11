@@ -86,6 +86,7 @@ async def env(pool, monkeypatch):
     holder = SimpleNamespace(gw=gw, llm=FakeLLM(default="Здравствуйте! Чем помочь?"))
     router.set_provider_factory(lambda name, s: holder.llm)
     monkeypatch.setattr(buffer, "SCALE", 0.02)
+    engine_handler._sweeps.clear()  # ids restart per test (TRUNCATE ... RESTART IDENTITY)
     prev_inbound = inbound.get_handler()
     prev_admin = engine_handler.get_admin_handler()
     from iler.bookings import admin_reply

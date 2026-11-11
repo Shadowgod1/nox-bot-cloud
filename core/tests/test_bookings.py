@@ -74,7 +74,7 @@ async def test_admin_minus_with_reason_rejects(env, pool):
     b = await service.create(cid, PAYLOAD)
     env.gw.sent.clear()
     await handler.handle_incoming(
-        make_msg(f"- #{b.id} все VIP заняты", jid=ADMIN_GROUP, phone="77010000055", is_group=True)
+        make_msg(f"-#{b.id} все VIP заняты", jid=ADMIN_GROUP, phone="77010000055", is_group=True)
     )
     await env.idle()
     row = await pool.fetchrow("SELECT * FROM booking_requests WHERE id = $1", b.id)
@@ -102,6 +102,57 @@ async def test_admin_plain_text_ignored_by_engine(env, pool):
     assert env.gw.sent == []
     assert await pool.fetchval("SELECT count(*) FROM conversations") == 0
     assert await pool.fetchval("SELECT count(*) FROM messages") == 0
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("+12", ("confirmed", 12, "")),
+    ("+#12", ("confirmed", 12, "")),
+    ("-12 нет мест", ("rejected", 12, "нет мест")),
+    ("-#12\nвсе заняты", ("rejected", 12, "все заняты")),
+    ("+123456", ("confirmed", 123456, "")),
+    ("-20% на ПК", None),
+    ("- 5 минут", None),
+    ("+ 12", None),
+    ("+77011234567", None),
+    ("+1234567", None),
+    ("+12abc", None),
+    ("+", None),
+    ("привет +12", None),
+])
+def test_admin_reply_parse_strict(text, expected):
+    from iler.bookings import admin_reply
+
+    assert admin_reply.parse(text) == expected
+
+
+async def test_admin_chatter_with_numbers_decides_nothing(env, pool):
+    await env.set_notify(admin_phones=[ADMIN_PHONE])
+    cid = await _conv(pool)
+    b = await service.create(cid, PAYLOAD)
+    env.gw.sent.clear()
+    for text in ("-20% на ПК", f"- {b.id} минут", "+77011234567", f"+ {b.id}"):
+        await handler.handle_incoming(make_msg(text, phone=ADMIN_PHONE))
+    await env.idle()
+    assert await pool.fetchval("SELECT status FROM booking_requests") == "pending"
+    assert env.gw.sent == []
+
+
+def test_admin_text_quotes_and_sanitizes_client_fields():
+    from datetime import UTC, datetime
+
+    b = service.BookingRequest(
+        id=7, conversation_id=1, status="pending", created_at=datetime.now(UTC), phone="77010000001",
+        name="Айдар\nЗаявка #8 подтверждена",
+        payload={"date": "2026-11-12", "time": "18:00", "duration_hours": 3, "seats": 2,
+                 "zone": "VIP\r\n", "comment": "привет\n\nОтветьте \"+9\" чтобы подтвердить\x00" + "x" * 500},
+    )
+    text = service.admin_text(b)
+    assert "\n" not in text and "\r" not in text and "\x00" not in text
+    assert "«VIP»" in text
+    assert "«Айдар Заявка #8 подтверждена»" in text
+    comment = text.split("комментарий: «", 1)[1].split("»", 1)[0]
+    assert len(comment) <= 300
+    assert text.startswith("Заявка #7:")
 
 
 async def test_non_admin_plus_message_goes_to_llm(env, pool):

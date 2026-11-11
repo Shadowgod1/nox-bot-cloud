@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from iler import settings_store
@@ -18,6 +18,14 @@ from iler.tools.base import Tool, ToolContext, ToolResult
 log = logging.getLogger("iler.engine.turn")
 
 HANDOVER_TOOL = "handover_to_operator"
+HANDOVER_REPLY = "Передаю ваш вопрос администратору, он скоро ответит."
+AFTER_HOURS_REPEAT = timedelta(hours=12)  # the after-hours text goes to a conversation at most this often
+
+
+def _not_configured(bot) -> bool:
+    """The owner has not written the bot prompt yet (`prompt` field may not exist in older settings)."""
+    value = getattr(bot, "prompt", None)
+    return value is not None and not str(value).strip()
 
 
 @dataclass
@@ -93,6 +101,9 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
         if decision.action == "skip":
             log.info("conversation %s: no reply (%s)", conversation_id, decision.reason)
             return TurnOutcome()
+        if _not_configured(bot):
+            log.warning("conversation %s: no reply, the bot prompt is not configured", conversation_id)
+            return TurnOutcome()
         rows = await store.recent_messages(conversation_id, bot.memory_messages)
         last = rows[-1] if rows else None
         if last is None or last["author"] != "client":
@@ -100,6 +111,10 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
         turn_id = str(last["id"])  # deterministic: re-running the turn for the same message never re-sends
         if decision.action == "fixed_message":
             parts = sender.split_reply(bot.after_hours_message)
+            prev = await store.last_bot_message(conversation_id)
+            if parts and prev is not None and prev["text"] == parts[-1] and prev["created_at"] > now - AFTER_HOURS_REPEAT:
+                log.info("conversation %s: after-hours message already sent recently", conversation_id)
+                return TurnOutcome()
             await sender.send_reply(conversation_id, parts, turn_id=turn_id)
             return TurnOutcome(reply_parts=parts)
         chat = prompt.history_from_rows(rows)
@@ -129,16 +144,26 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
 
     tool_calls = [{**c, "args": masker.restore_obj(c["args"])} for c in result.tool_calls]
     handed_over = any(c["name"] == HANDOVER_TOOL and not c["error"] for c in tool_calls)
-    parts = sender.split_reply(masker.restore(result.text))
+    text = masker.restore(result.text).strip()
+    if handed_over and (not text or text == router.STUB_REPLY):
+        text = HANDOVER_REPLY  # the model handed over without a word to the client
+    parts = sender.split_reply(text)
     outcome = TurnOutcome(reply_parts=parts, tool_calls=tool_calls, handed_over=handed_over)
     if dry_run or not parts:
         return outcome
 
+    dropped = TurnOutcome(reply_parts=[], tool_calls=tool_calls, handed_over=handed_over)
     # The operator may have taken over while the LLM was thinking: then the bot stays silent.
     fresh = await store.get_conversation(conversation_id)
     if fresh is None or (not handed_over and admission.is_paused(fresh["status"], fresh["paused_until"],
                                                                  datetime.now(UTC))):
         log.info("conversation %s paused during the turn; reply dropped", conversation_id)
-        return TurnOutcome(reply_parts=[], tool_calls=tool_calls, handed_over=handed_over)
+        return dropped
+    # The client wrote again while the LLM was thinking: the turn queued behind this one answers both
+    # (it sees the whole history), so this reply would only be outdated. A handover reply still goes out:
+    # the queued turn will be skipped by the pause.
+    if not handed_over and await store.has_client_message_after(conversation_id, int(turn_id)):
+        log.info("conversation %s: newer client message arrived during the turn; reply dropped", conversation_id)
+        return dropped
     await sender.send_reply(conversation_id, parts, turn_id=turn_id)
     return outcome

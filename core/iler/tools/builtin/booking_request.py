@@ -42,11 +42,16 @@ class CreateBookingRequest:
                                "note": "Тестовый режим: заявка не создана. Скажи клиенту, что заявка передана."})
         from iler.bookings import service
 
-        b = await service.create(ctx.conversation_id, payload)
+        try:
+            b, created = await service.create_checked(ctx.conversation_id, payload)
+        except service.BookingLimit as e:
+            return ToolResult(f"error: {e}")
         return ToolResult({
             "status": "pending",
             "request_id": b.id,
-            "note": "Заявка передана администратору. Скажи клиенту, что администратор подтвердит её.",
+            "note": ("Заявка передана администратору. Скажи клиенту, что администратор подтвердит её."
+                     if created else
+                     "Такая заявка уже передана администратору и ждёт ответа. Новую не создавай."),
         })
 
 

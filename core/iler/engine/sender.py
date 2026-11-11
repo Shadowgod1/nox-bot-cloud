@@ -14,10 +14,12 @@ EvolutionGateway.send_text reports send health to the WhatsApp monitor itself.
 import logging
 import re
 import uuid
+from datetime import UTC, datetime
 
 from iler import settings_store
 from iler.db.pool import get_pool
 from iler.engine import store
+from iler.engine.admission import is_paused, normalize_phone
 from iler.engine.pii import mask_phone_for_log
 from iler.settings_models import BotSettings, NotifySettings
 from iler.whatsapp import get_gateway
@@ -29,6 +31,8 @@ SPLIT_MARKER = "[SPLIT]"
 MAX_PARTS = 4
 PRESENCE_MS_PER_CHAR = 40
 PRESENCE_MAX_MS = 4000
+STALE = "stale"  # `error` of a failed intent dropped because the conversation moved on
+_REPLY_KEY = re.compile(r"^(\d+):([^:]+):(\d+)$")
 
 
 class SendFailed(Exception):
@@ -86,15 +90,17 @@ async def _deliver(intent_id: int, idem_key: str, conversation_id: int | None, j
     return status
 
 
-async def send_text_intent(idem_key: str, conversation_id: int | None, jid: str, text: str,
-                           *, presence: bool = True) -> tuple[str, bool]:
-    """Send once per idem_key. Returns (status, attempted_now)."""
-    pool = get_pool()
-    await pool.execute(
+async def _create_intent(idem_key: str, conversation_id: int | None, jid: str, text: str) -> None:
+    await get_pool().execute(
         "INSERT INTO outbound_intents(idem_key, conversation_id, chat_jid, text) VALUES ($1, $2, $3, $4)"
         " ON CONFLICT (idem_key) DO NOTHING",
         idem_key, conversation_id, jid, text,
     )
+
+
+async def _claim_and_send(idem_key: str, conversation_id: int | None, jid: str, text: str,
+                          *, presence: bool) -> tuple[str, bool]:
+    pool = get_pool()
     claimed = await pool.fetchrow(
         "UPDATE outbound_intents SET status = 'sending', attempts = attempts + 1, updated_at = now()"
         " WHERE idem_key = $1 AND status IN ('pending', 'failed') RETURNING id",
@@ -105,29 +111,103 @@ async def send_text_intent(idem_key: str, conversation_id: int | None, jid: str,
     return await _deliver(claimed["id"], idem_key, conversation_id, jid, text, presence=presence), True
 
 
+async def send_text_intent(idem_key: str, conversation_id: int | None, jid: str, text: str,
+                           *, presence: bool = True) -> tuple[str, bool]:
+    """Send once per idem_key. Returns (status, attempted_now)."""
+    await _create_intent(idem_key, conversation_id, jid, text)
+    return await _claim_and_send(idem_key, conversation_id, jid, text, presence=presence)
+
+
+def _reply_key(idem_key: str) -> tuple[int, str, int] | None:
+    """'{conversation_id}:{turn_id}:{part}' -> (conversation_id, turn_id, part) for bot reply parts."""
+    m = _REPLY_KEY.match(idem_key)
+    return (int(m.group(1)), m.group(2), int(m.group(3))) if m else None
+
+
+async def _retry_blocker(row) -> str | None:
+    """Why a bot reply part must not be (re)sent now: "wait" (an earlier part of the same reply is not
+    delivered yet), STALE (the conversation moved on: paused / needs operator, bot disabled, or the client
+    wrote again since that turn), or None. Other intents (operator, booking, admin) are never blocked."""
+    key = _reply_key(row["idem_key"])
+    if key is None or row["conversation_id"] is None:
+        return None
+    cid, turn_id, part = key
+    pool = get_pool()
+    conv = await store.get_conversation(row["conversation_id"])
+    if conv is None or conv["status"] == "closed" or is_paused(conv["status"], conv["paused_until"],
+                                                                datetime.now(UTC)):
+        return STALE
+    bot = await settings_store.get("bot", BotSettings)
+    if not bot.enabled:
+        return STALE
+    if turn_id.isdigit():
+        newer = await store.has_client_message_after(row["conversation_id"], int(turn_id))
+    else:
+        newer = bool(await pool.fetchval(
+            "SELECT 1 FROM messages WHERE conversation_id = $1 AND author = 'client' AND created_at > $2 LIMIT 1",
+            row["conversation_id"], row["created_at"],
+        ))
+    if newer:
+        return STALE
+    if part > 0:
+        earlier = await pool.fetch(
+            "SELECT status, error FROM outbound_intents WHERE idem_key = ANY($1::text[])",
+            [f"{cid}:{turn_id}:{i}" for i in range(part)],
+        )
+        if any(r["status"] == "failed" and r["error"] == STALE for r in earlier):
+            return STALE
+        if any(r["status"] in ("pending", "sending", "failed") for r in earlier):
+            return "wait"
+    return None
+
+
 async def retry_intent(intent_id: int) -> str | None:
-    """Re-send a `failed` intent (reconcile worker). None when it was not claimable."""
-    row = await get_pool().fetchrow(
-        "UPDATE outbound_intents SET status = 'sending', attempts = attempts + 1, updated_at = now()"
-        " WHERE id = $1 AND status = 'failed' RETURNING id, idem_key, conversation_id, chat_jid, text",
+    """Re-send a `failed` intent, or a reply part left `pending` (reconcile worker). None when it was not
+    claimable, has to wait for an earlier part, or turned out stale (then it is marked failed/'stale')."""
+    pool = get_pool()
+    row = await pool.fetchrow(
+        "SELECT id, idem_key, conversation_id, chat_jid, text, created_at FROM outbound_intents"
+        " WHERE id = $1 AND status IN ('pending', 'failed')",
         intent_id,
     )
     if row is None:
+        return None
+    blocker = await _retry_blocker(row)
+    if blocker == "wait":
+        return None
+    if blocker == STALE:
+        await pool.execute(
+            "UPDATE outbound_intents SET status = 'failed', error = $2, updated_at = now()"
+            " WHERE id = $1 AND status IN ('pending', 'failed')",
+            intent_id, STALE,
+        )
+        log.info("outdated reply part %s dropped", row["idem_key"])
+        return None
+    claimed = await pool.fetchrow(
+        "UPDATE outbound_intents SET status = 'sending', attempts = attempts + 1, updated_at = now()"
+        " WHERE id = $1 AND status IN ('pending', 'failed') RETURNING id",
+        intent_id,
+    )
+    if claimed is None:
         return None
     return await _deliver(row["id"], row["idem_key"], row["conversation_id"], row["chat_jid"], row["text"],
                           presence=False)
 
 
 async def send_reply(conversation_id: int, parts: list[str], *, turn_id: str) -> list[str]:
-    """Send bot reply parts in order with typing presence. Stops after a part that failed now (later parts
-    would arrive out of context); parts already decided earlier (same idem key) are skipped, not resent."""
+    """Send bot reply parts in order with typing presence. Intents for all parts are created up front
+    (`pending`), so parts left behind by a failure are retried by the reconcile worker in order. Stops after a
+    part that failed now (later parts would arrive out of context); parts already decided earlier (same idem
+    key) are skipped, not resent."""
     conv = await store.get_conversation(conversation_id)
     if conv is None:
         return []
+    keys = [f"{conversation_id}:{turn_id}:{i}" for i in range(len(parts))]
+    for key, part in zip(keys, parts, strict=True):
+        await _create_intent(key, conversation_id, conv["chat_jid"], part)
     statuses: list[str] = []
-    for i, part in enumerate(parts):
-        status, attempted = await send_text_intent(f"{conversation_id}:{turn_id}:{i}", conversation_id,
-                                                   conv["chat_jid"], part)
+    for key, part in zip(keys, parts, strict=True):
+        status, attempted = await _claim_and_send(key, conversation_id, conv["chat_jid"], part, presence=True)
         statuses.append(status)
         if attempted and status != "sent":
             break
@@ -152,7 +232,7 @@ async def send_to_jid(idem_key: str, jid: str, text: str) -> str:
 def admin_targets(notify: NotifySettings) -> list[str]:
     targets: list[str] = []
     for p in notify.admin_phones:
-        d = re.sub(r"\D", "", p)
+        d = normalize_phone(p)
         if d and f"{d}@s.whatsapp.net" not in targets:
             targets.append(f"{d}@s.whatsapp.net")
     if notify.admin_group_jid:

@@ -103,6 +103,85 @@ async def test_send_operator_message_failure_raises(env, pool):
         await sender.send_operator_message(cid, "Алло", "Оля")
 
 
+async def test_notify_admins_normalizes_local_8_prefix(env, pool):
+    await env.set_notify(admin_phones=["8 701 000 00 99", "+7 701 000 00 99"])
+    await sender.notify_admins("Тест")
+    assert [j for j, _ in env.gw.sent] == [ADMIN_JID]
+
+
+async def test_partial_reply_remaining_parts_created_pending(env, pool):
+    cid = await _conv(pool)
+    env.gw.fail = EvolutionError("down")
+    assert await sender.send_reply(cid, ["a", "b", "c"], turn_id="t5") == ["failed"]
+    rows = await pool.fetch("SELECT idem_key, status FROM outbound_intents ORDER BY id")
+    assert [(r["idem_key"], r["status"]) for r in rows] == [
+        (f"{cid}:t5:0", "failed"), (f"{cid}:t5:1", "pending"), (f"{cid}:t5:2", "pending"),
+    ]
+    env.gw.fail = None
+    await pool.execute("UPDATE outbound_intents SET updated_at = now() - interval '1 minute'")
+    assert await outbound_reconcile.reconcile_once() == 3
+    assert env.gw.texts(CLIENT_JID) == ["a", "b", "c"]
+    assert await pool.fetchval("SELECT count(*) FROM outbound_intents WHERE status = 'sent'") == 3
+
+
+async def test_reconcile_keeps_part_order(env, pool):
+    """A later part is never sent while an earlier one is still undelivered."""
+    cid = await _conv(pool)
+    env.gw.fail = EvolutionError("down")
+    await sender.send_reply(cid, ["a", "b"], turn_id="t6")
+    await pool.execute("UPDATE outbound_intents SET updated_at = now() - interval '1 minute'"
+                       " WHERE idem_key LIKE '%:1'")  # part 0 too fresh to retry yet
+    env.gw.fail = None
+    assert await outbound_reconcile.reconcile_once() == 0
+    assert env.gw.sent == []
+
+
+async def _client_msg(pool, cid, text="ещё вопрос"):
+    return await pool.fetchval(
+        "INSERT INTO messages(conversation_id, direction, author, text) VALUES ($1, 'in', 'client', $2) RETURNING id",
+        cid, text,
+    )
+
+
+async def _failed_reply(env, pool, cid, turn_id):
+    env.gw.fail = EvolutionError("down")
+    await sender.send_reply(cid, ["a", "b"], turn_id=turn_id)
+    env.gw.fail = None
+    await pool.execute("UPDATE outbound_intents SET updated_at = now() - interval '1 minute'")
+
+
+async def _assert_all_stale(env, pool):
+    assert await outbound_reconcile.reconcile_once() == 0
+    assert env.gw.sent == []
+    rows = await pool.fetch("SELECT status, error FROM outbound_intents")
+    assert rows and all(r["status"] == "failed" and r["error"] == "stale" for r in rows)
+    assert await outbound_reconcile.reconcile_once() == 0  # stale intents are not picked up again
+
+
+async def test_retry_dropped_when_newer_client_message(env, pool):
+    cid = await _conv(pool)
+    mid = await _client_msg(pool, cid, "первый")
+    await _failed_reply(env, pool, cid, str(mid))
+    await _client_msg(pool, cid)
+    await _assert_all_stale(env, pool)
+
+
+async def test_retry_dropped_when_paused(env, pool):
+    cid = await _conv(pool)
+    mid = await _client_msg(pool, cid, "первый")
+    await _failed_reply(env, pool, cid, str(mid))
+    await pool.execute("UPDATE conversations SET status = 'needs_operator', paused_until = NULL")
+    await _assert_all_stale(env, pool)
+
+
+async def test_retry_dropped_when_bot_disabled(env, pool):
+    cid = await _conv(pool)
+    mid = await _client_msg(pool, cid, "первый")
+    await _failed_reply(env, pool, cid, str(mid))
+    await env.set_bot(enabled=False)
+    await _assert_all_stale(env, pool)
+
+
 async def test_notify_admins_phone_and_group(env, pool):
     await env.set_notify(admin_phones=["+7 701 000 00 99"], admin_group_jid=ADMIN_GROUP)
     await sender.notify_admins("Тест уведомления")

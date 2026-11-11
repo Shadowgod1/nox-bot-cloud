@@ -10,11 +10,19 @@ from pydantic import BaseModel
 from iler import events, settings_store
 from iler.db.pool import get_pool
 from iler.engine import sender
+from iler.engine.pii import one_line
 from iler.settings_models import BotSettings
 
 log = logging.getLogger("iler.bookings")
 
 Status = Literal["pending", "confirmed", "rejected", "expired"]
+
+NAME_MAX = 60
+ZONE_MAX = 60
+COMMENT_MAX = 300
+DUPLICATE_WINDOW_MIN = 30   # the same slot asked again within this window returns the existing request
+CONV_WINDOW_MIN = 10        # at most one new pending request per conversation per this window
+PHONE_DAILY_MAX = 5         # requests per client phone per 24 h
 
 _COLS = (
     "b.id, b.conversation_id, b.payload, b.status, b.admin_note, b.timeout_notified, b.created_at,"
@@ -39,6 +47,10 @@ class BookingRequest(BaseModel):
 
 class BookingNotFound(Exception):
     pass
+
+
+class BookingLimit(Exception):
+    """The LLM tool may not create another request now; the message is shown to the model."""
 
 
 class BookingConflict(Exception):
@@ -97,10 +109,49 @@ async def list_requests(status: str | None = None, limit: int = 200) -> list[Boo
     return [BookingRequest(**dict(r)) for r in rows]
 
 
+def _admin_details(payload: dict) -> str:
+    """Like `details`, but every value is one sanitized line and client-written text is quoted «…», so it can
+    neither break the message into fake "system" lines nor pass for the bot's own wording."""
+    parts = []
+    date = one_line(payload.get("date"), 20)
+    time_ = one_line(payload.get("time"), 10)
+    if date or time_:
+        parts.append(" в ".join(x for x in (date, time_) if x))
+    if payload.get("duration_hours") not in (None, ""):
+        parts.append(f"{one_line(payload['duration_hours'], 10)} ч")
+    if payload.get("seats") not in (None, ""):
+        parts.append(f"мест: {one_line(payload['seats'], 10)}")
+    for key, label, limit in (("zone", "зона ", ZONE_MAX), ("name", "имя ", NAME_MAX),
+                              ("comment", "комментарий: ", COMMENT_MAX)):
+        value = one_line(payload.get(key), limit)
+        if value:
+            parts.append(f"{label}«{value}»")
+    return ", ".join(parts)
+
+
 def admin_text(b: BookingRequest) -> str:
-    who = " ".join(x for x in (b.name, f"+{b.phone}" if b.phone else "") if x) or "неизвестен"
-    return (f"Заявка #{b.id}: {details(b.payload)}. Клиент: {who}. "
+    name = one_line(b.name, NAME_MAX)
+    who = " ".join(x for x in (f"«{name}»" if name else "", f"+{b.phone}" if b.phone else "") if x) or "неизвестен"
+    return (f"Заявка #{b.id}: {_admin_details(b.payload)}. Клиент: {who}. "
             f"Ответьте \"+{b.id}\" чтобы подтвердить или \"-{b.id} причина\" чтобы отклонить.")
+
+
+def clean_payload(payload: dict) -> dict:
+    """Free-text fields from the model/client: one line, length-limited."""
+    out = dict(payload)
+    for key, limit in (("name", NAME_MAX), ("zone", ZONE_MAX), ("comment", COMMENT_MAX)):
+        if key in out and out[key] is not None:
+            value = one_line(out[key], limit)
+            if value:
+                out[key] = value
+            else:
+                del out[key]
+    return out
+
+
+async def _announce(b: BookingRequest) -> None:
+    await sender.notify_admins(admin_text(b), key=f"booking:{b.id}")
+    _publish(b)
 
 
 async def create(conversation_id: int, payload: dict) -> BookingRequest:
@@ -110,9 +161,69 @@ async def create(conversation_id: int, payload: dict) -> BookingRequest:
         conversation_id, payload,
     )
     b = await get(bid)
-    await sender.notify_admins(admin_text(b), key=f"booking:{b.id}")
-    _publish(b)
+    await _announce(b)
     return b
+
+
+def _same_slot(a: dict, b: dict) -> bool:
+    return all(str(a.get(k) or "").strip() == str(b.get(k) or "").strip() for k in ("date", "time")) and \
+        _num(a.get("seats")) == _num(b.get("seats"))
+
+
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return str(v or "").strip()
+
+
+async def create_checked(conversation_id: int, payload: dict) -> tuple[BookingRequest, bool]:
+    """`create` for the LLM tool, with anti-duplicate and anti-spam rules. Returns (request, created):
+    the same slot (date+time+seats) still pending from the last DUPLICATE_WINDOW_MIN minutes is returned
+    as is. Raises BookingLimit when the conversation already has a pending request from the last
+    CONV_WINDOW_MIN minutes, or the client's phone made PHONE_DAILY_MAX requests in the last 24 h."""
+    payload = clean_payload(payload)
+    pool = get_pool()
+    async with pool.acquire() as conn, conn.transaction():
+        # serialize concurrent tool calls of one conversation
+        await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"booking:{conversation_id}")
+        recent = await conn.fetch(
+            "SELECT id, payload, created_at > now() - $2::interval AS in_conv_window FROM booking_requests"
+            " WHERE conversation_id = $1 AND status = 'pending' AND created_at > now() - $3::interval"
+            " ORDER BY id DESC",
+            conversation_id, timedelta(minutes=CONV_WINDOW_MIN), timedelta(minutes=DUPLICATE_WINDOW_MIN),
+        )
+        for r in recent:
+            if _same_slot(r["payload"], payload):
+                existing = r["id"]
+                break
+        else:
+            existing = None
+            for r in recent:
+                if r["in_conv_window"]:
+                    raise BookingLimit(f"уже есть заявка #{r['id']}, дождитесь ответа администратора")
+            phone = await conn.fetchval("SELECT phone FROM conversations WHERE id = $1", conversation_id)
+            if phone:
+                today = await conn.fetchval(
+                    "SELECT count(*) FROM booking_requests b JOIN conversations c ON c.id = b.conversation_id"
+                    " WHERE c.phone = $1 AND b.created_at > now() - interval '1 day'", phone,
+                )
+            else:
+                today = await conn.fetchval(
+                    "SELECT count(*) FROM booking_requests WHERE conversation_id = $1"
+                    " AND created_at > now() - interval '1 day'", conversation_id,
+                )
+            if today >= PHONE_DAILY_MAX:
+                raise BookingLimit("лимит заявок на сегодня исчерпан, предложи клиенту дождаться администратора")
+            bid = await conn.fetchval(
+                "INSERT INTO booking_requests(conversation_id, payload) VALUES ($1, $2) RETURNING id",
+                conversation_id, payload,
+            )
+    if existing is not None:
+        return await get(existing), False
+    b = await get(bid)
+    await _announce(b)
+    return b, True
 
 
 async def decide(booking_id: int, status: Literal["confirmed", "rejected"], note: str | None,
