@@ -1,0 +1,52 @@
+# e2e override: docker compose -f compose.yml -f compose.test.yml up -d --build
+# - the real Evolution API is disabled (profile) and replaced by fake-evolution;
+# - core uses the scripted FakeLLM (ILER_LLM_FAKE=1);
+# - fake-evolution is reachable from the host on 127.0.0.1:18080 (/_test/inbound, /_test/sent);
+# - backups go to a named volume instead of the host path /opt/iler/backups.
+services:
+  evolution-api:
+    profiles: ["real-evolution"]
+
+  fake-evolution:
+    build:
+      context: ./fake-evolution
+    image: iler-fake-evolution:test
+    restart: unless-stopped
+    networks: [iler]
+    environment:
+      AUTHENTICATION_API_KEY: ${ILER_EVO_API_KEY:-test-evo-key}
+      FAKE_DEFAULT_WEBHOOK_URL: http://iler-core:8000/internal/evolution/webhook
+    ports:
+      - "127.0.0.1:18080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  iler-core:
+    environment:
+      ILER_EVO_URL: http://fake-evolution:8080
+      ILER_EVO_API_KEY: ${ILER_EVO_API_KEY:-test-evo-key}
+      ILER_LLM_FAKE: "1"
+      # test-only defaults so the e2e stack starts without a generated .env
+      ILER_DATABASE_URL: postgresql://iler:${ILER_DB_PASSWORD:-test-db-password}@postgres:5432/iler
+      ILER_SECRET_KEY: ${ILER_SECRET_KEY:-a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=}
+      ILER_UPDATER_TOKEN: ${ILER_UPDATER_TOKEN:-test-updater-token}
+    volumes:
+      - test_backups:/data/backups
+    depends_on:
+      fake-evolution:
+        condition: service_healthy
+
+  iler-updater:
+    environment:
+      ILER_UPDATER_TOKEN: ${ILER_UPDATER_TOKEN:-test-updater-token}
+
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${ILER_DB_PASSWORD:-test-db-password}
+      ILER_EVO_DB_PASSWORD: ${ILER_EVO_DB_PASSWORD:-test-evo-db-password}
+
+volumes:
+  test_backups:
