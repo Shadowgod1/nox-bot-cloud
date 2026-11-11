@@ -19,6 +19,8 @@ os.environ["ILER_DATABASE_URL"] = f"{_base}/{TEST_DB}"
 os.environ.setdefault("ILER_SECRET_KEY", base64.b64encode(b"k" * 32).decode())
 os.environ.setdefault("ILER_EVO_API_KEY", "test-evo-key")
 os.environ.setdefault("ILER_UPDATER_TOKEN", "test-updater-token")
+os.environ.setdefault("ILER_SETUP_TOKEN", "test-setup-token")
+os.environ.setdefault("ILER_OPENAPI", "1")
 os.environ["ILER_DISABLE_WORKERS"] = "1"
 
 from asgi_lifespan import LifespanManager  # noqa: E402

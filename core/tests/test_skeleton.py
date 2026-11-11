@@ -62,3 +62,26 @@ def test_registry_loads_plugins():
 async def test_migrate_fails_loudly_without_files(pool, tmp_path):
     with pytest.raises(RuntimeError, match="no migrations"):
         await migrate.run(pool, tmp_path)
+
+
+async def test_secret_with_foreign_key_is_treated_as_unset(pool, monkeypatch, caplog):
+    """A restore on a new machine without the old .env must not crash every settings read."""
+    import base64
+
+    from iler.config import get_settings
+
+    await settings_store.put("llm", LlmSettings(openai_key=SecretStr("sk-test-123"), openai_model="gpt-x"))
+    monkeypatch.setattr(get_settings(), "secret_key", base64.b64encode(b"z" * 32).decode())
+    with caplog.at_level("ERROR"):
+        loaded = await settings_store.get("llm", LlmSettings)
+    assert loaded.openai_key is None and loaded.openai_model == "gpt-x"
+    assert "secret key mismatch" in caplog.text
+
+
+def test_openapi_disabled_by_default(monkeypatch):
+    from iler.main import create_app
+
+    monkeypatch.delenv("ILER_OPENAPI", raising=False)
+    assert create_app().openapi_url is None
+    monkeypatch.setenv("ILER_OPENAPI", "1")
+    assert create_app().openapi_url == "/api/openapi.json"

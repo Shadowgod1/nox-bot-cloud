@@ -79,7 +79,7 @@ def evo():
 @pytest.fixture
 def authed(app):
     async def _user():
-        return {"id": 1, "email": "o@example.com", "name": "Owner", "role": "owner"}
+        return auth_deps.User(id=1, email="o@example.com", name="Owner", role="owner")
 
     async def _noop():
         return None
@@ -371,3 +371,114 @@ async def test_evolution_down_maps_to_502(client, authed):
     finally:
         set_gateway(None)
     assert r.status_code == 502 and r.json()["error"]["code"] == "evolution_unavailable"
+
+
+@pytest.fixture
+def as_operator(app):
+    async def _user():
+        return auth_deps.User(id=2, email="op@example.com", name="Op", role="operator")
+
+    async def _noop():
+        return None
+
+    app.dependency_overrides[auth_deps.current_user] = _user
+    app.dependency_overrides[auth_deps.csrf_protect] = _noop
+    yield
+    app.dependency_overrides.pop(auth_deps.current_user, None)
+    app.dependency_overrides.pop(auth_deps.csrf_protect, None)
+
+
+async def test_operator_cannot_connect_pair_or_logout(client, as_operator, evo):
+    fake, _ = evo
+    assert (await client.get("/api/whatsapp/status")).status_code == 200
+    assert (await client.post("/api/whatsapp/connect")).status_code == 403
+    assert (await client.post("/api/whatsapp/pairing", json={"phone": "77010000009"})).status_code == 403
+    assert (await client.post("/api/whatsapp/logout")).status_code == 403
+    assert fake.calls == []
+
+
+# ---------- SMTP alerts ----------
+
+class FakeSMTP:
+    instances: list["FakeSMTP"] = []
+
+    def __init__(self, host, port, timeout=None, context=None):
+        self.host, self.port, self.context = host, port, context
+        self.tls_context = None
+        self.started_tls = False
+        self.logged_in = None
+        self.sent = []
+        FakeSMTP.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def starttls(self, context=None):
+        self.started_tls = True
+        self.tls_context = context
+
+    def login(self, user, password):
+        self.logged_in = (user, password)
+
+    def send_message(self, msg):
+        self.sent.append(msg)
+
+
+class FakeSMTPSSL(FakeSMTP):
+    pass
+
+
+@pytest.fixture
+def smtp_fakes(monkeypatch):
+    FakeSMTP.instances = []
+    monkeypatch.setattr(monitor.smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(monitor.smtplib, "SMTP_SSL", FakeSMTPSSL)
+    return FakeSMTP.instances
+
+
+async def _notify(**smtp):
+    from pydantic import SecretStr
+
+    from iler import settings_store
+    from iler.settings_models import NotifySettings, SmtpSettings
+
+    base = {"host": "smtp.example.org", "user": "bot", "password": SecretStr("pw-12345678"), "to": ["a@b.kz"]}
+    await settings_store.put("notify", NotifySettings(smtp=SmtpSettings(**(base | smtp))))
+
+
+async def test_smtp_starttls_uses_verified_context(pool, smtp_fakes):
+    import ssl
+
+    await _notify(port=587, starttls=True)
+    await monitor.send_alert("down")
+    [s] = smtp_fakes
+    assert type(s) is FakeSMTP and s.started_tls
+    assert isinstance(s.tls_context, ssl.SSLContext) and s.tls_context.verify_mode == ssl.CERT_REQUIRED
+    assert s.logged_in == ("bot", "pw-12345678") and len(s.sent) == 1
+
+
+async def test_smtp_ssl_on_port_465(pool, smtp_fakes):
+    import ssl
+
+    await _notify(port=465, starttls=False)
+    await monitor.send_alert("down")
+    [s] = smtp_fakes
+    assert type(s) is FakeSMTPSSL and isinstance(s.context, ssl.SSLContext)
+    assert not s.started_tls and s.logged_in == ("bot", "pw-12345678")
+
+
+async def test_smtp_never_logs_in_without_tls(pool, smtp_fakes):
+    await _notify(port=25, starttls=False)
+    await monitor.send_alert("down")
+    [s] = smtp_fakes
+    assert type(s) is FakeSMTP and not s.started_tls
+    assert s.logged_in is None and len(s.sent) == 1
+
+
+async def test_send_alert_custom_subject(pool, smtp_fakes):
+    await _notify(port=587)
+    await monitor.send_alert("backup failed", subject="ILER Bot: backup failed")
+    assert smtp_fakes[0].sent[0]["Subject"] == "ILER Bot: backup failed"

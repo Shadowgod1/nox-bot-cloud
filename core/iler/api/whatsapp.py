@@ -5,7 +5,7 @@ import re
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, field_validator
 
-from iler.auth.deps import csrf_protect, current_user
+from iler.auth.deps import csrf_protect, current_user, require_owner
 from iler.config import get_settings
 from iler.errors import ApiError
 from iler.whatsapp import get_gateway, monitor
@@ -59,7 +59,7 @@ async def get_whatsapp_status(_user=Depends(current_user)):
 
 
 @router.post("/api/whatsapp/connect", response_model=ConnectResult, response_model_exclude_none=True)
-async def post_whatsapp_connect(_user=Depends(current_user), _csrf=Depends(csrf_protect),
+async def post_whatsapp_connect(_user=Depends(require_owner), _csrf=Depends(csrf_protect),
                                 gw: WhatsAppGateway = Depends(gateway_dep)):
     try:
         state = await gw.connection_state()
@@ -76,7 +76,7 @@ async def post_whatsapp_connect(_user=Depends(current_user), _csrf=Depends(csrf_
 
 
 @router.post("/api/whatsapp/pairing", response_model=PairingResult)
-async def post_whatsapp_pairing(body: PairingRequest, _user=Depends(current_user), _csrf=Depends(csrf_protect),
+async def post_whatsapp_pairing(body: PairingRequest, _user=Depends(require_owner), _csrf=Depends(csrf_protect),
                                 gw: WhatsAppGateway = Depends(gateway_dep)):
     try:
         # Pairing only from `close` (spec 11.2); the instance is never deleted to get there.
@@ -94,7 +94,7 @@ async def post_whatsapp_pairing(body: PairingRequest, _user=Depends(current_user
 
 
 @router.post("/api/whatsapp/logout", response_model=OkResult)
-async def post_whatsapp_logout(_user=Depends(current_user), _csrf=Depends(csrf_protect),
+async def post_whatsapp_logout(_user=Depends(require_owner), _csrf=Depends(csrf_protect),
                                gw: WhatsAppGateway = Depends(gateway_dep)):
     try:
         await gw.logout()  # logout only: the instance itself is kept

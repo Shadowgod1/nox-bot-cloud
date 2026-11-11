@@ -22,7 +22,7 @@ def csrf(c: AsyncClient) -> dict:
 
 
 async def login(c: AsyncClient) -> None:
-    r = await c.post("/api/setup/owner", json=OWNER)
+    r = await c.post("/api/setup/owner", json=OWNER, headers={"X-ILER-Setup-Token": "test-setup-token"})
     assert r.status_code == 200, r.text
     c.cookies.clear()
     r = await c.post("/api/auth/login", json={"email": OWNER["email"], "password": OWNER["password"]})
@@ -436,7 +436,13 @@ async def test_dashboard_counts_today_in_club_tz(client, pool, monkeypatch):
         "today": {"conversations": 1, "client_messages": 2, "bot_replies": 1,
                   "bookings_pending": 2, "bookings_total": 2},
         "errors_24h": {"llm": 1, "send": 2},
+        "backup": {"status": None, "at": None, "message": None},
     }
+    from iler.backup import status as backup_status
+
+    await backup_status.record(False, "disk full")
+    backup = (await client.get("/api/dashboard")).json()["backup"]
+    assert backup["status"] == "error" and backup["message"] == "disk full" and backup["at"]
 
 
 def test_today_bounds_dst_zone():

@@ -2,7 +2,7 @@
 # ILER Bot installer for Linux (Ubuntu 22.04/24.04, Debian 12) and WSL2 (spec section 8).
 #
 #   sudo bash deploy/install.sh [--port 8080] [--dir /opt/iler] [--offline images.tar]
-#   sudo bash deploy/install.sh --restore /path/iler-backup-YYYYMMDD-HHMMSS.tar.gz
+#   sudo bash deploy/install.sh --restore /path/iler-backup-YYYYMMDD-HHMMSS.tar.gz [--env /path/old.env]
 #   sudo bash deploy/install.sh --uninstall [--purge]
 #   curl -fsSL <release>/install.sh | sudo bash          # downloads the bundle first
 #
@@ -25,6 +25,18 @@ if [[ -z "$SCRIPT_DIR" || ! -f "$SCRIPT_DIR/lib/common.sh" ]]; then
   workdir="$(mktemp -d /tmp/iler-bundle.XXXXXX)"
   echo "==> downloading $BUNDLE_URL"
   curl -fsSL "$BUNDLE_URL" -o "$workdir/bundle.tar.gz"
+  # Release assets ship SHA256SUMS next to the bundle: verify when it is there.
+  sums_url="${ILER_SHA256SUMS_URL:-${BUNDLE_URL%/*}/SHA256SUMS}"
+  if curl -fsSL "$sums_url" -o "$workdir/SHA256SUMS" 2>/dev/null; then
+    bundle_name="${BUNDLE_URL##*/}"
+    expected="$(awk -v f="$bundle_name" '{ n = $2; sub(/^\*/, "", n) } n == f { print $1; exit }' "$workdir/SHA256SUMS")"
+    [[ -n "$expected" ]] || { echo "error: SHA256SUMS has no entry for $bundle_name" >&2; exit 1; }
+    actual="$(sha256sum "$workdir/bundle.tar.gz" | awk '{ print $1 }')"
+    [[ "$actual" == "$expected" ]] || { echo "error: checksum mismatch for $bundle_name (download corrupted or tampered)" >&2; exit 1; }
+    echo "==> checksum ok ($bundle_name)"
+  else
+    echo "warning: no SHA256SUMS at $sums_url; bundle checksum not verified" >&2
+  fi
   tar -xzf "$workdir/bundle.tar.gz" -C "$workdir"
   installer="$(find "$workdir" -maxdepth 3 -path '*/deploy/install.sh' | head -n1)"
   [[ -n "$installer" ]] || { echo "error: bundle has no deploy/install.sh" >&2; exit 1; }
@@ -51,7 +63,9 @@ Usage: sudo bash install.sh [options]
   --port N            admin UI port on the LAN (default 8080 or the value in .env)
   --dir PATH          install directory (default /opt/iler)
   --offline FILE      load images from FILE (docker save archive) instead of the registry
-  --restore FILE      restore a backup archive after installing
+  --restore FILE      restore a backup archive after installing (databases + WhatsApp session)
+  --env FILE          with --restore: take ILER_SECRET_KEY from the ORIGINAL server's .env, so
+                      stored secrets (API keys, SMTP password) can be decrypted
   --uninstall         stop and remove the stack (volumes and backups are kept)
   --purge             with --uninstall: also delete volumes, backups and the install directory
   --yes               do not ask for confirmation
@@ -63,6 +77,7 @@ PORT=""
 ILER_DIR_PATH="/opt/iler"
 OFFLINE_TAR=""
 RESTORE_FILE=""
+ENV_IMPORT=""
 UNINSTALL=0
 PURGE=0
 ASSUME_YES=0
@@ -77,6 +92,8 @@ while [[ $# -gt 0 ]]; do
     --offline=*) OFFLINE_TAR="${1#*=}"; shift ;;
     --restore) RESTORE_FILE="${2:-}"; shift 2 ;;
     --restore=*) RESTORE_FILE="${1#*=}"; shift ;;
+    --env) ENV_IMPORT="${2:-}"; shift 2 ;;
+    --env=*) ENV_IMPORT="${1#*=}"; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --purge) PURGE=1; shift ;;
     --yes|-y) ASSUME_YES=1; shift ;;
@@ -104,6 +121,10 @@ if [[ -n "$RESTORE_FILE" ]]; then
   [[ -f "$RESTORE_FILE" ]] || die "backup file not found: $RESTORE_FILE"
   [[ "$(basename "$RESTORE_FILE")" =~ ^[A-Za-z0-9._-]+\.tar\.gz$ ]] || die "unexpected backup file name: $RESTORE_FILE"
 fi
+if [[ -n "$ENV_IMPORT" ]]; then
+  [[ -n "$RESTORE_FILE" ]] || die "--env is only valid together with --restore"
+  [[ -f "$ENV_IMPORT" ]] || die "env file not found: $ENV_IMPORT"
+fi
 
 require_root
 
@@ -122,8 +143,7 @@ do_uninstall() {
   else
     warn "no installation found in $ILER_DIR_PATH"
   fi
-  ufw_remove_iler
-  have ufw && ufw_active && ufw reload >/dev/null || true
+  remove_firewall
   remove_mdns
   if [[ "$PURGE" == "1" ]]; then
     rm -rf "$ILER_DIR_PATH"
@@ -211,6 +231,14 @@ configure_env() {
   render_env "$ILER_DIR_PATH/deploy/.env.example" "$envfile"
   version="$(env_get "$ILER_DIR_PATH/deploy/channel/stable.env" ILER_VERSION)"
   [[ -n "$version" ]] && env_set "$envfile" ILER_VERSION "$version"
+  # optional image digests from the channel: pull by tag@digest (empty = by tag)
+  local key digest
+  for key in ILER_CORE_DIGEST ILER_WEB_DIGEST ILER_UPDATER_DIGEST; do
+    digest="$(env_get "$ILER_DIR_PATH/deploy/channel/stable.env" "$key")"
+    [[ -z "$digest" || "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "invalid $key in channel file"
+    env_set "$envfile" "$key" "$digest"
+  done
+  [[ -n "$ENV_IMPORT" ]] && import_secret_key "$envfile"
   env_set "$envfile" ILER_DIR "$ILER_DIR_PATH"
   if [[ -n "$PORT" ]]; then
     env_set "$envfile" ILER_HTTP_PORT "$PORT"
@@ -221,6 +249,21 @@ configure_env() {
   chmod 600 "$envfile"
   printf '%s\n' "$(env_get "$envfile" ILER_VERSION)" >"$ILER_DIR_PATH/VERSION"
   ok ".env ready (version $(env_get "$envfile" ILER_VERSION), port $PORT)"
+}
+
+# Take ILER_SECRET_KEY from the original server's .env (--env). Other values (DB passwords etc.)
+# stay local: they belong to this machine's volumes.
+import_secret_key() {
+  local envfile="$1" key
+  key="$(env_get "$ENV_IMPORT" ILER_SECRET_KEY)"
+  [[ -n "$key" && "$key" != "__GENERATE__" ]] || die "$ENV_IMPORT has no ILER_SECRET_KEY"
+  if [[ "$(env_get "$envfile" ILER_SECRET_KEY)" != "$key" ]]; then
+    cp -p "$envfile" "$envfile.bak-$(date +%Y%m%d-%H%M%S)"
+    env_set "$envfile" ILER_SECRET_KEY "$key"
+    ok "ILER_SECRET_KEY imported from $ENV_IMPORT (previous .env backed up)"
+  else
+    ok "ILER_SECRET_KEY already matches $ENV_IMPORT"
+  fi
 }
 
 registry_login() {
@@ -264,24 +307,95 @@ start_stack() {
   ok "all services are up"
 }
 
+# Puts redis.rdb (WhatsApp session cache) from the archive into the redis volume. Runs after core
+# has verified the archive checksums. Redis is stopped; a temporary redis loads the RDB with AOF off
+# and then rewrites the AOF from it, so the real redis (appendonly yes) starts with that data.
+restore_redis() {
+  local tmp cid vol image i info
+  cid="$(dc ps -a -q redis | head -n1)"
+  [[ -n "$cid" ]] || { warn "redis container not found; WhatsApp session not restored"; return 1; }
+  vol="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$cid")"
+  image="$(docker inspect -f '{{.Config.Image}}' "$cid")"
+  [[ -n "$vol" && -n "$image" ]] || { warn "redis volume not found; WhatsApp session not restored"; return 1; }
+  tmp="$(mktemp -d)"
+  if ! tar -xzf "$RESTORE_FILE" -C "$tmp" redis.rdb; then
+    rm -rf "$tmp"
+    warn "archive has no redis.rdb; WhatsApp session not restored"
+    return 1
+  fi
+  chmod 644 "$tmp/redis.rdb"
+  dc stop evolution-api redis
+  docker run --rm -v "$vol:/data" -v "$tmp:/src:ro" --entrypoint sh "$image" -c \
+    'rm -rf /data/appendonlydir /data/appendonly.aof* && cp /src/redis.rdb /data/dump.rdb && chown redis:redis /data/dump.rdb' \
+    || { rm -rf "$tmp"; dc start redis evolution-api; warn "could not copy redis.rdb"; return 1; }
+  rm -rf "$tmp"
+  cid="$(docker run -d -v "$vol:/data" "$image" redis-server --dir /data --appendonly no --save '')"
+  for ((i = 0; i < 60; i++)); do
+    info="$(docker exec "$cid" redis-cli info persistence 2>/dev/null || true)"
+    [[ "$info" == *"loading:0"* ]] && break
+    sleep 1
+  done
+  docker exec "$cid" redis-cli config set appendonly yes >/dev/null
+  for ((i = 0; i < 120; i++)); do
+    info="$(docker exec "$cid" redis-cli info persistence 2>/dev/null || true)"
+    [[ "$info" == *"aof_rewrite_in_progress:0"* && "$info" == *"aof_rewrite_scheduled:0"* \
+      && "$info" == *"aof_last_bgrewrite_status:ok"* ]] && break
+    sleep 1
+  done
+  docker exec "$cid" redis-cli shutdown nosave >/dev/null 2>&1 || true
+  docker rm -f "$cid" >/dev/null 2>&1 || true
+  dc start redis
+  wait_healthy 120 redis || { warn "redis did not come back after restoring the snapshot"; return 1; }
+  dc start evolution-api
+  ok "WhatsApp session (redis snapshot) restored"
+}
+
 restore_backup() {
-  local name
+  local name result
   name="$(basename "$RESTORE_FILE")"
   log "restoring backup $name"
+  if [[ -z "$ENV_IMPORT" ]]; then
+    printf '%s\n' \
+      "${C_RED}${C_BOLD}!!! IMPORTANT !!!${C_RESET}" \
+      "  Stored secrets (LLM API keys, SMTP password, Senet key) are encrypted with ILER_SECRET_KEY" \
+      "  from the ORIGINAL server's $ILER_DIR_PATH/.env. Without it they cannot be decrypted and must be" \
+      "  re-entered in the admin UI. To keep them, re-run with: --restore $RESTORE_FILE --env /path/to/original/.env" >&2
+    sleep 5
+  fi
   install -o "$CORE_UID" -g "$CORE_UID" -m 640 "$RESTORE_FILE" "$ILER_DIR_PATH/backups/$name"
-  dc exec -T iler-core python -m iler.backup restore "$name" || die "restore failed"
+  result="$(dc exec -T iler-core python -m iler.backup restore "$name")" || die "restore failed: $result"
+  printf '%s\n' "$result"
+  if ! restore_redis; then
+    warn "databases restored, but the WhatsApp session was not; reconnect WhatsApp in the admin UI if needed"
+    dc start redis evolution-api >/dev/null 2>&1 || true
+  fi
   dc restart iler-core evolution-api
   wait_healthy 300 iler-core || die "core is not healthy after restore"
   ok "backup restored"
 }
 
+needs_setup() {
+  have curl || return 0
+  curl -fsS --max-time 10 "http://127.0.0.1:$PORT/api/setup/state" 2>/dev/null | grep -q '"needs_setup":[[:space:]]*true'
+}
+
 print_summary() {
-  local ip mdns="$1"
+  local ip mdns="$1" token setup=""
   ip="$(lan_ip)"
+  token="$(env_get "$ILER_DIR_PATH/.env" ILER_SETUP_TOKEN)"
+  if [[ -n "$token" ]] && needs_setup; then
+    setup="/setup?token=$token"
+  fi
   echo
   printf '%sILER Bot is running.%s Open the admin UI:\n' "$C_BOLD" "$C_RESET"
-  echo "  http://localhost:$PORT"
-  [[ -n "$ip" ]] && echo "  http://$ip:$PORT    (from other computers in the local network)"
+  if [[ -n "$setup" ]]; then
+    printf '%sFirst run:%s create the owner account with this one-time setup link (keep it private):\n' "$C_YELLOW" "$C_RESET"
+    echo "  http://localhost:$PORT$setup"
+    [[ -n "$ip" ]] && echo "  http://$ip:$PORT$setup    (from another computer in the local network)"
+  else
+    echo "  http://localhost:$PORT"
+    [[ -n "$ip" ]] && echo "  http://$ip:$PORT    (from other computers in the local network)"
+  fi
   [[ "$mdns" == "1" ]] && echo "  http://iler.local:$PORT"
   echo
   echo "Data: $ILER_DIR_PATH (secrets in .env, backups in backups/)."
@@ -297,9 +411,10 @@ main() {
   configure_env
   check_port "$PORT"
   fetch_images
+  # the admin port must be restricted before docker publishes it
+  configure_firewall "$PORT"
   start_stack
   [[ -n "$RESTORE_FILE" ]] && restore_backup
-  configure_firewall "$PORT"
   configure_mdns "$OFFLINE" && mdns=1
   print_summary "$mdns"
 }

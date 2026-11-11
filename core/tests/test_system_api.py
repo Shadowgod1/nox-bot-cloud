@@ -120,6 +120,30 @@ async def test_backup_create_list_download(client, as_owner, data_dir, pool):
     assert "backup.create" in actions
 
 
+async def test_backups_list_includes_last_status(client, as_owner, data_dir, pool):
+    from iler.backup import status as backup_status
+
+    r = await client.get("/api/backups")
+    assert r.json()["last_status"] == {"status": None, "at": None, "message": None}
+    await backup_status.record(False, "pg_dump exited 1: disk full")
+    body = (await client.get("/api/backups")).json()
+    assert body["items"] == []
+    assert body["last_status"]["status"] == "error"
+    assert body["last_status"]["message"] == "pg_dump exited 1: disk full"
+    assert body["last_status"]["at"]
+    # a manual backup updates the status as well
+    assert (await client.post("/api/backups")).status_code == 200
+    assert (await client.get("/api/backups")).json()["last_status"]["status"] == "ok"
+
+
+async def test_manual_backup_failure_is_recorded(client, as_owner, data_dir, monkeypatch):
+    monkeypatch.setattr(run_mod, "run_cmd", FakeCmd(fail_on="pg_dump"))
+    r = await client.post("/api/backups")
+    assert r.status_code == 500
+    last = (await client.get("/api/backups")).json()["last_status"]
+    assert last["status"] == "error" and "pg_dump" in last["message"]
+
+
 async def test_backup_download_missing_404(client, as_owner, data_dir):
     r = await client.get("/api/backups/iler-backup-20200101-000000.tar.gz")
     assert r.status_code == 404
@@ -139,7 +163,7 @@ async def test_restore_via_api(client, as_owner, data_dir):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["restored"] == name
-    assert body["redis"] == "staged"
+    assert body["redis"] == "skipped"
 
 
 async def test_update_proxies_to_updater(app, client, as_owner, pool):

@@ -14,7 +14,8 @@ from pydantic import BaseModel, SecretStr, ValidationError, create_model
 
 from iler import settings_store
 from iler.auth.deps import User, audit, csrf_protect, current_user, require_owner
-from iler.settings_models import BotSettings, LlmSettings, NotifySettings
+from iler.errors import ApiError
+from iler.settings_models import BotSettings, LlmSettings, NotifySettings, SmtpSettings
 
 router = APIRouter(tags=["settings"])
 
@@ -193,15 +194,38 @@ async def post_settings_llm_test(
 
 # --- notify -------------------------------------------------------------------------------------
 
+_SMTP_TARGET = ("host", "port", "user")
+
+
+def _require_smtp_password_on_target_change(incoming: dict, stored: NotifySettings) -> None:
+    """A stored SMTP password is only reused for the same server and login. Otherwise anyone who can
+    edit the form could point the host at their own server and receive the password in AUTH."""
+    old = stored.smtp
+    new = incoming.get("smtp")
+    if old is None or old.password is None or not isinstance(new, dict):
+        return
+    password = new.get("password", ...)
+    if not (password is ... or (isinstance(password, str) and password.startswith(MASK))):
+        return  # a new value (or an explicit clear) was sent
+    fields = SmtpSettings.model_fields
+    for name in _SMTP_TARGET:
+        value = new.get(name, fields[name].default)
+        if value != getattr(old, name):
+            raise ApiError(422, "smtp_password_required",
+                           "Enter the SMTP password again after changing the server, port or login")
+
+
 @router.get("/api/settings/notify", response_model=NotifyPublic)
-async def get_settings_notify(_: User = Depends(current_user)):
+async def get_settings_notify(_: User = Depends(require_owner)):
     return masked(await settings_store.get("notify", NotifySettings))
 
 
 @router.put("/api/settings/notify", response_model=NotifyPublic, dependencies=[Depends(csrf_protect)])
-async def put_settings_notify(body: NotifyPublic, user: User = Depends(current_user)):  # type: ignore[valid-type]
+async def put_settings_notify(body: NotifyPublic, user: User = Depends(require_owner)):  # type: ignore[valid-type]
     stored = await settings_store.get("notify", NotifySettings)
-    new = _validated(NotifySettings, body.model_dump(exclude_unset=True), stored)
+    incoming = body.model_dump(exclude_unset=True)
+    _require_smtp_password_on_target_change(incoming, stored)
+    new = _validated(NotifySettings, incoming, stored)
     await settings_store.put("notify", new)
     await audit(user.id, "settings.notify_updated", {})
     return masked(new)

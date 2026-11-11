@@ -79,6 +79,14 @@ async def test_create_backup_layout(data_dir, fake_cmd):
     assert [p.name for p in (data_dir / "backups").iterdir()] == [info.name]
 
 
+async def test_redis_password_passed_via_env(data_dir, fake_cmd, monkeypatch):
+    monkeypatch.setattr(get_settings(), "redis_password", "r3dis-pw")
+    await run_mod.create_backup()
+    [(args, env)] = [c for c in fake_cmd.calls if c[0][0] == "redis-cli"]
+    assert "r3dis-pw" not in " ".join(args)
+    assert env == {"REDISCLI_AUTH": "r3dis-pw"}
+
+
 async def test_manifest_sha256_matches(data_dir, fake_cmd):
     info = await run_mod.create_backup()
     with tarfile.open(data_dir / "backups" / info.name, "r:gz") as tar:
@@ -143,7 +151,7 @@ def test_resolve_rejects_bad_names(data_dir, bad):
         run_mod.resolve_backup(bad)
 
 
-async def test_restore_runs_pg_restore_and_stages_redis(data_dir, fake_cmd):
+async def test_restore_runs_pg_restore_and_skips_redis(data_dir, fake_cmd):
     info = await run_mod.create_backup()
     fake_cmd.calls.clear()
     result = await restore_mod.restore_backup(info.name)
@@ -152,12 +160,22 @@ async def test_restore_runs_pg_restore_and_stages_redis(data_dir, fake_cmd):
     for args, env in restores:
         assert "--clean" in args and "--if-exists" in args
         assert "s3cret" not in " ".join(args) and env["PGPASSWORD"] == "s3cret"
+    iler_args, evo_args = restores[0][0], restores[1][0]
+    assert any(a.endswith("/iler") for a in iler_args) and not any(a.startswith("--role") for a in iler_args)
+    # evolution objects must end up owned by / granted to the evolution role
+    assert "--role=evolution" in evo_args and any(a.endswith("/evolution") for a in evo_args)
+    grants = [c for c in fake_cmd.calls if c[0][0] == "psql"]
+    assert len(grants) == 1
+    sql = grants[0][0][grants[0][0].index("-c") + 1]
+    assert "GRANT ALL ON ALL TABLES IN SCHEMA public TO evolution" in sql
+    assert "GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO evolution" in sql
+    assert any(a.endswith("/evolution") for a in grants[0][0])
     # a safety backup is taken before restoring
     assert result["safety_backup"].startswith("iler-backup-")
     assert (data_dir / "backups" / result["safety_backup"]).exists()
-    staged = data_dir / "restore" / "redis.rdb"
-    assert staged.read_bytes() == b"REDIS0011-fake"
-    assert result["redis"] == "staged"
+    # redis is not applied from inside core: say so instead of pretending
+    assert result["redis"] == "skipped" and "install.sh --restore" in result["redis_note"]
+    assert not (data_dir / "restore").exists()
 
 
 async def test_restore_rejects_corrupted_archive(data_dir, fake_cmd):
@@ -227,12 +245,30 @@ async def test_scheduler_runs_daily_and_survives_errors(monkeypatch):
         if calls["backup"] >= 3:
             raise asyncio.CancelledError
 
+    statuses: list[tuple[bool, str | None]] = []
+    alerts: list[tuple[str, str]] = []
+
+    async def fake_record(ok, message=None):
+        statuses.append((ok, message))
+
+    async def smtp_on():
+        return True
+
+    async def fake_alert(text, subject=""):
+        alerts.append((text, subject))
+
     monkeypatch.setattr(backup_scheduler.run_mod, "create_backup", flaky_backup)
     monkeypatch.setattr(backup_scheduler.run_mod, "apply_retention", retention)
     monkeypatch.setattr(backup_scheduler, "_sleep_until", fake_sleep_until)
+    monkeypatch.setattr(backup_scheduler.backup_status, "safe_record", fake_record)
+    monkeypatch.setattr(backup_scheduler.monitor, "smtp_configured", smtp_on)
+    monkeypatch.setattr(backup_scheduler.monitor, "send_alert", fake_alert)
     with pytest.raises(asyncio.CancelledError):
         await backup_scheduler.run(None)
     assert calls["backup"] == 3  # kept going after the first failure
     assert calls["retention"] == 2  # retention only after a successful backup
+    assert [ok for ok, _ in statuses] == [False, True, True]
+    assert "pg_dump exploded" in statuses[0][1]
+    assert len(alerts) == 1 and "pg_dump exploded" in alerts[0][0] and "backup" in alerts[0][1]
     tz = ZoneInfo(get_settings().tz)
     assert all(t.astimezone(tz).hour == 4 and t.minute == 0 for t in targets)

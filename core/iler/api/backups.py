@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from iler.auth.deps import csrf_protect, require_owner
 from iler.backup import restore as restore_mod
 from iler.backup import run as run_mod
+from iler.backup import status as backup_status
 from iler.backup.run import BackupInfo
 from iler.db.pool import get_pool
 from iler.errors import ApiError
@@ -38,7 +39,10 @@ def _path(name: str):
 
 @router.get("/api/backups")
 async def get_backups(user=Depends(require_owner)) -> dict:
-    return {"items": [b.model_dump(mode="json") for b in run_mod.list_backups()]}
+    return {
+        "items": [b.model_dump(mode="json") for b in run_mod.list_backups()],
+        "last_status": await backup_status.get(),
+    }
 
 
 @router.post("/api/backups", dependencies=[Depends(csrf_protect)])
@@ -49,7 +53,9 @@ async def post_backups(user=Depends(require_owner)) -> BackupInfo:
         info = await run_mod.create_backup()
     except run_mod.BackupError as e:
         log.error("manual backup failed: %s", e)
+        await backup_status.safe_record(False, str(e))
         raise ApiError(500, "backup_failed", str(e)) from e
+    await backup_status.safe_record(True, info.name)
     await audit(user, "backup.create", {"name": info.name, "size": info.size})
     return info
 

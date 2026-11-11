@@ -42,6 +42,7 @@ env_set() {
 generate_secret_for() {
   case "$1" in
     ILER_SECRET_KEY) random_b64 32 ;;
+    # everything else (DB passwords, ILER_REDIS_PASSWORD, ILER_SETUP_TOKEN, ...): hex, URL-safe
     *) random_hex 24 ;;
   esac
 }

@@ -9,6 +9,7 @@ The stack must be fresh (needs_setup = true).
 """
 
 import argparse
+import os
 import sys
 import time
 
@@ -62,7 +63,8 @@ def main() -> None:
     step("setup wizard: create owner")
     if not web.get("/api/setup/state").json().get("needs_setup"):
         fail("stack is not fresh (needs_setup=false)")
-    r = web.post("/api/setup/owner", json={"email": EMAIL, "password": PASSWORD, "name": "Smoke"})
+    r = web.post("/api/setup/owner", json={"email": EMAIL, "password": PASSWORD, "name": "Smoke"},
+                 headers={"X-ILER-Setup-Token": os.environ.get("ILER_SETUP_TOKEN", "test-setup-token")})
     if r.status_code >= 300:
         fail(f"setup/owner: {r.status_code} {r.text}")
     if web.get("/api/setup/state").json().get("needs_setup"):

@@ -1,7 +1,9 @@
 """Read/write typed settings. SecretStr values are encrypted at rest as {"__enc__": token}."""
 
+import logging
 from typing import Any, TypeVar
 
+from cryptography.exceptions import InvalidTag
 from pydantic import BaseModel, SecretStr
 
 from iler import crypto
@@ -10,6 +12,7 @@ from iler.settings_models import AllSettings, BotSettings, LlmSettings, NotifySe
 
 T = TypeVar("T", bound=BaseModel)
 ENC = "__enc__"
+log = logging.getLogger("iler.settings")
 
 
 def _encode(value: Any) -> Any:
@@ -22,10 +25,21 @@ def _encode(value: Any) -> Any:
     return value
 
 
+def _decrypt_or_none(token: Any) -> str | None:
+    """A secret that cannot be decrypted (restored database, different ILER_SECRET_KEY) is treated
+    as unset instead of breaking every settings read; the owner re-enters it in the admin UI."""
+    try:
+        return crypto.decrypt(token)
+    except (InvalidTag, ValueError, TypeError):
+        log.error("secret key mismatch: a stored secret cannot be decrypted with ILER_SECRET_KEY "
+                  "(restore the original .env or re-enter the secret); treating it as unset")
+        return None
+
+
 def _decode(value: Any) -> Any:
     if isinstance(value, dict):
         if set(value) == {ENC}:
-            return crypto.decrypt(value[ENC])
+            return _decrypt_or_none(value[ENC])
         return {k: _decode(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_decode(v) for v in value]

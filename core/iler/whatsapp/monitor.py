@@ -9,6 +9,7 @@ published (`whatsapp.status` with `alert: true`) and e-mailed if SMTP is configu
 import asyncio
 import logging
 import smtplib
+import ssl
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 
@@ -160,24 +161,46 @@ async def check_once(gateway) -> dict:
     return current
 
 
-async def send_alert(text: str) -> None:
-    """Notify the admin through a channel other than WhatsApp (SMTP), if configured."""
+SMTPS_PORT = 465
+
+
+async def smtp_configured() -> bool:
+    smtp = (await settings_store.get("notify", NotifySettings)).smtp
+    return smtp is not None and bool(smtp.host) and bool(smtp.to)
+
+
+async def send_alert(text: str, subject: str = "ILER Bot: WhatsApp disconnected") -> None:
+    """Notify the admin through a channel other than WhatsApp (SMTP), if configured.
+
+    TLS: port 465 uses implicit TLS (SMTP_SSL), otherwise STARTTLS when enabled; both verify the
+    server certificate. Credentials are never sent over a plaintext connection."""
     notify = await settings_store.get("notify", NotifySettings)
     smtp = notify.smtp
     if smtp is None or not smtp.host or not smtp.to:
         return
     msg = EmailMessage()
-    msg["Subject"] = "ILER Bot: WhatsApp disconnected"
+    msg["Subject"] = subject
     msg["From"] = smtp.sender or smtp.user
     msg["To"] = ", ".join(smtp.to)
     msg.set_content(text)
 
     def _send() -> None:
-        with smtplib.SMTP(smtp.host, smtp.port, timeout=15) as s:
-            if smtp.starttls:
-                s.starttls()
+        context = ssl.create_default_context()
+        if smtp.port == SMTPS_PORT:
+            conn = smtplib.SMTP_SSL(smtp.host, smtp.port, timeout=15, context=context)
+            tls = True
+        else:
+            conn = smtplib.SMTP(smtp.host, smtp.port, timeout=15)
+            tls = False
+        with conn as s:
+            if not tls and smtp.starttls:
+                s.starttls(context=context)
+                tls = True
             if smtp.user:
-                s.login(smtp.user, smtp.password.get_secret_value() if smtp.password else "")
+                if tls:
+                    s.login(smtp.user, smtp.password.get_secret_value() if smtp.password else "")
+                else:
+                    log.warning("SMTP: STARTTLS is off and port is not %d; sending without login", SMTPS_PORT)
             s.send_message(msg)
 
     await asyncio.to_thread(_send)

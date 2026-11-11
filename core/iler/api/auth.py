@@ -23,7 +23,9 @@ async def post_auth_login(body: Credentials, response: Response):
         await verify_password(None, body.password)  # equalize timing
         raise ApiError(401, "invalid_credentials", "Wrong e-mail or password")
     if await lockout.check_locked(pool, row["id"]):
-        raise ApiError(429, "locked", "Too many failed attempts, try again later")
+        # Same answer as a wrong password (no account enumeration); verify anyway to equalize timing.
+        await verify_password(row["password_hash"], body.password)
+        raise ApiError(401, "invalid_credentials", "Wrong e-mail or password")
     if not await verify_password(row["password_hash"], body.password):
         if await lockout.register_failure(pool, row["id"]):
             await audit(row["id"], "auth.locked", {})
