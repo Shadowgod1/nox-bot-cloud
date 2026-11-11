@@ -10,3 +10,4 @@ backups/
 .pytest_cache/
 *.egg-info/
 .claude/
+.env.e2e
