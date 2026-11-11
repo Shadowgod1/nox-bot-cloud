@@ -57,3 +57,8 @@ async def test_stub_routes_exist(client, method, path):
 def test_registry_loads_plugins():
     registry.load_plugins()
     assert isinstance(registry.all_tools(), list)
+
+
+async def test_migrate_fails_loudly_without_files(pool, tmp_path):
+    with pytest.raises(RuntimeError, match="no migrations"):
+        await migrate.run(pool, tmp_path)
