@@ -1,0 +1,9 @@
+.forbidden-names
+.env
+*.local
+node_modules/
+dist/
+__pycache__/
+.venv/
+*.pyc
+backups/
