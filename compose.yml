@@ -152,7 +152,6 @@ services:
 
 networks:
   iler:
-    name: iler
 
 volumes:
   pg_data:
