@@ -3,7 +3,8 @@
 HTTP contract (Task 3), every call needs `Authorization: Bearer <ILER_UPDATER_TOKEN>`:
     GET  /version          -> {"current": "0.1.0", "available": "0.2.0"}
     POST /update           -> {"job_id": "..."}            (409 if a job is already running)
-    GET  /update/{job_id}  -> {"state": queued|backup|pulling|restarting|healthy|rolled_back|failed, "log": "..."}
+    GET  /update/{job_id}  -> {"state": queued|backup|pulling|restarting|healthy|rolled_back|failed, "log": "...",
+                               "target", "previous", "backup": "<pre-update backup name>" | null}
 Unauthenticated: GET /healthz (container healthcheck only).
 
 Flow of a job:
@@ -12,7 +13,16 @@ Flow of a job:
     restarting  write ILER_VERSION to .env, docker compose up -d iler-core iler-web
     wait up to 120 s for GET {core}/health == 200 -> healthy (then the updater replaces itself)
     otherwise restore previous ILER_VERSION in .env, up -d again -> rolled_back
-The updater listens only on the internal docker network (no published port).
+The updater listens only on the internal docker network `updater_net` shared with iler-core
+(no published port).
+
+Rollback reverts images only, never the database: migrations must stay backward compatible for one
+release (see deploy/README.md). The pre-update backup name is kept in the job record so an operator
+can restore it (`install.sh --restore <dir>/backups/<name>`).
+
+Digests: when the channel file carries ILER_CORE_DIGEST / ILER_WEB_DIGEST / ILER_UPDATER_DIGEST
+(sha256:<64 hex>), they are written to .env together with ILER_VERSION and compose.yml pins the
+images to `<tag>@<digest>`; without them images are pulled by tag.
 """
 
 from __future__ import annotations
@@ -42,6 +52,8 @@ TERMINAL = ("healthy", "rolled_back", "failed")
 RESTART_SERVICES = ("iler-core", "iler-web")
 PULL_SERVICES = ("iler-core", "iler-web", "iler-updater")
 VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$")
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+DIGEST_KEYS = ("ILER_CORE_DIGEST", "ILER_WEB_DIGEST", "ILER_UPDATER_DIGEST")
 
 
 class DockerError(Exception):
@@ -120,20 +132,35 @@ def set_env_value(path: Path, key: str, value: str) -> None:
     os.replace(tmp, path)
 
 
-def parse_channel(text: str) -> str | None:
+def parse_channel_entries(text: str) -> dict[str, str]:
+    """ILER_VERSION plus optional ILER_*_DIGEST entries; invalid values are dropped."""
+    out: dict[str, str] = {}
     for line in text.splitlines():
-        if line.startswith("ILER_VERSION="):
-            value = line.split("=", 1)[1].strip().strip('"')
-            return value if VERSION_RE.match(value) else None
-    return None
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        key, value = key.strip(), value.strip().strip('"')
+        if key == "ILER_VERSION" and VERSION_RE.match(value):
+            out[key] = value
+        elif key in DIGEST_KEYS and DIGEST_RE.match(value):
+            out[key] = value
+    return out if "ILER_VERSION" in out else {}
+
+
+def parse_channel(text: str) -> str | None:
+    return parse_channel_entries(text).get("ILER_VERSION")
+
+
+def format_channel(entries: dict[str, str]) -> str:
+    return "".join(f"{k}={entries[k]}\n" for k in ("ILER_VERSION", *DIGEST_KEYS) if k in entries)
 
 
 # ---- docker layer (mocked in tests) -------------------------------------------------------
 
 class ComposeOps(Protocol):
-    def pull(self, version: str) -> str: ...
-    def up(self, version: str) -> str: ...
-    def self_update(self, version: str) -> str: ...
+    def pull(self, version: str, digests: dict[str, str] | None = None) -> str: ...
+    def up(self, version: str, digests: dict[str, str] | None = None) -> str: ...
+    def self_update(self, version: str, digests: dict[str, str] | None = None) -> str: ...
 
 
 class DockerCompose:
@@ -146,16 +173,20 @@ class DockerCompose:
         return ["docker", "compose", "--project-directory", str(self.cfg.ilerdir),
                 "-f", str(self.cfg.compose_file), "--env-file", str(self.cfg.env_file)]
 
-    def _env(self, version: str) -> dict:
+    def _env(self, version: str, digests: dict[str, str] | None = None) -> dict:
         # Minimal env: process env would override .env values during interpolation.
         env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "DOCKER_HOST", "DOCKER_CONFIG")}
         env["ILER_VERSION"] = version
+        for key in DIGEST_KEYS:  # "" = pull by tag
+            env[key] = (digests or {}).get(key, "")
         return env
 
-    def _run(self, args: list[str], version: str, timeout: int = 1800) -> str:
+    def _run(self, args: list[str], version: str, digests: dict[str, str] | None = None,
+             timeout: int = 1800) -> str:
         cmd = self._base() + args
         try:
-            proc = subprocess.run(cmd, env=self._env(version), capture_output=True, text=True, timeout=timeout)
+            proc = subprocess.run(cmd, env=self._env(version, digests), capture_output=True, text=True,
+                                  timeout=timeout)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise DockerError(f"{' '.join(args)}: {exc}") from exc
         output = (proc.stdout + proc.stderr).strip()
@@ -163,20 +194,26 @@ class DockerCompose:
             raise DockerError(f"{' '.join(args)} exited {proc.returncode}: {output[-2000:]}")
         return output
 
-    def pull(self, version: str) -> str:
-        return self._run(["pull", *PULL_SERVICES], version)
+    def pull(self, version: str, digests: dict[str, str] | None = None) -> str:
+        return self._run(["pull", *PULL_SERVICES], version, digests)
 
-    def up(self, version: str) -> str:
-        return self._run(["up", "-d", *RESTART_SERVICES], version)
+    def up(self, version: str, digests: dict[str, str] | None = None) -> str:
+        return self._run(["up", "-d", *RESTART_SERVICES], version, digests)
 
-    def self_update(self, version: str) -> str:
+    def self_update(self, version: str, digests: dict[str, str] | None = None) -> str:
         """Recreate iler-updater from a sibling container: we cannot survive replacing ourselves."""
         owner = read_env_value(self.cfg.env_file, "ILER_IMAGE_OWNER") or "shadowgod1"
         image = f"ghcr.io/{owner.lower()}/iler-updater:{version}"
+        digest = (digests or {}).get("ILER_UPDATER_DIGEST", "")
+        if digest:
+            image = f"{image}@{digest}"
         d = str(self.cfg.ilerdir)
+        env_args = ["-e", f"ILER_VERSION={version}"]
+        for key in DIGEST_KEYS:
+            env_args += ["-e", f"{key}={(digests or {}).get(key, '')}"]
         cmd = ["docker", "run", "-d", "--rm", "--name", f"iler-updater-selfupdate-{uuid.uuid4().hex[:6]}",
                "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", f"{d}:{d}",
-               "-e", f"ILER_VERSION={version}", "--entrypoint", "sh", image, "-c",
+               *env_args, "--entrypoint", "sh", image, "-c",
                "sleep 5 && docker compose --project-directory \"$0\" -f \"$0/compose.yml\" "
                "--env-file \"$0/.env\" up -d --no-deps iler-updater", d]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
@@ -224,6 +261,10 @@ class Job:
     previous: str
     state: str = "queued"
     lines: list[str] = field(default_factory=list)
+    # pre-update backup (name inside <ILER_DIR>/backups), kept so an operator can restore it
+    backup: str | None = None
+    digests: dict[str, str] = field(default_factory=dict)
+    previous_digests: dict[str, str] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
 
@@ -262,21 +303,32 @@ class Updater:
             value = (self.cfg.ilerdir / "VERSION").read_text(encoding="utf-8").strip()
         return value or "unknown"
 
-    def available_version(self) -> str:
+    def current_digests(self) -> dict[str, str]:
+        out = {}
+        for key in DIGEST_KEYS:
+            value = read_env_value(self.cfg.env_file, key) or ""
+            if DIGEST_RE.match(value):
+                out[key] = value
+        return out
+
+    def available_entries(self) -> dict[str, str]:
         local = self.cfg.ilerdir / "deploy" / "channel" / "stable.env"
         if self.cfg.channel_url:
             try:
                 resp = httpx.get(self.cfg.channel_url, timeout=10, follow_redirects=True)
-                if resp.status_code == 200 and (version := parse_channel(resp.text)):
+                if resp.status_code == 200 and (entries := parse_channel_entries(resp.text)):
                     local.parent.mkdir(parents=True, exist_ok=True)
-                    local.write_text(f"ILER_VERSION={version}\n", encoding="utf-8")
-                    return version
+                    local.write_text(format_channel(entries), encoding="utf-8")
+                    return entries
                 log.warning("channel %s: HTTP %s", self.cfg.channel_url, resp.status_code)
             except httpx.HTTPError as exc:
                 log.warning("channel %s unreachable: %s", self.cfg.channel_url, exc)
-        if local.exists() and (version := parse_channel(local.read_text(encoding="utf-8"))):
-            return version
-        return self.current_version()
+        if local.exists() and (entries := parse_channel_entries(local.read_text(encoding="utf-8"))):
+            return entries
+        return {"ILER_VERSION": self.current_version(), **self.current_digests()}
+
+    def available_version(self) -> str:
+        return self.available_entries()["ILER_VERSION"]
 
     # -- job storage
     def _save(self, job: Job) -> None:
@@ -309,7 +361,10 @@ class Updater:
         with self.lock:
             if any(j.state not in TERMINAL for j in self.jobs.values()):
                 raise ApiError(409, "update_in_progress", "an update is already running")
-            job = Job(id=uuid.uuid4().hex, target=self.available_version(), previous=self.current_version())
+            entries = self.available_entries()
+            job = Job(id=uuid.uuid4().hex, target=entries["ILER_VERSION"], previous=self.current_version(),
+                      digests={k: v for k, v in entries.items() if k in DIGEST_KEYS},
+                      previous_digests=self.current_digests())
             self.jobs[job.id] = job
             job.add_log(f"update requested: {job.previous} -> {job.target}")
             self._save(job)
@@ -327,6 +382,12 @@ class Updater:
             if self.monotonic() >= deadline:
                 return False
             self.sleep(3)
+
+    def _write_release(self, version: str, digests: dict[str, str]) -> None:
+        set_env_value(self.cfg.env_file, "ILER_VERSION", version)
+        for key in DIGEST_KEYS:
+            if digests.get(key) or read_env_value(self.cfg.env_file, key) is not None:
+                set_env_value(self.cfg.env_file, key, digests.get(key, ""))
 
     def run_job(self, job: Job) -> None:
         try:
@@ -346,19 +407,21 @@ class Updater:
         except CoreError as exc:
             self._set_state(job, "failed", f"backup failed, nothing changed: {exc}")
             return
-        job.add_log(f"backup done: {info.get('name', '?')}")
+        job.backup = info.get("name") or None
+        job.add_log(f"backup done: {job.backup or '?'} (restore it with install.sh --restore if data must be rolled back)")
 
-        self._set_state(job, "pulling", f"pulling images {job.target}")
+        pinned = " (by digest)" if job.digests else ""
+        self._set_state(job, "pulling", f"pulling images {job.target}{pinned}")
         try:
-            self.compose.pull(job.target)
+            self.compose.pull(job.target, job.digests)
         except DockerError as exc:
             self._set_state(job, "failed", f"pull failed, nothing changed: {exc}")
             return
 
         self._set_state(job, "restarting", "restarting services")
-        set_env_value(self.cfg.env_file, "ILER_VERSION", job.target)
+        self._write_release(job.target, job.digests)
         try:
-            self.compose.up(job.target)
+            self.compose.up(job.target, job.digests)
             healthy = self._wait_healthy(job)
             if not healthy:
                 job.add_log(f"core not healthy after {self.cfg.health_timeout:.0f}s")
@@ -371,7 +434,7 @@ class Updater:
             self._set_state(job, "healthy", f"version {job.target} is up")
             if job.target != job.previous:
                 try:
-                    self.compose.self_update(job.target)
+                    self.compose.self_update(job.target, job.digests)
                     job.add_log("updater self-update scheduled")
                 except DockerError as exc:
                     job.add_log(f"updater self-update skipped: {exc}")
@@ -379,9 +442,9 @@ class Updater:
             return
 
         job.add_log(f"rolling back to {job.previous}")
-        set_env_value(self.cfg.env_file, "ILER_VERSION", job.previous)
+        self._write_release(job.previous, job.previous_digests)
         try:
-            self.compose.up(job.previous)
+            self.compose.up(job.previous, job.previous_digests)
         except DockerError as exc:
             self._set_state(job, "failed", f"rollback failed: {exc}")
             return
@@ -427,7 +490,8 @@ def create_app(updater: Updater | None = None) -> FastAPI:
         job = upd.get_job(job_id)
         if job is None:
             raise ApiError(404, "not_found", "unknown job")
-        return {"state": job.state, "log": job.log, "target": job.target, "previous": job.previous}
+        return {"state": job.state, "log": job.log, "target": job.target, "previous": job.previous,
+                "backup": job.backup}
 
     return api
 

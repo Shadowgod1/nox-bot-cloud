@@ -6,6 +6,7 @@ Run with a single uvicorn worker: the message buffer lives in process memory.
 import asyncio
 import importlib
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -59,7 +60,10 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="ILER Core", version=VERSION, lifespan=lifespan, openapi_url="/api/openapi.json", docs_url=None)
+    # The schema is useful for development only; production does not advertise the API surface.
+    openapi_url = "/api/openapi.json" if os.environ.get("ILER_OPENAPI") == "1" else None
+    app = FastAPI(title="ILER Core", version=VERSION, lifespan=lifespan, openapi_url=openapi_url,
+                  docs_url=None, redoc_url=None)
     install_error_handlers(app)
 
     @app.get("/health")

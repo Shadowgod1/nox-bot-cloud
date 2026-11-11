@@ -127,7 +127,12 @@ async def _dump_all(work: Path) -> None:
     for fname, db in (("iler.dump", None), ("evolution.dump", EVOLUTION_DB)):
         target, env = pg_target(dsn, db)
         await run_cmd(["pg_dump", "-Fc", "--no-owner", "-f", str(work / fname), f"--dbname={target}"], env=env)
-    await run_cmd(["redis-cli", "-h", REDIS_HOST, "-p", str(REDIS_PORT), "--rdb", str(work / "redis.rdb")])
+    password = get_settings().redis_password
+    # REDISCLI_AUTH keeps the password out of argv (and out of `ps`)
+    await run_cmd(
+        ["redis-cli", "-h", REDIS_HOST, "-p", str(REDIS_PORT), "--no-auth-warning", "--rdb", str(work / "redis.rdb")],
+        env={"REDISCLI_AUTH": password} if password else None,
+    )
     for fname in DUMP_FILES:
         if not (work / fname).is_file():
             raise BackupError(f"{fname} was not produced")

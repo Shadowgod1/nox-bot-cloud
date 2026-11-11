@@ -33,6 +33,8 @@ services:
       ILER_DATABASE_URL: postgresql://iler:${ILER_DB_PASSWORD:-test-db-password}@postgres:5432/iler
       ILER_SECRET_KEY: ${ILER_SECRET_KEY:-a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=}
       ILER_UPDATER_TOKEN: ${ILER_UPDATER_TOKEN:-test-updater-token}
+      ILER_SETUP_TOKEN: test-setup-token
+      ILER_REDIS_PASSWORD: ${ILER_REDIS_PASSWORD:-test-redis-password}
     volumes:
       - test_backups:/data/backups
     depends_on:
@@ -42,6 +44,12 @@ services:
   iler-updater:
     environment:
       ILER_UPDATER_TOKEN: ${ILER_UPDATER_TOKEN:-test-updater-token}
+
+  redis:
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction",
+              "--requirepass", "${ILER_REDIS_PASSWORD:-test-redis-password}"]
+    environment:
+      REDISCLI_AUTH: ${ILER_REDIS_PASSWORD:-test-redis-password}
 
   postgres:
     environment:

@@ -15,18 +15,21 @@ class FakeCompose:
     def __init__(self, calls: list, fail_pull: bool = False):
         self.calls = calls
         self.fail_pull = fail_pull
+        self.digests: list = []
 
-    def pull(self, version: str) -> str:
+    def pull(self, version: str, digests=None) -> str:
         self.calls.append(("pull", version))
+        self.digests.append(("pull", digests))
         if self.fail_pull:
             raise updater_app.DockerError("pull failed")
         return "pulled"
 
-    def up(self, version: str) -> str:
+    def up(self, version: str, digests=None) -> str:
         self.calls.append(("up", version))
+        self.digests.append(("up", digests))
         return "up"
 
-    def self_update(self, version: str) -> str:
+    def self_update(self, version: str, digests=None) -> str:
         self.calls.append(("self_update", version))
         return "scheduled"
 
@@ -174,6 +177,61 @@ def test_second_update_while_running_conflicts(ilerdir):
     h = {"Authorization": f"Bearer {TOKEN}"}
     assert client.post("/update", headers=h).status_code == 200
     assert client.post("/update", headers=h).status_code == 409
+
+
+def test_job_keeps_pre_update_backup_name(ilerdir):
+    upd, _ = make_updater(ilerdir, [])
+    upd.start_job = lambda job: upd.run_job(job)
+    client = TestClient(create_app(upd))
+    h = {"Authorization": f"Bearer {TOKEN}"}
+    job_id = client.post("/update", headers=h).json()["job_id"]
+    assert client.get(f"/update/{job_id}", headers=h).json()["backup"] == "iler-backup-20261111-000000.tar.gz"
+    # persisted: survives an updater restart
+    upd2, _ = make_updater(ilerdir, [])
+    status = TestClient(create_app(upd2)).get(f"/update/{job_id}", headers=h).json()
+    assert status["backup"] == "iler-backup-20261111-000000.tar.gz"
+
+
+def test_failed_backup_has_no_backup_name(ilerdir):
+    upd, _ = make_updater(ilerdir, [], backup_ok=False)
+    job = upd.new_job()
+    upd.run_job(job)
+    assert job.backup is None
+
+
+D1 = "sha256:" + "a" * 64
+D2 = "sha256:" + "b" * 64
+
+
+def test_parse_channel_entries_validates_digests():
+    text = f"ILER_VERSION=0.2.0\nILER_CORE_DIGEST={D1}\nILER_WEB_DIGEST=sha256:short\nILER_EVIL=1\n"
+    assert updater_app.parse_channel_entries(text) == {"ILER_VERSION": "0.2.0", "ILER_CORE_DIGEST": D1}
+    assert updater_app.parse_channel_entries(f"ILER_CORE_DIGEST={D1}\n") == {}
+
+
+def test_update_pins_digests_from_channel_and_rolls_them_back(ilerdir):
+    (ilerdir / "deploy" / "channel" / "stable.env").write_text(
+        f"ILER_VERSION=0.2.0\nILER_CORE_DIGEST={D1}\nILER_WEB_DIGEST={D2}\n")
+    calls: list = []
+    upd, _ = make_updater(ilerdir, calls)
+    job = upd.new_job()
+    upd.run_job(job)
+    assert job.state == "healthy"
+    assert upd.compose.digests[0] == ("pull", {"ILER_CORE_DIGEST": D1, "ILER_WEB_DIGEST": D2})
+    env = (ilerdir / ".env").read_text()
+    assert f"ILER_CORE_DIGEST={D1}" in env and f"ILER_WEB_DIGEST={D2}" in env
+
+    # next release without digests on a broken build: rollback restores the previous pins
+    (ilerdir / "deploy" / "channel" / "stable.env").write_text("ILER_VERSION=0.3.0\n")
+    calls2: list = []
+    upd2, _ = make_updater(ilerdir, calls2, healthy=False)
+    upd2.core.health = lambda: [c for c in calls2 if c[0] == "up"][-1][1] == "0.2.0"
+    job2 = upd2.new_job()
+    upd2.run_job(job2)
+    assert job2.state == "rolled_back"
+    assert upd2.compose.digests[0] == ("pull", {})
+    env = (ilerdir / ".env").read_text()
+    assert "ILER_VERSION=0.2.0" in env and f"ILER_CORE_DIGEST={D1}" in env
 
 
 def test_job_dataclass_roundtrip():

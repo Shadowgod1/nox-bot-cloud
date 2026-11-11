@@ -1,9 +1,13 @@
 """Restore a backup archive.
 
 Both Postgres databases are restored in place with ``pg_restore --clean --if-exists``. A safety
-backup of the current state is taken first. Redis cannot be swapped from inside iler-core (the RDB
-lives in the redis volume and needs a redis restart), so ``redis.rdb`` is staged into
-``${data_dir}/restore/redis.rdb`` for the updater / ``install.sh --restore`` to apply.
+backup of the current state is taken first. The evolution database is restored as role
+``evolution`` (``--role``) and privileges are re-granted afterwards, so Evolution API keeps access to
+its tables.
+
+Redis is not touched here: the RDB lives in the redis volume and can only be swapped while redis is
+stopped, which iler-core cannot do. ``install.sh --restore <file>`` applies ``redis.rdb`` from the
+same archive (WhatsApp session); a restore from the admin UI reports ``"redis": "skipped"``.
 """
 
 import asyncio
@@ -20,6 +24,20 @@ from iler.config import get_settings
 log = logging.getLogger("iler.backup")
 
 MEMBERS = (*run_mod.DUMP_FILES, "manifest.json")
+EVOLUTION_ROLE = "evolution"
+# Ownership fix-up for objects restored into the evolution database (idempotent).
+EVOLUTION_GRANTS = (
+    "ALTER SCHEMA public OWNER TO evolution;"
+    " GRANT ALL ON ALL TABLES IN SCHEMA public TO evolution;"
+    " GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO evolution;"
+    " GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO evolution;"
+    " ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO evolution;"
+    " ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO evolution;"
+)
+REDIS_NOTE = (
+    "The WhatsApp session snapshot (redis) is applied only by 'install.sh --restore <file>' on the server;"
+    " otherwise reconnect WhatsApp after the restore if needed."
+)
 
 
 def _extract_verified(archive: Path, dest: Path) -> dict:
@@ -61,22 +79,25 @@ async def restore_backup(name: str) -> dict:
             safety = await run_mod._create_locked()
             for fname, db in (("iler.dump", None), ("evolution.dump", run_mod.EVOLUTION_DB)):
                 target, env = run_mod.pg_target(settings.database_url, db)
+                role = [f"--role={EVOLUTION_ROLE}"] if db == run_mod.EVOLUTION_DB else []
                 await run_mod.run_cmd(
                     [
-                        "pg_restore", "--clean", "--if-exists", "--no-owner", "--single-transaction",
+                        "pg_restore", "--clean", "--if-exists", "--no-owner", *role, "--single-transaction",
                         f"--dbname={target}", str(work / fname),
                     ],
                     env=env,
                 )
-            staged_dir = Path(settings.data_dir) / "restore"
-            staged_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(work / "redis.rdb", staged_dir / "redis.rdb")
-            log.warning("backup %s restored; redis snapshot staged at %s", name, staged_dir / "redis.rdb")
+            target, env = run_mod.pg_target(settings.database_url, run_mod.EVOLUTION_DB)
+            await run_mod.run_cmd(
+                ["psql", "-v", "ON_ERROR_STOP=1", "-q", f"--dbname={target}", "-c", EVOLUTION_GRANTS], env=env
+            )
+            log.warning("backup %s restored (databases); redis snapshot was not applied", name)
             return {
                 "restored": name,
                 "version": manifest.get("version"),
                 "safety_backup": safety.name,
-                "redis": "staged",
+                "redis": "skipped",
+                "redis_note": REDIS_NOTE,
             }
         finally:
             shutil.rmtree(work, ignore_errors=True)

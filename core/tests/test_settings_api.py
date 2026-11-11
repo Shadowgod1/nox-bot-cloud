@@ -19,7 +19,7 @@ def csrf(c: AsyncClient) -> dict:
 
 @pytest.fixture
 async def owner(client):
-    r = await client.post("/api/setup/owner", json=OWNER)
+    r = await client.post("/api/setup/owner", json=OWNER, headers={"X-ILER-Setup-Token": "test-setup-token"})
     assert r.status_code == 200, r.text
     return client
 
@@ -82,6 +82,44 @@ async def test_notify_smtp_password_masked_and_kept(owner):
     stored = await settings_store.get("notify", NotifySettings)
     assert stored.smtp.password.get_secret_value() == "smtp-secret-1234"
     assert stored.admin_phones == ["77019999999"]
+
+
+async def test_notify_masked_password_rejected_when_smtp_target_changes(owner):
+    payload = {"smtp": {"host": "smtp.example.org", "user": "bot", "password": "smtp-secret-1234", "to": ["a@b.kz"]}}
+    assert (await owner.put("/api/settings/notify", json=payload, headers=csrf(owner))).status_code == 200
+    got = (await owner.get("/api/settings/notify")).json()
+    for change in ({"host": "evil.example.com"}, {"port": 2525}, {"user": "other"}):
+        body = {**got, "smtp": {**got["smtp"], **change}}
+        r = await owner.put("/api/settings/notify", json=body, headers=csrf(owner))
+        assert r.status_code == 422, (change, r.text)
+        assert r.json()["error"]["code"] == "smtp_password_required"
+        # an omitted password is treated like a masked one
+        body["smtp"].pop("password")
+        r = await owner.put("/api/settings/notify", json=body, headers=csrf(owner))
+        assert r.status_code == 422
+    stored = await settings_store.get("notify", NotifySettings)
+    assert stored.smtp.host == "smtp.example.org"
+    # re-entering the password together with the new host works
+    body = {**got, "smtp": {**got["smtp"], "host": "smtp2.example.org", "password": "new-secret-5678"}}
+    r = await owner.put("/api/settings/notify", json=body, headers=csrf(owner))
+    assert r.status_code == 200, r.text
+    stored = await settings_store.get("notify", NotifySettings)
+    assert stored.smtp.host == "smtp2.example.org"
+    assert stored.smtp.password.get_secret_value() == "new-secret-5678"
+
+
+async def test_operator_cannot_touch_notify_settings(owner, app):
+    r = await owner.post(
+        "/api/users",
+        json={"email": "op@club.kz", "password": "operator-pass-1", "name": "Op", "role": "operator"},
+        headers=csrf(owner),
+    )
+    assert r.status_code == 200
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as op:
+        await op.post("/api/auth/login", json={"email": "op@club.kz", "password": "operator-pass-1"})
+        assert (await op.get("/api/settings/notify")).status_code == 403
+        r = await op.put("/api/settings/notify", json={"admin_phones": []}, headers=csrf(op))
+        assert r.status_code == 403
 
 
 async def test_bot_settings_roundtrip_and_validation(owner):

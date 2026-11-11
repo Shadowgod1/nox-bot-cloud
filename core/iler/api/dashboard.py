@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from iler import settings_store
 from iler.auth.deps import User, current_user
+from iler.backup import status as backup_status
 from iler.config import get_settings
 from iler.db.pool import get_pool
 from iler.settings_models import BotSettings
@@ -34,11 +35,18 @@ class Errors24h(BaseModel):
     send: int  # outbound messages that ended failed/uncertain in the last 24 h
 
 
+class BackupBrief(BaseModel):
+    status: str | None  # ok | error | None (no backup has run yet)
+    at: str | None  # ISO-8601 time of the last attempt
+    message: str | None
+
+
 class Dashboard(BaseModel):
     whatsapp: WhatsAppBrief
     bot_enabled: bool
     today: TodayStats
     errors_24h: Errors24h
+    backup: BackupBrief
 
 
 def _now() -> datetime:
@@ -90,4 +98,5 @@ async def get_dashboard(_user: User = Depends(current_user)):
             "bookings_total": row["bookings_total"],
         },
         "errors_24h": {"llm": row["llm_errors"], "send": row["send_errors"]},
+        "backup": await backup_status.get(),
     }

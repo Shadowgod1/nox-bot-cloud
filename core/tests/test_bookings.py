@@ -21,7 +21,7 @@ def csrf(c: AsyncClient) -> dict:
 
 @pytest.fixture
 async def owner(client):
-    r = await client.post("/api/setup/owner", json=OWNER)
+    r = await client.post("/api/setup/owner", json=OWNER, headers={"X-ILER-Setup-Token": "test-setup-token"})
     assert r.status_code == 200, r.text
     return client
 

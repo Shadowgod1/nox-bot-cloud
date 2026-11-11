@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from iler.auth import tokens
 
 OWNER = {"email": "Owner@Club.kz", "password": "owner-pass-123", "name": "Owner"}
+SETUP = {"X-ILER-Setup-Token": "test-setup-token"}
 
 
 def csrf(c: AsyncClient) -> dict:
@@ -14,7 +15,7 @@ def csrf(c: AsyncClient) -> dict:
 
 
 async def setup_owner(c: AsyncClient) -> dict:
-    r = await c.post("/api/setup/owner", json=OWNER)
+    r = await c.post("/api/setup/owner", json=OWNER, headers=SETUP)
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -37,13 +38,36 @@ async def test_setup_state_true_when_no_users(client):
 async def test_setup_owner_only_once(client):
     user = await setup_owner(client)
     assert user["role"] == "owner" and user["email"] == "owner@club.kz"
-    r = await client.post("/api/setup/owner", json={**OWNER, "email": "other@club.kz"})
+    r = await client.post("/api/setup/owner", json={**OWNER, "email": "other@club.kz"}, headers=SETUP)
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "already_set_up"
 
 
+async def test_setup_owner_requires_token_header(client):
+    r = await client.post("/api/setup/owner", json=OWNER)
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "setup_token_required"
+    r = await client.post("/api/setup/owner", json=OWNER, headers={"X-ILER-Setup-Token": "wrong"})
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "setup_token_invalid"
+    assert (await client.get("/api/setup/state")).json() == {"needs_setup": True}
+
+
+async def test_setup_owner_fails_closed_without_configured_token(client, monkeypatch):
+    from iler.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "setup_token", "")
+    monkeypatch.delenv("ILER_ALLOW_INSECURE_SETUP", raising=False)
+    r = await client.post("/api/setup/owner", json=OWNER, headers=SETUP)
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "setup_token_required"
+    monkeypatch.setenv("ILER_ALLOW_INSECURE_SETUP", "1")
+    r = await client.post("/api/setup/owner", json=OWNER)
+    assert r.status_code == 200, r.text
+
+
 async def test_setup_owner_rejects_short_password(client):
-    r = await client.post("/api/setup/owner", json={**OWNER, "password": "short"})
+    r = await client.post("/api/setup/owner", json={**OWNER, "password": "short"}, headers=SETUP)
     assert r.status_code == 422
     assert (await client.get("/api/setup/state")).json() == {"needs_setup": True}
 
@@ -79,8 +103,9 @@ async def test_lockout_after_10_failures(client, pool):
         r = await client.post("/api/auth/login", json={"email": "owner@club.kz", "password": "bad-password-x"})
         assert r.status_code == 401
     r = await client.post("/api/auth/login", json={"email": "owner@club.kz", "password": OWNER["password"]})
-    assert r.status_code == 429
-    assert r.json()["error"]["code"] == "locked"
+    # same answer as a wrong password: no account enumeration through the lock state
+    assert r.status_code == 401
+    assert r.json()["error"]["code"] == "invalid_credentials"
     # lock lasts ~15 minutes
     secs = await pool.fetchval("SELECT extract(epoch FROM locked_until - now()) FROM users")
     assert 14 * 60 < secs <= 15 * 60
