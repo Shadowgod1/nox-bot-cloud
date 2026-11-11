@@ -1,0 +1,30 @@
+import type { BotSettings } from '../api/types'
+
+export const BOT: BotSettings = {
+  enabled: true,
+  name: 'Ассистент',
+  template_id: null,
+  template_values: {},
+  prompt: '',
+  prompt_edited: false,
+  hours: {
+    always_open: true,
+    mon: { open: '00:00', close: '24:00', closed: false },
+    tue: { open: '00:00', close: '24:00', closed: false },
+    wed: { open: '00:00', close: '24:00', closed: false },
+    thu: { open: '00:00', close: '24:00', closed: false },
+    fri: { open: '00:00', close: '24:00', closed: false },
+    sat: { open: '00:00', close: '24:00', closed: false },
+    sun: { open: '00:00', close: '24:00', closed: false },
+  },
+  after_hours_mode: 'reply',
+  after_hours_message: '',
+  greeting: '',
+  buffer_delay_seconds: 8,
+  handover_pause_minutes: 60,
+  memory_messages: 20,
+  booking_confirm_template: 'ok {details}',
+  booking_reject_template: 'no {reason}',
+  booking_request_timeout_min: 15,
+  booking_timeout_message: 'later',
+}

@@ -16,6 +16,7 @@ from iler.whatsapp import set_gateway
 from iler.whatsapp.base import IncomingMessage
 
 _ids = itertools.count(1)
+TEST_PROMPT = "Ты — администратор тестового клуба «Тест». Адрес: ул. Абая 1."
 
 
 class FakeGateway:
@@ -94,6 +95,7 @@ async def env(pool, monkeypatch):
     admin_reply.install()
 
     async def set_bot(**kw):
+        kw.setdefault("prompt", TEST_PROMPT)  # an empty prompt means "not configured": the bot stays silent
         await settings_store.put("bot", BotSettings(**kw))
 
     async def set_notify(**kw):
@@ -104,6 +106,7 @@ async def env(pool, monkeypatch):
         await buffer.wait_idle()
 
     holder.set_bot = set_bot
+    await set_bot()
     holder.set_notify = set_notify
     holder.idle = idle
     yield holder

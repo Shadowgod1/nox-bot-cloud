@@ -9,3 +9,6 @@ afterEach(() => {
     if (name) document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`
   })
 })
+
+// jsdom has no layout: scrolling is a no-op.
+if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {}

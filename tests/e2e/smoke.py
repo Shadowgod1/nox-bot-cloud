@@ -3,7 +3,7 @@
     docker compose -p iler-smoke -f compose.yml -f compose.test.yml up -d --build
     python tests/e2e/smoke.py --web http://localhost:8080 --fake http://127.0.0.1:18080
 
-Walks the real path: setup wizard API -> template -> WhatsApp connect (fake Evolution) ->
+Walks the real path: setup wizard API -> bot prompt from a template -> WhatsApp connect (fake Evolution) ->
 inbound client message -> bot reply delivered back to WhatsApp -> conversation visible in the API.
 The stack must be fresh (needs_setup = true).
 """
@@ -17,6 +17,14 @@ import httpx
 PHONE = "77010000000"
 EMAIL = "owner@smoke.test"
 PASSWORD = "smoke-test-password-1"
+SETUP_TOKEN = "test-setup-token"  # must match the setup token configured for the test stack (compose.test.yml)
+CLUB_VALUES = {
+    "business_name": "Smoke Arena",
+    "address": "Алматы, ул. Абая 1",
+    "hours": "Круглосуточно",
+    "zones": "Общий зал — 20 ПК\nVIP — 10 ПК",
+    "prices": "Общий зал — 800 ₸/час\nVIP — 1500 ₸/час",
+}
 
 
 def step(name: str) -> None:
@@ -62,7 +70,8 @@ def main() -> None:
     step("setup wizard: create owner")
     if not web.get("/api/setup/state").json().get("needs_setup"):
         fail("stack is not fresh (needs_setup=false)")
-    r = web.post("/api/setup/owner", json={"email": EMAIL, "password": PASSWORD, "name": "Smoke"})
+    r = web.post("/api/setup/owner", json={"email": EMAIL, "password": PASSWORD, "name": "Smoke"},
+                 headers={"X-ILER-Setup-Token": SETUP_TOKEN})
     if r.status_code >= 300:
         fail(f"setup/owner: {r.status_code} {r.text}")
     if web.get("/api/setup/state").json().get("needs_setup"):
@@ -78,15 +87,22 @@ def main() -> None:
     h = {"X-ILER-CSRF": csrf}
 
     step("mutation without CSRF is rejected")
-    if web.post("/api/templates/computer_club/apply").status_code != 403:
+    if web.post("/api/templates/computer_club/render", json={"values": CLUB_VALUES}).status_code != 403:
         fail("mutation without CSRF header was not rejected")
 
-    step("apply computer club template, shorten buffer")
-    r = web.post("/api/templates/computer_club/apply", headers=h)
+    step("bot prompt from the computer club template, shorten buffer")
+    templates = web.get("/api/templates").json()
+    if "computer_club" not in {t["id"] for t in templates}:
+        fail(f"computer_club template not listed: {templates}")
+    r = web.post("/api/templates/computer_club/render", json={"values": CLUB_VALUES}, headers=h)
     if r.status_code >= 300:
-        fail(f"apply template: {r.status_code} {r.text}")
+        fail(f"render template: {r.status_code} {r.text}")
+    rendered = r.json()
+    if rendered["missing"] or "Smoke Arena" not in rendered["prompt"]:
+        fail(f"unexpected render result: {rendered}")
     bot = web.get("/api/settings/bot").json()
-    bot["buffer_delay_seconds"] = 3
+    bot |= {"prompt": rendered["prompt"], "template_id": "computer_club", "template_values": CLUB_VALUES,
+            "prompt_edited": False, "buffer_delay_seconds": 3}
     r = web.put("/api/settings/bot", json=bot, headers=h)
     if r.status_code >= 300:
         fail(f"put bot settings: {r.status_code} {r.text}")

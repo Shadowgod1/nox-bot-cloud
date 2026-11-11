@@ -4,7 +4,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
-from iler import settings_store, templates_loader
+from iler import settings_store
 from iler.api.settings import get_key_checker
 from iler.llm.base import LlmError
 from iler.settings_models import BotSettings, LlmSettings, NotifySettings
@@ -145,41 +145,80 @@ async def test_openapi_exposes_secrets_as_strings(client):
     assert "SmtpSettingsPublic" in schemas
 
 
-@pytest.fixture
-def template_dir(tmp_path, monkeypatch):
-    (tmp_path / "computer_club.yaml").write_text(
-        "meta:\n  name: Компьютерный клуб\n  description: Для клубов\n"
-        "name: Клуб-бот\npersona: Администратор клуба\nservices:\n  - name: Общий зал\n    price: 500 ₸/ч\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "generic.yaml").write_text("name: Универсальный\n", encoding="utf-8")
-    (tmp_path / "broken.yaml").write_text("buffer_delay_seconds: 1000\n", encoding="utf-8")
-    monkeypatch.setattr(templates_loader, "TEMPLATES_DIR", tmp_path)
-    return tmp_path
+async def test_bot_settings_prompt_fields_and_hours_validation(owner):
+    body = (await owner.get("/api/settings/bot")).json()
+    assert body["prompt"] == "" and body["template_id"] is None and body["template_values"] == {}
+    assert body["prompt_edited"] is False and body["enabled"] is True
+    for removed in ("persona", "instructions", "services", "faq", "address"):
+        assert removed not in body
+    body |= {"template_id": "generic", "template_values": {"business_name": "Мастер"}, "prompt": "Ты — консультант.",
+             "prompt_edited": True}
+    r = await owner.put("/api/settings/bot", json=body, headers=csrf(owner))
+    assert r.status_code == 200, r.text
+    stored = await settings_store.get("bot", BotSettings)
+    assert stored.prompt == "Ты — консультант." and stored.template_values == {"business_name": "Мастер"}
+    assert (await owner.put("/api/settings/bot", json=body | {"prompt": "x" * 20001},
+                            headers=csrf(owner))).status_code == 422
+    assert (await owner.put("/api/settings/bot", json=body | {"template_values": {"a": "x" * 4001}},
+                            headers=csrf(owner))).status_code == 422
+    for bad in ("", "25:00", "9:00", "12:60", "24:01", "ab"):
+        hours = body["hours"] | {"mon": {"open": bad, "close": "18:00", "closed": False}}
+        r = await owner.put("/api/settings/bot", json=body | {"hours": hours}, headers=csrf(owner))
+        assert r.status_code == 422, bad
+    hours = body["hours"] | {"mon": {"open": "00:00", "close": "24:00", "closed": False},
+                             "tue": {"open": "09:30", "close": "23:59", "closed": False}}
+    assert (await owner.put("/api/settings/bot", json=body | {"hours": hours}, headers=csrf(owner))).status_code == 200
 
 
-def test_templates_loader(template_dir):
-    metas = {m.id: m for m in templates_loader.list_templates()}
-    assert set(metas) == {"computer_club", "generic"}  # invalid file skipped
-    assert metas["computer_club"].name == "Компьютерный клуб"
-    assert metas["generic"].name == "generic"
-    bot = templates_loader.load("computer_club")
-    assert isinstance(bot, BotSettings) and bot.services[0].price == "500 ₸/ч"
-    with pytest.raises(templates_loader.TemplateNotFound):
-        templates_loader.load("../secrets")
-    with pytest.raises(templates_loader.TemplateNotFound):
-        templates_loader.load("missing")
+def test_legacy_bot_settings_still_validate():
+    bot = BotSettings.model_validate({"name": "Старый", "persona": "p", "services": [{"name": "VIP"}], "address": "a"})
+    assert bot.name == "Старый" and bot.prompt == "" and "persona" not in bot.model_dump()
 
 
-async def test_templates_apply_overwrites_bot_settings(owner, template_dir):
-    await settings_store.put("bot", BotSettings(name="Старый", address="ул. Абая 1"))
+async def test_templates_list(owner):
     r = await owner.get("/api/templates")
     assert r.status_code == 200
-    assert {t["id"] for t in r.json()} == {"computer_club", "generic"}
-    r = await owner.post("/api/templates/computer_club/apply", headers=csrf(owner))
+    items = r.json()
+    assert {t["id"] for t in items} == {"computer_club", "beauty_salon", "clinic", "generic"}
+    club = next(t for t in items if t["id"] == "computer_club")
+    assert club["name"] == "Компьютерный клуб" and club["description"]
+    first = club["fields"][0]
+    assert first["key"] == "business_name" and first["required"] is True and first["type"] == "text"
+    assert "prompt" not in club
+
+
+async def test_templates_require_auth(client):
+    assert (await client.get("/api/templates")).status_code == 401
+
+
+async def test_template_render(owner):
+    values = {"business_name": "Борода", "address": "ул. Абая 1", "services": "Стрижка — 5000 ₸", "phone": ""}
+    r = await owner.post("/api/templates/beauty_salon/render", json={"values": values}, headers=csrf(owner))
     assert r.status_code == 200, r.text
-    assert r.json()["name"] == "Клуб-бот"
-    stored = await settings_store.get("bot", BotSettings)
-    assert stored.name == "Клуб-бот" and stored.address == "" and stored.persona == "Администратор клуба"
-    assert (await owner.post("/api/templates/nope/apply", headers=csrf(owner))).status_code == 404
-    assert (await owner.post("/api/templates/computer_club/apply")).status_code == 403
+    body = r.json()
+    assert "«Борода»" in body["prompt"] and "Стрижка — 5000 ₸" in body["prompt"]
+    assert "Телефон:" not in body["prompt"]
+    assert body["missing"] == ["hours"]
+    assert (await settings_store.get("bot", BotSettings)).prompt == ""  # nothing is saved
+
+
+async def test_template_render_validation(owner):
+    url = "/api/templates/generic/render"
+    r = await owner.post(url, json={"values": {"evil": "x"}}, headers=csrf(owner))
+    assert r.status_code == 422 and r.json()["error"]["code"] == "validation_error"
+    r = await owner.post(url, json={"values": {"business_name": "x" * 4001}}, headers=csrf(owner))
+    assert r.status_code == 422
+    r = await owner.post(url, json={"values": {"business_name": "A\x07B"}}, headers=csrf(owner))
+    assert r.status_code == 200 and "«AB»" in r.json()["prompt"]
+    assert sorted(r.json()["missing"]) == ["activity", "services"]
+    assert (await owner.post("/api/templates/nope/render", json={"values": {}}, headers=csrf(owner))).status_code == 404
+    r = await owner.post("/api/templates/..%2Fsecrets/render", json={"values": {}}, headers=csrf(owner))
+    assert r.status_code == 404
+    assert (await owner.post(url, json={"values": {}})).status_code == 403  # CSRF
+
+
+async def test_template_apply_endpoint_removed(owner):
+    r = await owner.post("/api/templates/computer_club/apply", headers=csrf(owner))
+    assert r.status_code in (404, 405)
+
+

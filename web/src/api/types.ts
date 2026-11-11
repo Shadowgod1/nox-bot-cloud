@@ -140,17 +140,6 @@ export interface Booking {
   name: string
 }
 
-export interface ServiceItem {
-  name: string
-  price: string
-  note: string
-}
-
-export interface FaqItem {
-  q: string
-  a: string
-}
-
 export interface DayHours {
   open: string
   close: string
@@ -167,11 +156,14 @@ export type AfterHoursMode = 'reply' | 'silent' | 'fixed_message'
 export interface BotSettings {
   enabled: boolean
   name: string
-  persona: string
-  instructions: string
-  services: ServiceItem[]
-  faq: FaqItem[]
-  address: string
+  /** Template the prompt was last generated from (null = written by hand / never generated). */
+  template_id: string | null
+  /** Field values of that template's form (key -> text). */
+  template_values: Record<string, string>
+  /** The business prompt the bot actually uses (max 20000). While empty the bot does not reply. */
+  prompt: string
+  /** The prompt was edited manually since it was last generated from the template. */
+  prompt_edited: boolean
   hours: WeeklyHours
   after_hours_mode: AfterHoursMode
   after_hours_message: string
@@ -244,10 +236,35 @@ export interface SenetTestResult {
   count?: number
 }
 
+export type TemplateFieldType = 'text' | 'textarea' | 'phone'
+
+export interface TemplateField {
+  key: string
+  label: string
+  type: TemplateFieldType
+  required: boolean
+  placeholder: string
+  hint: string
+}
+
+/** GET /api/templates item. defaults: optional BotSettings presets (e.g. name, greeting). */
 export interface TemplateMeta {
   id: string
   name: string
   description: string
+  fields: TemplateField[]
+  defaults: Partial<BotSettings>
+}
+
+/** POST /api/templates/{id}/render body; saves nothing. Unknown keys / values > 4000 chars -> 422. */
+export interface TemplateRenderRequest {
+  values: Record<string, string>
+}
+
+/** missing: required field keys left empty. */
+export interface TemplateRenderResult {
+  prompt: string
+  missing: string[]
 }
 
 export interface ChatTurn {

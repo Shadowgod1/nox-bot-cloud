@@ -75,6 +75,8 @@ export const ru = {
     restore_failed: 'Не удалось восстановить данные.',
     invalid_backup_name: 'Некорректное имя резервной копии.',
     template_invalid: 'Шаблон повреждён.',
+    setup_token_required: 'Откройте ссылку из установщика (она содержит одноразовый токен).',
+    setup_token_invalid: 'Откройте ссылку из установщика (она содержит одноразовый токен).',
     not_implemented: 'Функция пока не реализована.',
   } as Record<string, string>,
   errorDetail: ['validation_error', 'evolution_unavailable', 'send_failed', 'llm_error', 'backup_failed', 'restore_failed', 'template_invalid'],

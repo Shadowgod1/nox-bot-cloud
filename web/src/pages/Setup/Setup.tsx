@@ -1,20 +1,43 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
-import { Check, CheckCircle2 } from 'lucide-react'
+import { Check, CheckCircle2, CircleAlert } from 'lucide-react'
 import { api, ApiError } from '../../api/client'
-import type { LlmProvider, LlmSettings, LlmTestResult, TemplateMeta, User } from '../../api/types'
+import type { LlmProvider, LlmSettings, LlmTestResult, User } from '../../api/types'
 import { useAuth } from '../../hooks/useAuth'
 import { useLoad } from '../../hooks/useLoad'
 import { AuthFrame } from '../Login/Login'
 import { WhatsAppConnect } from '../../components/WhatsAppConnect'
-import { Button, CheckLine, type CheckView, EmptyState, ErrorState, Field, Input, Spinner, cx } from '../../components/ui'
+import { BotSetupStep } from './BotSetupStep'
+import { StepHeader } from './StepHeader'
+import { Button, CheckLine, type CheckView, ErrorState, Field, Input, Spinner, cx } from '../../components/ui'
 
-const STEPS = ['Владелец', 'Языковая модель', 'Шаблон', 'WhatsApp', 'Готово'] as const
+const STEPS = ['Владелец', 'Языковая модель', 'WhatsApp', 'Настройка бота', 'Готово'] as const
+const TOKEN_KEY = 'iler_setup_token'
+const TOKEN_HELP = 'Откройте ссылку из установщика (она содержит одноразовый токен).'
+
+/** One-time setup token from the installer link (/setup?token=...); kept for this tab only. */
+function captureSetupToken(): string | null {
+  try {
+    const url = new URL(window.location.href)
+    const fromUrl = url.searchParams.get('token')
+    if (fromUrl) {
+      sessionStorage.setItem(TOKEN_KEY, fromUrl)
+      url.searchParams.delete('token') // keep the token out of history and screenshots
+      window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
+      return fromUrl
+    }
+    return sessionStorage.getItem(TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
 
 export function Setup() {
   const { phase, refresh } = useAuth()
   const navigate = useNavigate()
   const [step, setStep] = useState(0)
+  const [botReady, setBotReady] = useState(false)
+  const [token] = useState(captureSetupToken)
 
   // Wizard is only reachable while the server reports needs_setup (or mid-wizard).
   useEffect(() => {
@@ -46,17 +69,26 @@ export function Setup() {
         ))}
       </ol>
       <div className="rounded-[12px] border border-line bg-surface p-6 sm:p-8">
-        {step === 0 && <OwnerStep onDone={next} />}
+        {step === 0 && <OwnerStep token={token} onDone={next} />}
         {step === 1 && <LlmStep onDone={next} />}
-        {step === 2 && <TemplateStep onDone={next} />}
-        {step === 3 && <WhatsAppStep onDone={next} />}
+        {step === 2 && <WhatsAppStep onDone={next} />}
+        {step === 3 && (
+          <BotSetupStep
+            onDone={(saved) => {
+              setBotReady(saved)
+              next()
+            }}
+          />
+        )}
         {step === 4 && (
           <div className="flex flex-col items-start gap-4">
-            <CheckCircle2 className="size-8 text-ok" aria-hidden />
+            {botReady ? <CheckCircle2 className="size-8 text-ok" aria-hidden /> : <CircleAlert className="size-8 text-warn" aria-hidden />}
             <div>
-              <h1 className="text-[20px] font-semibold text-ink">Бот готов к работе</h1>
+              <h1 className="text-[20px] font-semibold text-ink">{botReady ? 'Бот готов к работе' : 'Почти готово'}</h1>
               <p className="mt-1 max-w-[56ch] text-sm text-ink-2">
-                Дальше стоит заполнить цены, адрес и часы работы в разделе «Настройки бота» и проверить ответы в тестовом чате.
+                {botReady
+                  ? 'Проверьте ответы в «Тестовом чате». Промпт и поведение бота можно поменять в разделе «Настройки бота».'
+                  : 'Бот не отвечает клиентам, пока не настроен промпт. Выберите шаблон в разделе «Настройки бота».'}
               </p>
             </div>
             <Button
@@ -75,16 +107,7 @@ export function Setup() {
   )
 }
 
-function StepHeader({ title, text }: { title: string; text: string }) {
-  return (
-    <div className="mb-6">
-      <h1 className="text-[20px] font-semibold text-ink">{title}</h1>
-      <p className="mt-1 max-w-[60ch] text-sm text-ink-2">{text}</p>
-    </div>
-  )
-}
-
-function OwnerStep({ onDone }: { onDone: () => void }) {
+function OwnerStep({ token, onDone }: { token: string | null; onDone: () => void }) {
   const { refresh } = useAuth()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -92,6 +115,7 @@ function OwnerStep({ onDone }: { onDone: () => void }) {
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
   const [touched, setTouched] = useState(false)
+  const [tokenError, setTokenError] = useState(false)
 
   const errs = {
     email: /^\S+@\S+\.\S+$/.test(email.trim()) ? null : 'Укажите e-mail',
@@ -105,10 +129,18 @@ function OwnerStep({ onDone }: { onDone: () => void }) {
     setTouched(true)
     if (!valid) return
     setBusy(true)
+    setTokenError(false)
     try {
       const creds = { email: email.trim(), password }
       // Core sets the session + CSRF cookies on success (same as /api/auth/login).
-      await api.post<User>('/api/setup/owner', { ...creds, name: name.trim() })
+      await api.post<User>('/api/setup/owner', { ...creds, name: name.trim() }, {
+        headers: token ? { 'X-ILER-Setup-Token': token } : undefined,
+      })
+      try {
+        sessionStorage.removeItem(TOKEN_KEY) // one-time: used up
+      } catch {
+        /* storage unavailable */
+      }
       // Defensive only: if the cookie did not stick (e.g. blocked), log in explicitly.
       try {
         await api.get<User>('/api/auth/me', { silent: true, noAuthRedirect: true })
@@ -120,6 +152,7 @@ function OwnerStep({ onDone }: { onDone: () => void }) {
     } catch (err) {
       // 409 already_set_up: another owner was created meanwhile — the wizard is over, go to login.
       if (err instanceof ApiError && err.code === 'already_set_up') void refresh()
+      if (err instanceof ApiError && (err.code === 'setup_token_required' || err.code === 'setup_token_invalid')) setTokenError(true)
     } finally {
       setBusy(false)
     }
@@ -144,6 +177,11 @@ function OwnerStep({ onDone }: { onDone: () => void }) {
         <Field label="Повторите пароль" error={touched ? errs.confirm : null}>
           <Input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
         </Field>
+        {tokenError && (
+          <p role="alert" className="rounded-[8px] border border-danger/30 bg-danger-soft px-3.5 py-2.5 text-sm text-danger sm:col-span-2">
+            {TOKEN_HELP}
+          </p>
+        )}
         <div className="sm:col-span-2">
           <Button type="submit" variant="primary" loading={busy}>
             Создать и продолжить
@@ -263,75 +301,12 @@ function LlmStep({ onDone }: { onDone: () => void }) {
   )
 }
 
-function TemplateStep({ onDone }: { onDone: () => void }) {
-  const list = useLoad(() => api.get<TemplateMeta[]>('/api/templates', { silent: true }))
-  const [choice, setChoice] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => {
-    if (list.data?.length && !choice) setChoice(list.data[0].id)
-  }, [list.data, choice])
-
-  async function apply() {
-    if (!choice) return
-    setBusy(true)
-    try {
-      await api.post(`/api/templates/${encodeURIComponent(choice)}/apply`)
-      onDone()
-    } catch {
-      /* toast */
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <>
-      <StepHeader title="Выберите шаблон бота" text="Шаблон заполнит инструкции и типовые ответы. Всё можно изменить позже в настройках бота." />
-      {list.loading ? (
-        <Spinner />
-      ) : list.error ? (
-        <ErrorState message={list.error.message} onRetry={list.reload} />
-      ) : !list.data?.length ? (
-        <EmptyState title="Шаблоны не найдены" action={<Button onClick={onDone}>Продолжить без шаблона</Button>}>
-          Бот начнёт с пустых настроек.
-        </EmptyState>
-      ) : (
-        <div className="flex flex-col gap-5">
-          <div role="radiogroup" aria-label="Шаблон" className="grid gap-3 sm:grid-cols-2">
-            {list.data.map((t) => (
-              <label
-                key={t.id}
-                className={cx(
-                  'flex cursor-pointer items-start gap-3 rounded-[9px] border p-4 transition-colors',
-                  choice === t.id ? 'border-accent bg-accent-soft' : 'border-line hover:border-line-strong',
-                )}
-              >
-                <input type="radio" name="template" checked={choice === t.id} onChange={() => setChoice(t.id)} className="mt-1 accent-[var(--color-accent)]" />
-                <span>
-                  <span className="block text-sm font-medium text-ink">{t.name}</span>
-                  <span className="mt-0.5 block text-[13px] text-ink-2">{t.description}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-          <div>
-            <Button variant="primary" loading={busy} onClick={apply} disabled={!choice}>
-              Применить и продолжить
-            </Button>
-          </div>
-        </div>
-      )}
-    </>
-  )
-}
-
 function WhatsAppStep({ onDone }: { onDone: () => void }) {
   const [connected, setConnected] = useState(false)
   return (
     <>
       <StepHeader
-        title="Подключите WhatsApp клуба"
+        title="Подключите WhatsApp"
         text="Используйте телефон с номером, на который пишут клиенты. WhatsApp на телефоне продолжит работать как обычно."
       />
       <WhatsAppConnect onConnected={() => setConnected(true)} />

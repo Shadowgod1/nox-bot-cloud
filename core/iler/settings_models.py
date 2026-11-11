@@ -1,26 +1,29 @@
 """Typed settings stored in the `settings` table (one row per key)."""
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$|^24:00$")
 
-class ServiceItem(BaseModel):
-    name: str
-    price: str = ""
-    note: str = ""
-
-
-class FaqItem(BaseModel):
-    q: str
-    a: str
+TEMPLATE_VALUE_MAX = 4000
+TEMPLATE_VALUES_MAX_KEYS = 50
+PROMPT_MAX = 20000
 
 
 class DayHours(BaseModel):
     open: str = "00:00"   # HH:MM
     close: str = "24:00"  # HH:MM, "24:00" = end of day
     closed: bool = False
+
+    @field_validator("open", "close")
+    @classmethod
+    def _hhmm(cls, v: str) -> str:
+        if not isinstance(v, str) or not _HHMM.match(v):
+            raise ValueError("time must be HH:MM (00:00–23:59) or 24:00")
+        return v
 
 
 class WeeklyHours(BaseModel):
@@ -37,11 +40,12 @@ class WeeklyHours(BaseModel):
 class BotSettings(BaseModel):
     enabled: bool = True
     name: str = "Ассистент"
-    persona: str = ""
-    instructions: str = ""
-    services: list[ServiceItem] = []
-    faq: list[FaqItem] = []
-    address: str = ""
+    # Business prompt: generated from a template (template_id + template_values) and then freely edited.
+    # This is what the bot actually uses; while it is empty the engine does not reply (BotNotConfigured).
+    template_id: str | None = None
+    template_values: dict[str, str] = {}
+    prompt: str = Field("", max_length=PROMPT_MAX)
+    prompt_edited: bool = False  # edited manually since the last generation from the template
     hours: WeeklyHours = WeeklyHours()
     after_hours_mode: Literal["reply", "silent", "fixed_message"] = "reply"
     after_hours_message: str = ""
@@ -53,6 +57,16 @@ class BotSettings(BaseModel):
     booking_reject_template: str = "К сожалению, не получилось забронировать: {reason}"
     booking_request_timeout_min: int = Field(15, ge=1, le=240)
     booking_timeout_message: str = "Администратор скоро свяжется с вами по заявке."
+
+    @field_validator("template_values")
+    @classmethod
+    def _values(cls, v: dict[str, str]) -> dict[str, str]:
+        if len(v) > TEMPLATE_VALUES_MAX_KEYS:
+            raise ValueError(f"at most {TEMPLATE_VALUES_MAX_KEYS} template values")
+        for key, value in v.items():
+            if len(key) > 64 or len(value) > TEMPLATE_VALUE_MAX:
+                raise ValueError(f"template value too long: {key[:64]}")
+        return v
 
 
 class LlmSettings(BaseModel):

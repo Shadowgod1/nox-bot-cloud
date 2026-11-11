@@ -42,7 +42,7 @@ export function Login() {
     <AuthFrame>
       <div className="rounded-[12px] border border-line bg-surface p-6 sm:p-7">
         <h1 className="text-[19px] font-semibold text-ink">Вход в ILER</h1>
-        <p className="mt-1 text-sm text-ink-2">Админка WhatsApp-ассистента клуба.</p>
+        <p className="mt-1 text-sm text-ink-2">Админка WhatsApp-ассистента.</p>
         <form onSubmit={submit} className="mt-6 flex flex-col gap-4" noValidate>
           <Field label="E-mail">
             <Input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />

@@ -27,6 +27,8 @@ export interface RequestOptions {
   /** Do not redirect to /login on 401 (login form, session probe on public pages). */
   noAuthRedirect?: boolean
   signal?: AbortSignal
+  /** Extra request headers (e.g. X-ILER-Setup-Token on the first-run owner request). */
+  headers?: Record<string, string>
 }
 
 type Navigator = (path: string) => void
@@ -105,7 +107,7 @@ export async function request<T>(
   body?: unknown,
   opts: RequestOptions = {},
 ): Promise<T> {
-  const headers = new Headers({ Accept: 'application/json' })
+  const headers = new Headers({ ...opts.headers, Accept: 'application/json' })
   if (MUTATING.has(method)) {
     const csrf = getCookie('iler_csrf')
     if (csrf) headers.set('X-ILER-CSRF', csrf)
