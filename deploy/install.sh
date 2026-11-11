@@ -169,8 +169,9 @@ check_system() {
     version="${VERSION_ID:-}"
   fi
   case "$id:$version" in
-    ubuntu:22.04|ubuntu:24.04|debian:12) ok "OS $id $version" ;;
-    *) warn "untested OS '$id $version' (supported: Ubuntu 22.04/24.04, Debian 12); continuing" ;;
+    ubuntu:24.04) ok "OS $id $version (primary platform)" ;;
+    ubuntu:22.04|debian:12) ok "OS $id $version (supported; Ubuntu Server 24.04 LTS is the primary platform)" ;;
+    *) warn "untested OS '$id $version' (primary: Ubuntu Server 24.04 LTS; also Ubuntu 22.04, Debian 12); continuing" ;;
   esac
   mem_kb="$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)"
   if ((mem_kb < 3500000)); then

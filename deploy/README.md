@@ -2,6 +2,23 @@
 
 Operator notes for `deploy/`. The design is in `docs/superpowers/specs/2026-11-11-iler-bot-design.md` §8–9.
 
+## Supported platforms
+
+| Platform | Status |
+|---|---|
+| Ubuntu Server 24.04 LTS | primary Linux platform |
+| Ubuntu 22.04, Debian 12 | supported |
+| Windows 11 (Home/Pro), 22H2+ | primary Windows platform (WSL2, mirrored networking) |
+| Windows 10 22H2 | supported (WSL2, netsh portproxy fallback) |
+| Windows Server 2022+ | supported |
+| Windows Server 2019, Windows 10 < 22H2 | not supported (no WSL2 / too old) |
+
+Minimum hardware: 2 vCPU, 4 GB RAM, 40 GB SSD (recommended 4 vCPU / 8 GB / 100 GB).
+
+Windows: run `ILER-Setup-<version>.exe` as Administrator. It enables WSL2 (may ask for one reboot and then
+continues automatically), installs its own Ubuntu 24.04 distro with Docker Engine inside, loads the
+bundled images and starts the stack.
+
 ## Install
 
 ```sh

@@ -428,6 +428,10 @@ try {
         Stop-Install 'hardware virtualization is disabled; enable Intel VT-x / AMD-V (SVM) in BIOS/UEFI and run setup again'
     }
     Write-Ok 'virtualization available'
+    if ($build -lt 22000 -and $build -ne 20348) {
+        # Windows 10 22H2: supported, but WSL mirrored networking is unavailable (portproxy fallback).
+        Write-Warn 'Windows 10 detected: supported, but Windows 11 is recommended (more reliable WSL networking).'
+    }
 
     if (Enable-WslFeature) { Request-Reboot }
     Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -Name $RunOnceName -ErrorAction SilentlyContinue
