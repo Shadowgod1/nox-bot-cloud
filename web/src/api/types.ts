@@ -177,7 +177,10 @@ export interface BotSettings {
   booking_timeout_message: string
 }
 
-export type LlmProvider = 'openai' | 'gemini'
+export type LlmProvider = 'openai' | 'gemini' | 'anthropic'
+
+/** Claude thinking depth (`output_config.effort`): low = fastest replies. */
+export type AnthropicEffort = 'low' | 'medium' | 'high'
 
 /**
  * Secret fields come back masked ("••••abcd") or null.
@@ -192,6 +195,9 @@ export interface LlmSettings {
   openai_fallback_model: string | null
   gemini_key: SecretValue
   gemini_model: string
+  anthropic_key: SecretValue
+  anthropic_model: string
+  anthropic_effort: AnthropicEffort
   emergency_provider: LlmProvider | null
 }
 

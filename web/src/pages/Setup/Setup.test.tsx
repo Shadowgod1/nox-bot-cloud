@@ -4,9 +4,23 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { App } from '../../App'
 import { BotSetupStep } from './BotSetupStep'
+import { LlmStep } from './Setup'
 import { FakeEventSource, callsTo, jsonResponse, mockApi } from '../../test/utils'
 import { BOT } from '../../test/fixtures'
-import type { BotSettings, TemplateMeta } from '../../api/types'
+import type { BotSettings, LlmSettings, TemplateMeta } from '../../api/types'
+
+const LLM: LlmSettings = {
+  provider: 'openai',
+  openai_key: null,
+  openai_model: 'gpt-4.1-mini',
+  openai_fallback_model: null,
+  gemini_key: null,
+  gemini_model: 'gemini-2.5-flash',
+  anthropic_key: null,
+  anthropic_model: 'claude-opus-5-5',
+  anthropic_effort: 'low',
+  emergency_provider: null,
+}
 
 const TEMPLATES: TemplateMeta[] = [
   {
@@ -73,6 +87,47 @@ describe('Setup wizard', () => {
     const alerts = await screen.findAllByRole('alert')
     const inline = alerts.find((el) => el.tagName === 'P')
     expect(inline).toHaveTextContent('Откройте ссылку из установщика (она содержит одноразовый токен)')
+  })
+})
+
+describe('LlmStep', () => {
+  it('connects Anthropic (Claude) with model and effort, saving only after a successful check', async () => {
+    const user = userEvent.setup()
+    const fetchMock = mockApi({
+      'GET /api/settings/llm': LLM,
+      'POST /api/settings/llm/test': { ok: true },
+      'PUT /api/settings/llm': (init: RequestInit) => JSON.parse(String(init.body)),
+    })
+    render(<LlmStep onDone={vi.fn()} />)
+
+    await user.click(await screen.findByRole('radio', { name: /Anthropic \(Claude\)/ }))
+    const model = screen.getByLabelText('Модель Claude')
+    expect(model).toHaveValue('claude-opus-5-5')
+    expect(screen.getByText('claude-sonnet-5-5 — дешевле, claude-haiku-5-5 — самый дешёвый')).toBeInTheDocument()
+    expect(screen.getByLabelText('Глубина размышлений')).toHaveValue('low')
+
+    await user.type(screen.getByLabelText('Ключ API'), 'sk-ant-test-1')
+    await user.clear(model)
+    await user.type(model, 'claude-sonnet-5-5')
+    await user.selectOptions(screen.getByLabelText('Глубина размышлений'), 'Средняя')
+    await user.click(screen.getByRole('button', { name: 'Проверить ключ' }))
+
+    await waitFor(() => expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(1))
+    const tested = JSON.parse(String((callsTo(fetchMock, 'POST', '/api/settings/llm/test')[0][1] as RequestInit).body))
+    expect(tested).toMatchObject({
+      provider: 'anthropic',
+      anthropic_key: 'sk-ant-test-1',
+      anthropic_model: 'claude-sonnet-5-5',
+      anthropic_effort: 'medium',
+      openai_key: null,
+    })
+  })
+
+  it('hides the Claude fields for other providers', async () => {
+    mockApi({ 'GET /api/settings/llm': LLM })
+    render(<LlmStep onDone={vi.fn()} />)
+    await screen.findByLabelText('Ключ API')
+    expect(screen.queryByLabelText('Модель Claude')).not.toBeInTheDocument()
   })
 })
 

@@ -2,14 +2,22 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { Check, CheckCircle2, CircleAlert } from 'lucide-react'
 import { api, ApiError } from '../../api/client'
-import type { LlmProvider, LlmSettings, LlmTestResult, User } from '../../api/types'
+import type { AnthropicEffort, LlmProvider, LlmSettings, LlmTestResult, User } from '../../api/types'
 import { useAuth } from '../../hooks/useAuth'
 import { useLoad } from '../../hooks/useLoad'
 import { AuthFrame } from '../Login/Login'
 import { WhatsAppConnect } from '../../components/WhatsAppConnect'
 import { BotSetupStep } from './BotSetupStep'
 import { StepHeader } from './StepHeader'
-import { Button, CheckLine, type CheckView, ErrorState, Field, Input, Spinner, cx } from '../../components/ui'
+import { Button, CheckLine, type CheckView, ErrorState, Field, Input, Select, Spinner, cx } from '../../components/ui'
+import {
+  ANTHROPIC_DEFAULT_MODEL,
+  ANTHROPIC_EFFORT_HINT,
+  ANTHROPIC_EFFORTS,
+  ANTHROPIC_MODEL_HINT,
+} from '../System/anthropic'
+
+const KEY_FIELD = { openai: 'openai_key', gemini: 'gemini_key', anthropic: 'anthropic_key' } as const
 
 const STEPS = ['Владелец', 'Языковая модель', 'WhatsApp', 'Настройка бота', 'Готово'] as const
 const TOKEN_KEY = 'iler_setup_token'
@@ -192,10 +200,12 @@ function OwnerStep({ token, onDone }: { token: string | null; onDone: () => void
   )
 }
 
-function LlmStep({ onDone }: { onDone: () => void }) {
+export function LlmStep({ onDone }: { onDone: () => void }) {
   const current = useLoad(() => api.get<LlmSettings>('/api/settings/llm', { silent: true }))
   const [provider, setProvider] = useState<LlmProvider>('openai')
   const [key, setKey] = useState('')
+  const [claudeModel, setClaudeModel] = useState(ANTHROPIC_DEFAULT_MODEL)
+  const [effort, setEffort] = useState<AnthropicEffort>('low')
   const [busy, setBusy] = useState(false)
   const [check, setCheck] = useState<CheckView | null>(null)
 
@@ -208,7 +218,10 @@ function LlmStep({ onDone }: { onDone: () => void }) {
       const payload: LlmSettings = {
         ...current.data,
         provider,
-        [provider === 'openai' ? 'openai_key' : 'gemini_key']: key.trim(),
+        [KEY_FIELD[provider]]: key.trim(),
+        ...(provider === 'anthropic'
+          ? { anthropic_model: claudeModel.trim() || ANTHROPIC_DEFAULT_MODEL, anthropic_effort: effort }
+          : {}),
       }
       // Test the unsaved key first (core saves nothing on /test), store it only when it works.
       const r = await api.post<LlmTestResult>('/api/settings/llm/test', payload)
@@ -225,7 +238,7 @@ function LlmStep({ onDone }: { onDone: () => void }) {
     <>
       <StepHeader
         title="Подключите языковую модель"
-        text="Бот формулирует ответы с помощью OpenAI или Google Gemini. Ключ хранится только на этом сервере в зашифрованном виде."
+        text="Бот формулирует ответы с помощью OpenAI, Google Gemini или Anthropic Claude. Ключ хранится только на этом сервере в зашифрованном виде."
       />
       {current.loading ? (
         <Spinner />
@@ -235,11 +248,12 @@ function LlmStep({ onDone }: { onDone: () => void }) {
         <form onSubmit={verify} className="flex flex-col gap-5">
           <fieldset>
             <legend className="mb-2 text-[13px] font-medium text-ink">Провайдер</legend>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
               {(
                 [
                   ['openai', 'OpenAI', 'Ключ вида sk-… из platform.openai.com'],
                   ['gemini', 'Google Gemini', 'Ключ из Google AI Studio'],
+                  ['anthropic', 'Anthropic (Claude)', 'Ключ вида sk-ant-… из консоли Anthropic'],
                 ] as const
               ).map(([value, title, desc]) => (
                 <label
@@ -281,6 +295,29 @@ function LlmStep({ onDone }: { onDone: () => void }) {
               }}
             />
           </Field>
+          {provider === 'anthropic' && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Модель Claude" hint={ANTHROPIC_MODEL_HINT}>
+                <Input
+                  value={claudeModel}
+                  spellCheck={false}
+                  onChange={(e) => {
+                    setClaudeModel(e.target.value)
+                    setCheck(null)
+                  }}
+                />
+              </Field>
+              <Field label="Глубина размышлений" hint={ANTHROPIC_EFFORT_HINT}>
+                <Select value={effort} onChange={(e) => setEffort(e.target.value as AnthropicEffort)}>
+                  {ANTHROPIC_EFFORTS.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-3">
             <Button type="submit" variant={check?.ok ? 'secondary' : 'primary'} loading={busy} disabled={!key.trim()}>
               Проверить ключ
