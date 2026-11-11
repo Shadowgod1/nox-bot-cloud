@@ -443,3 +443,20 @@ def test_today_bounds_dst_zone():
     start, end = dashboard_api.today_bounds(datetime(2026, 3, 29, 12, 0, tzinfo=UTC), "Europe/Berlin")
     assert start == datetime(2026, 3, 28, 23, 0, tzinfo=UTC)  # CET midnight
     assert end == datetime(2026, 3, 29, 22, 0, tzinfo=UTC)  # CEST midnight (23 h day)
+
+
+async def test_test_chat_bot_not_configured_409(client, monkeypatch):
+    import sys
+    import types
+
+    from iler.engine.prompt import BotNotConfigured
+
+    async def fake_run_turn(*a, **k):
+        raise BotNotConfigured()
+
+    monkeypatch.setitem(sys.modules, "iler.engine.turn", types.SimpleNamespace(run_turn=fake_run_turn))
+    await login(client)
+    r = await client.post("/api/test-chat", json={"messages": [{"role": "user", "content": "Привет"}]},
+                          headers=csrf(client))
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "bot_not_configured"
