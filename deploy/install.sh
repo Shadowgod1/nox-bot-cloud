@@ -269,7 +269,7 @@ restore_backup() {
   name="$(basename "$RESTORE_FILE")"
   log "restoring backup $name"
   install -o "$CORE_UID" -g "$CORE_UID" -m 640 "$RESTORE_FILE" "$ILER_DIR_PATH/backups/$name"
-  dc exec -T iler-core python -m iler.backup.restore "$name" || die "restore failed"
+  dc exec -T iler-core python -m iler.backup restore "$name" || die "restore failed"
   dc restart iler-core evolution-api
   wait_healthy 300 iler-core || die "core is not healthy after restore"
   ok "backup restored"
