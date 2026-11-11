@@ -48,7 +48,14 @@ def _read(path: Path) -> tuple[dict, BotSettings]:
         raise TemplateInvalid(f"{path.name}: {exc}") from exc
     if not isinstance(doc, dict):
         raise TemplateInvalid(f"{path.name}: top level must be a mapping")
-    meta = doc.pop("meta", None) or {}
+    if "settings" in doc:
+        # Shipped format: top-level id/name/description, BotSettings under `settings`.
+        meta = {"name": doc.get("name"), "description": doc.get("description")}
+        doc = doc["settings"]
+        if not isinstance(doc, dict):
+            raise TemplateInvalid(f"{path.name}: settings must be a mapping")
+    else:
+        meta = doc.pop("meta", None) or {}
     if not isinstance(meta, dict):
         raise TemplateInvalid(f"{path.name}: meta must be a mapping")
     try:

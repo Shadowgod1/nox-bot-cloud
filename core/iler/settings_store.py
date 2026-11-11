@@ -32,6 +32,23 @@ def _decode(value: Any) -> Any:
     return value
 
 
+def _jsonable(value: Any) -> Any:
+    """model_dump(mode='python') but with datetimes/enums etc. converted; SecretStr kept as-is."""
+    if isinstance(value, BaseModel):
+        return {name: _jsonable(getattr(value, name)) for name in type(value).model_fields}
+    if isinstance(value, SecretStr):
+        return value
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    from pydantic_core import to_jsonable_python
+
+    return to_jsonable_python(value)
+
+
 async def get(key: str, model: type[T]) -> T:
     row = await get_pool().fetchrow("SELECT value FROM settings WHERE key = $1", key)
     if row is None:
@@ -40,7 +57,8 @@ async def get(key: str, model: type[T]) -> T:
 
 
 async def put(key: str, value: BaseModel) -> None:
-    payload = _encode(value.model_dump(mode="python"))
+    # Keep SecretStr objects (so _encode can encrypt them) but make everything else JSON-safe.
+    payload = _encode(_jsonable(value))
     await get_pool().execute(
         "INSERT INTO settings(key, value, updated_at) VALUES ($1, $2, now())"
         " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
