@@ -1,28 +1,40 @@
 import { useEffect, useState } from 'react'
 import { Zap } from 'lucide-react'
 import { api } from '../../api/client'
-import type { LlmProvider, LlmSettings, LlmTestResult } from '../../api/types'
+import type { AnthropicEffort, LlmProvider, LlmSettings, LlmTestResult } from '../../api/types'
 import { useLoad } from '../../hooks/useLoad'
 import { SecretInput, secretPayload, secretState, type SecretState } from '../../components/SecretInput'
 import { Button, CheckLine, type CheckView, ErrorState, Field, Input, Panel, Select, Spinner } from '../../components/ui'
 import { toast } from '../../components/toast'
 import { ru } from '../../i18n/ru'
 
-interface Form extends Omit<LlmSettings, 'openai_key' | 'gemini_key'> {
+import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_EFFORT_HINT, ANTHROPIC_EFFORTS, ANTHROPIC_MODEL_HINT } from './anthropic'
+
+interface Form extends Omit<LlmSettings, 'openai_key' | 'gemini_key' | 'anthropic_key'> {
   openai_key: SecretState
   gemini_key: SecretState
+  anthropic_key: SecretState
 }
 
 function toForm(s: LlmSettings): Form {
-  return { ...s, openai_key: secretState(s.openai_key), gemini_key: secretState(s.gemini_key) }
+  return {
+    ...s,
+    anthropic_model: s.anthropic_model ?? ANTHROPIC_DEFAULT_MODEL,
+    anthropic_effort: s.anthropic_effort ?? 'low',
+    openai_key: secretState(s.openai_key),
+    gemini_key: secretState(s.gemini_key),
+    anthropic_key: secretState(s.anthropic_key ?? null),
+  }
 }
 
 function toPayload(f: Form): LlmSettings {
   return {
     ...f,
     openai_fallback_model: f.openai_fallback_model?.trim() || null,
+    anthropic_model: f.anthropic_model.trim() || ANTHROPIC_DEFAULT_MODEL,
     openai_key: secretPayload(f.openai_key),
     gemini_key: secretPayload(f.gemini_key),
+    anthropic_key: secretPayload(f.anthropic_key),
   }
 }
 
@@ -90,6 +102,7 @@ export function LlmSettingsPanel() {
             <Select value={form.provider} onChange={(e) => set('provider', e.target.value as LlmProvider)}>
               <option value="openai">OpenAI</option>
               <option value="gemini">Google Gemini</option>
+              <option value="anthropic">Anthropic (Claude)</option>
             </Select>
           </Field>
           <Field label="Аварийный провайдер" hint="Используется, если основной недоступен. Нужен второй ключ.">
@@ -100,6 +113,7 @@ export function LlmSettingsPanel() {
               <option value="">Не использовать</option>
               <option value="openai">OpenAI</option>
               <option value="gemini">Google Gemini</option>
+              <option value="anthropic">Anthropic (Claude)</option>
             </Select>
           </Field>
         </div>
@@ -123,6 +137,33 @@ export function LlmSettingsPanel() {
           <Field label="Модель Gemini" className="md:max-w-[calc(50%-0.5rem)]">
             <Input value={form.gemini_model} onChange={(e) => set('gemini_model', e.target.value)} spellCheck={false} />
           </Field>
+        </fieldset>
+
+        <fieldset className="grid gap-4 rounded-[9px] border border-line p-4">
+          <legend className="px-1 text-[13px] font-semibold text-ink">Anthropic (Claude)</legend>
+          <SecretInput
+            label="Ключ Anthropic"
+            value={form.anthropic_key}
+            onChange={(v) => set('anthropic_key', v)}
+            placeholder="sk-ant-…"
+          />
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field label="Модель Claude" hint={ANTHROPIC_MODEL_HINT}>
+              <Input value={form.anthropic_model} onChange={(e) => set('anthropic_model', e.target.value)} spellCheck={false} />
+            </Field>
+            <Field label="Глубина размышлений" hint={ANTHROPIC_EFFORT_HINT}>
+              <Select
+                value={form.anthropic_effort}
+                onChange={(e) => set('anthropic_effort', e.target.value as AnthropicEffort)}
+              >
+                {ANTHROPIC_EFFORTS.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
         </fieldset>
 
         <div className="flex flex-wrap items-center gap-3">

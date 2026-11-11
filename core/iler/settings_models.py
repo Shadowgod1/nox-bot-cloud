@@ -70,13 +70,17 @@ class BotSettings(BaseModel):
 
 
 class LlmSettings(BaseModel):
-    provider: Literal["openai", "gemini"] = "openai"
+    provider: Literal["openai", "gemini", "anthropic"] = "openai"
     openai_key: SecretStr | None = None
     openai_model: str = "gpt-4.1-mini"
     openai_fallback_model: str | None = None
     gemini_key: SecretStr | None = None
     gemini_model: str = "gemini-2.5-flash"
-    emergency_provider: Literal["openai", "gemini"] | None = None
+    anthropic_key: SecretStr | None = None
+    anthropic_model: str = "claude-opus-5-5"
+    # WhatsApp chat: low effort keeps replies fast; the owner can raise it
+    anthropic_effort: Literal["low", "medium", "high"] = "low"
+    emergency_provider: Literal["openai", "gemini", "anthropic"] | None = None
 
 
 class SmtpSettings(BaseModel):

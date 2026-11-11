@@ -11,6 +11,9 @@ const llm = {
   openai_fallback_model: null,
   gemini_key: null,
   gemini_model: 'gemini-2.5-flash',
+  anthropic_key: '••••9876',
+  anthropic_model: 'claude-opus-5-5',
+  anthropic_effort: 'low',
   emergency_provider: null,
 }
 
@@ -69,5 +72,50 @@ describe('settings form with masked secret', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
     await waitFor(() => expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(1))
     expect(lastPutBody(fetchMock).openai_key).toBeNull()
+  })
+})
+
+describe('Anthropic (Claude) settings', () => {
+  it('offers Claude as primary and emergency provider and saves model, effort and masked key', async () => {
+    const fetchMock = mockApi({
+      'GET /api/settings/llm': llm,
+      'PUT /api/settings/llm': (init: RequestInit) => ({ ...llm, ...JSON.parse(String(init.body)) }),
+    })
+    render(<LlmSettingsPanel />)
+    const model = await screen.findByLabelText('Модель Claude')
+    expect(model).toHaveValue('claude-opus-5-5')
+    expect(screen.getByText('••••9876')).toBeInTheDocument()
+    expect(screen.getByText('claude-sonnet-5-5 — дешевле, claude-haiku-5-5 — самый дешёвый')).toBeInTheDocument()
+
+    await userEvent.selectOptions(screen.getByLabelText('Основной провайдер'), 'Anthropic (Claude)')
+    await userEvent.selectOptions(screen.getByLabelText('Аварийный провайдер'), 'OpenAI')
+    await userEvent.selectOptions(screen.getByLabelText('Глубина размышлений'), 'Высокая')
+    await userEvent.clear(model)
+    await userEvent.type(model, 'claude-haiku-5-5')
+    await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+
+    await waitFor(() => expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(1))
+    const body = lastPutBody(fetchMock)
+    expect(body).toMatchObject({
+      provider: 'anthropic',
+      emergency_provider: 'openai',
+      anthropic_model: 'claude-haiku-5-5',
+      anthropic_effort: 'high',
+      anthropic_key: '••••9876', // masked = unchanged
+    })
+  })
+
+  it('replaces the Anthropic key', async () => {
+    const fetchMock = mockApi({
+      'GET /api/settings/llm': llm,
+      'PUT /api/settings/llm': (init: RequestInit) => ({ ...llm, ...JSON.parse(String(init.body)) }),
+    })
+    render(<LlmSettingsPanel />)
+    await screen.findByText('••••9876')
+    await userEvent.click(screen.getByRole('button', { name: 'Заменить ключ Anthropic' }))
+    await userEvent.type(screen.getByLabelText('Ключ Anthropic'), 'sk-ant-new-1')
+    await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+    await waitFor(() => expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(1))
+    expect(lastPutBody(fetchMock).anthropic_key).toBe('sk-ant-new-1')
   })
 })

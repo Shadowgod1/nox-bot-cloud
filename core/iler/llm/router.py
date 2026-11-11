@@ -43,25 +43,34 @@ def set_provider_factory(factory: ProviderFactory | None) -> None:
     _factory_override = factory
 
 
+_KEY_FIELDS = {"openai": "openai_key", "gemini": "gemini_key", "anthropic": "anthropic_key"}
+_MODEL_FIELDS = {"openai": "openai_model", "gemini": "gemini_model", "anthropic": "anthropic_model"}
+
+
 def _default_factory(name: str, settings: LlmSettings) -> LlmProvider:
-    secret = settings.openai_key if name == "openai" else settings.gemini_key if name == "gemini" else None
-    if name not in ("openai", "gemini"):
+    if name not in _KEY_FIELDS:
         raise LlmError(f"unknown LLM provider: {name}", retryable=False)
+    secret = getattr(settings, _KEY_FIELDS[name])
     key = secret.get_secret_value() if secret is not None else ""
     if not key:
         raise LlmError(f"{name}: API key is not configured", retryable=False)
-    cached = _provider_cache.get((name, key))
-    if cached is not None:
-        return cached
-    if name == "openai":
-        from iler.llm.openai_provider import OpenAIProvider
+    provider = _provider_cache.get((name, key))
+    if provider is None:
+        if name == "openai":
+            from iler.llm.openai_provider import OpenAIProvider
 
-        provider: LlmProvider = OpenAIProvider(key)
-    else:
-        from iler.llm.gemini_provider import GeminiProvider
+            provider = OpenAIProvider(key)
+        elif name == "gemini":
+            from iler.llm.gemini_provider import GeminiProvider
 
-        provider = GeminiProvider(key)
-    _provider_cache[(name, key)] = provider
+            provider = GeminiProvider(key)
+        else:
+            from iler.llm.anthropic_provider import AnthropicProvider
+
+            provider = AnthropicProvider(key)
+        _provider_cache[(name, key)] = provider
+    if name == "anthropic":
+        provider.effort = settings.anthropic_effort  # type: ignore[attr-defined]
     return provider
 
 
@@ -77,7 +86,7 @@ def _make_provider(name: str, settings: LlmSettings) -> LlmProvider:
 
 
 def _model_for(name: str, settings: LlmSettings) -> str:
-    return settings.openai_model if name == "openai" else settings.gemini_model
+    return getattr(settings, _MODEL_FIELDS.get(name, "openai_model"))
 
 
 def _chain(settings: LlmSettings) -> list[tuple[str, str]]:

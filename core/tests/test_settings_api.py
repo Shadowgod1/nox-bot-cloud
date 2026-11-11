@@ -65,6 +65,24 @@ async def test_put_settings_keeps_secret_when_masked_value_sent(owner):
     assert (await settings_store.get("llm", LlmSettings)).gemini_key is None
 
 
+async def test_settings_llm_anthropic_key_masked_and_kept(owner):
+    ant = "sk-ant-api03-secret-zz9876"
+    await settings_store.put("llm", LlmSettings(provider="anthropic", anthropic_key=SecretStr(ant)))
+    r = await owner.get("/api/settings/llm")
+    body = r.json()
+    assert body["anthropic_key"] == "••••9876" and ant not in r.text
+    assert body["anthropic_model"] == "claude-opus-5-5" and body["anthropic_effort"] == "low"
+
+    r = await owner.put("/api/settings/llm", json={**body, "anthropic_effort": "high"}, headers=csrf(owner))
+    assert r.status_code == 200, r.text
+    assert ant not in r.text
+    stored = await settings_store.get("llm", LlmSettings)
+    assert stored.anthropic_key.get_secret_value() == ant and stored.anthropic_effort == "high"
+
+    r = await owner.put("/api/settings/llm", json={**body, "anthropic_effort": "max"}, headers=csrf(owner))
+    assert r.status_code == 422
+
+
 async def test_notify_smtp_password_masked_and_kept(owner):
     payload = {
         "admin_phones": ["77011234567"],

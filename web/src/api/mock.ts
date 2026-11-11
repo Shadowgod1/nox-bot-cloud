@@ -42,7 +42,7 @@ interface State {
   messages: Message[]
   bookings: Booking[]
   bot: BotSettings
-  llm: LlmSettings & { _openai: string | null; _gemini: string | null }
+  llm: LlmSettings & { _openai: string | null; _gemini: string | null; _anthropic: string | null }
   notify: NotifySettings & { _smtpPass: string | null }
   senet: SenetSettings & { _key: string | null }
   backups: BackupInfo[]
@@ -104,7 +104,7 @@ const s: State = {
     booking_request_timeout_min: 15,
     booking_timeout_message: 'Администратор скоро свяжется с вами по заявке.',
   },
-  llm: { provider: 'openai', openai_key: null, openai_model: 'gpt-4.1-mini', openai_fallback_model: null, gemini_key: null, gemini_model: 'gemini-2.5-flash', emergency_provider: null, _openai: 'sk-mock-1234abcd', _gemini: null },
+  llm: { provider: 'openai', openai_key: null, openai_model: 'gpt-4.1-mini', openai_fallback_model: null, gemini_key: null, gemini_model: 'gemini-2.5-flash', anthropic_key: null, anthropic_model: 'claude-opus-5-5', anthropic_effort: 'low', emergency_provider: null, _openai: 'sk-mock-1234abcd', _gemini: null, _anthropic: null },
   notify: { admin_phones: ['77015550000'], admin_group_jid: null, smtp: null, _smtpPass: null },
   senet: { enabled: false, orgname: null, app_key: null, _key: null },
   backups: [
@@ -154,7 +154,7 @@ const convOut = (c: ConvState): Conversation => ({ ...c, last_message: lastMessa
 const convRow = (c: ConvState): ConversationRow => ({ ...c, created_at: ago(60 * 24 * 30) })
 const sortKey = (c: ConvState) => (c.last_message_at ? Date.parse(c.last_message_at) * 1000 : 0)
 
-const llmOut = (): LlmSettings => ({ ...strip(s.llm), openai_key: mask(s.llm._openai), gemini_key: mask(s.llm._gemini) })
+const llmOut = (): LlmSettings => ({ ...strip(s.llm), openai_key: mask(s.llm._openai), gemini_key: mask(s.llm._gemini), anthropic_key: mask(s.llm._anthropic) })
 const notifyOut = (): NotifySettings => ({ ...strip(s.notify), smtp: s.notify.smtp ? { ...s.notify.smtp, password: mask(s.notify._smtpPass) } : null })
 const senetOut = (): SenetSettings => ({ ...strip(s.senet), app_key: mask(s.senet._key) })
 
@@ -377,7 +377,8 @@ on('GET', '/api/settings/llm', () => json(llmOut()))
 on('PUT', '/api/settings/llm', (_m, b) => {
   s.llm._openai = applySecret(s.llm._openai, b.openai_key)
   s.llm._gemini = applySecret(s.llm._gemini, b.gemini_key)
-  const { openai_key: _a, gemini_key: _g, ...rest } = b
+  s.llm._anthropic = applySecret(s.llm._anthropic, b.anthropic_key)
+  const { openai_key: _a, gemini_key: _g, anthropic_key: _c, ...rest } = b
   Object.assign(s.llm, rest)
   return json(llmOut())
 })
@@ -385,7 +386,12 @@ on('POST', '/api/settings/llm/test', async (_m, b) => {
   await sleep(700)
   // Unsaved values from the body win; masked / omitted keys fall back to the stored ones.
   const provider = (b.provider as string | undefined) ?? s.llm.provider
-  const key = provider === 'openai' ? applySecret(s.llm._openai, b.openai_key) : applySecret(s.llm._gemini, b.gemini_key)
+  const key =
+    provider === 'openai'
+      ? applySecret(s.llm._openai, b.openai_key)
+      : provider === 'anthropic'
+        ? applySecret(s.llm._anthropic, b.anthropic_key)
+        : applySecret(s.llm._gemini, b.gemini_key)
   if (!key) return json({ ok: false, error: `${provider} API key is not configured` })
   if (key.includes('bad')) return json({ ok: false, error: 'Incorrect API key provided' })
   return json({ ok: true })
