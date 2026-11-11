@@ -1,0 +1,59 @@
+import json
+from pathlib import Path
+
+import pytest
+from pydantic import SecretStr
+
+from iler import crypto, settings_store
+from iler.db import migrate
+from iler.settings_models import LlmSettings
+from iler.tools import registry
+
+SPEC_TABLES = {
+    "users", "settings", "wa_instance", "conversations", "messages", "inbound_events",
+    "outbound_intents", "booking_requests", "ai_requests", "tool_calls", "audit_log",
+}
+ROUTES = json.loads((Path(__file__).parent / "route_list.json").read_text(encoding="utf-8"))
+
+
+async def test_health_ok(client):
+    r = await client.get("/health")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+
+
+async def test_migrations_idempotent(pool):
+    assert await migrate.run(pool) == []
+    rows = await pool.fetch("SELECT tablename FROM pg_tables WHERE schemaname='public'")
+    assert SPEC_TABLES <= {r["tablename"] for r in rows}
+
+
+def test_crypto_roundtrip():
+    token = crypto.encrypt("секрет")
+    assert token != "секрет" and token.startswith("enc:v1:")
+    assert crypto.decrypt(token) == "секрет"
+
+
+async def test_settings_secret_encrypted_at_rest(pool):
+    await settings_store.put("llm", LlmSettings(openai_key=SecretStr("sk-test-123")))
+    raw = await pool.fetchval("SELECT value::text FROM settings WHERE key='llm'")
+    assert "sk-test-123" not in raw
+    loaded = await settings_store.get("llm", LlmSettings)
+    assert loaded.openai_key.get_secret_value() == "sk-test-123"
+
+
+async def test_settings_default_when_missing(pool):
+    loaded = await settings_store.get("llm", LlmSettings)
+    assert loaded.provider == "openai" and loaded.openai_key is None
+
+
+@pytest.mark.parametrize("method,path", ROUTES)
+async def test_stub_routes_exist(client, method, path):
+    url = path.replace("{", "").replace("}", "")  # fill params with their names
+    r = await client.request(method.upper(), url)
+    assert r.status_code != 404 and r.status_code != 405, f"{method} {path} missing"
+
+
+def test_registry_loads_plugins():
+    registry.load_plugins()
+    assert isinstance(registry.all_tools(), list)
