@@ -13,7 +13,9 @@ from iler.whatsapp.base import IncomingMessage
 
 log = logging.getLogger("iler.bookings.admin_reply")
 
-PATTERN = re.compile(r"^[+-]\s*#?(\d+)\s*(.*)$", re.DOTALL)
+# Sign glued to the id (optionally "#"), the id is 1-6 digits followed by whitespace or the end. So chatter like
+# "-20% на ПК", "- 5 минут" or a phone number "+77011234567" never decides a booking.
+PATTERN = re.compile(r"^([+-])#?(\d{1,6})(?=\s|$)\s*(.*)$", re.DOTALL)
 _STATUS_RU = {"pending": "ожидает", "confirmed": "подтверждена", "rejected": "отклонена", "expired": "истекла"}
 
 
@@ -22,8 +24,8 @@ def parse(text: str) -> tuple[str, int, str] | None:
     m = PATTERN.match((text or "").strip())
     if not m:
         return None
-    status = "confirmed" if text.strip().startswith("+") else "rejected"
-    return status, int(m.group(1)), m.group(2).strip()
+    status = "confirmed" if m.group(1) == "+" else "rejected"
+    return status, int(m.group(2)), m.group(3).strip()
 
 
 async def handle_admin_message(msg: IncomingMessage) -> bool:

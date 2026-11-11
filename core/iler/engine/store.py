@@ -105,6 +105,21 @@ def publish_conversation(row) -> None:
     events.publish("conversation.updated", {"conversation": conv_dict(row)})
 
 
+async def has_client_message_after(conversation_id: int, message_id: int) -> bool:
+    """A client message newer than `message_id` exists (it arrived while a turn was running)."""
+    return bool(await get_pool().fetchval(
+        "SELECT 1 FROM messages WHERE conversation_id = $1 AND author = 'client' AND id > $2 LIMIT 1",
+        conversation_id, message_id,
+    ))
+
+
+async def last_bot_message(conversation_id: int):
+    return await get_pool().fetchrow(
+        f"SELECT {MSG_COLS} FROM messages WHERE conversation_id = $1 AND author = 'bot' ORDER BY id DESC LIMIT 1",
+        conversation_id,
+    )
+
+
 async def recent_messages(conversation_id: int, limit: int) -> list:
     rows = await get_pool().fetch(
         f"SELECT {MSG_COLS} FROM messages WHERE conversation_id = $1 ORDER BY id DESC LIMIT $2",

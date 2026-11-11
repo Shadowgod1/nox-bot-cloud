@@ -309,3 +309,213 @@ async def test_dry_run_uses_history_and_writes_nothing(env, pool):
     assert env.gw.sent == []
     assert await pool.fetchval("SELECT count(*) FROM messages") == 0
     assert _user_texts(env.llm.calls[0]) == ["Привет"]
+
+
+# --- review fixes -------------------------------------------------------------------------------------
+
+
+class _SecondMessageDuringTurn(FakeLLM):
+    """First call: the client writes again while the LLM is "thinking"."""
+
+    async def complete(self, messages, tools, model):
+        self.calls.append({"messages": list(messages), "tools": list(tools), "model": model})
+        if len(self.calls) == 1:
+            await handler.handle_incoming(make_msg("и ещё вопрос: есть VIP?"))
+            return LlmResponse(text="ответ на первое")
+        return LlmResponse(text="ответ на оба")
+
+
+async def test_message_during_turn_gets_answered(env, pool):
+    env.llm = _SecondMessageDuringTurn()
+    await handler.handle_incoming(make_msg("Привет, сколько стоит час?"))
+    await env.idle()
+    await env.idle()
+    assert len(env.llm.calls) == 2
+    joined = "\n".join(_user_texts(env.llm.calls[1]))
+    assert "сколько стоит час" in joined and "есть VIP" in joined
+    assert env.gw.texts(CLIENT_JID) == ["ответ на оба"]
+    rows = await pool.fetch("SELECT author FROM messages ORDER BY id")
+    assert [r["author"] for r in rows] == ["client", "client", "bot"]
+
+
+async def test_turn_exception_retried_with_backoff(env, pool, monkeypatch):
+    real = turn.run_turn
+    calls = []
+
+    async def flaky(cid, **kw):
+        calls.append(cid)
+        if len(calls) == 1:
+            raise RuntimeError("db hiccup")
+        return await real(cid, **kw)
+
+    monkeypatch.setattr(turn, "run_turn", flaky)
+    await handler.handle_incoming(make_msg("Привет"))
+    await env.idle()
+    assert len(calls) == 2
+    assert env.gw.texts(CLIENT_JID) == ["Здравствуйте! Чем помочь?"]
+
+
+async def test_turn_exception_gives_up_after_three_attempts(env, pool, monkeypatch):
+    calls = []
+
+    async def broken(cid, **kw):
+        calls.append(cid)
+        raise RuntimeError("always")
+
+    monkeypatch.setattr(turn, "run_turn", broken)
+    await handler.handle_incoming(make_msg("Привет"))
+    await env.idle()
+    assert len(calls) == 3
+    assert env.gw.sent == []
+
+
+async def _unanswered(pool, jid=CLIENT_JID, phone="77010000001", age=timedelta(minutes=2)):
+    cid = await pool.fetchval(
+        "INSERT INTO conversations(chat_jid, phone, last_message_at) VALUES ($1, $2, now()) RETURNING id", jid, phone,
+    )
+    await pool.execute(
+        "INSERT INTO messages(conversation_id, direction, author, text, created_at)"
+        " VALUES ($1, 'in', 'client', 'Есть места?', $2)", cid, datetime.now(UTC) - age,
+    )
+    return cid
+
+
+async def test_periodic_sweeper_recovers_lost_reply_once(env, pool):
+    cid = await _unanswered(pool)
+    assert await handler.sweep_unanswered() == 1
+    await env.idle()
+    assert env.gw.texts(CLIENT_JID) == ["Здравствуйте! Чем помочь?"]
+    # answered now: further sweeps do nothing, and a re-run of the same turn never double-sends
+    assert await handler.sweep_unanswered() == 0
+    await pool.execute("DELETE FROM messages WHERE author = 'bot'")
+    await turn.run_turn(cid)
+    assert env.gw.texts(CLIENT_JID) == ["Здравствуйте! Чем помочь?"]
+
+
+async def test_sweeper_skips_pending_buffer_and_fresh_messages(env, pool, monkeypatch):
+    from iler.engine import buffer
+
+    await _unanswered(pool)
+    await _unanswered(pool, jid="77010000002@s.whatsapp.net", phone="77010000002", age=timedelta(seconds=1))
+    monkeypatch.setattr(buffer, "pending", lambda key: key == CLIENT_JID)
+    assert await handler.sweep_unanswered() == 0
+    await env.idle()
+    assert env.gw.sent == []
+
+
+async def test_sweeper_gives_up_on_a_message_after_a_few_sweeps(env, pool, monkeypatch):
+    calls = []
+
+    async def broken(cid, **kw):
+        calls.append(cid)
+        raise RuntimeError("always")
+
+    monkeypatch.setattr(turn, "run_turn", broken)
+    await _unanswered(pool)
+    scheduled = []
+    for _ in range(handler.MAX_SWEEPS_PER_MESSAGE + 2):
+        scheduled.append(await handler.sweep_unanswered())
+        await env.idle()
+    assert sum(scheduled) == handler.MAX_SWEEPS_PER_MESSAGE
+
+
+def _bad_hours(day) -> WeeklyHours:
+    return WeeklyHours.model_construct(always_open=False, mon=day, tue=day, wed=day, thu=day, fri=day,
+                                       sat=day, sun=day)
+
+
+def test_invalid_hours_treated_as_open():
+    hours = _bad_hours(DayHours.model_construct(open="", close="", closed=False))
+    assert admission.within_hours(hours, datetime(2026, 11, 11, 12, 0))
+    assert admission.within_hours(hours, datetime(2026, 11, 11, 3, 0))
+    hours = _bad_hours(DayHours.model_construct(open="ab:cd", close="25", closed=False))
+    assert admission.within_hours(hours, datetime(2026, 11, 11, 12, 0))
+
+
+async def test_invalid_hours_do_not_crash_turn(env, monkeypatch):
+    from iler import settings_store
+
+    real = settings_store.load_all
+
+    async def patched():
+        s = await real()
+        s.bot.hours = _bad_hours(DayHours.model_construct(open="", close="", closed=False))
+        return s
+
+    monkeypatch.setattr(settings_store, "load_all", patched)
+    await handler.handle_incoming(make_msg("Привет"))
+    await env.idle()
+    assert env.gw.texts(CLIENT_JID) == ["Здравствуйте! Чем помочь?"]
+
+
+async def test_after_hours_fixed_message_sent_once_per_12h(env, pool):
+    await env.set_bot(hours=_closed_hours(), after_hours_mode="fixed_message",
+                      after_hours_message="Мы закрыты, ответим утром")
+    await handler.handle_incoming(make_msg("Вы работаете?"))
+    await env.idle()
+    await handler.handle_incoming(make_msg("Алло?"))
+    await env.idle()
+    assert env.gw.texts(CLIENT_JID) == ["Мы закрыты, ответим утром"]
+    # 13 hours later the text goes out again
+    await pool.execute("UPDATE messages SET created_at = now() - interval '13 hours' WHERE author = 'bot'")
+    await handler.handle_incoming(make_msg("Доброе утро?"))
+    await env.idle()
+    assert env.gw.texts(CLIENT_JID) == ["Мы закрыты, ответим утром"] * 2
+
+
+async def test_handover_with_empty_text_sends_polite_phrase(env, pool):
+    from iler.llm.base import ToolCall
+
+    await env.set_notify(admin_phones=[ADMIN_PHONE])
+    env.llm = FakeLLM([
+        LlmResponse(text="", tool_calls=[ToolCall(id="h1", name="handover_to_operator", arguments={"reason": "жалоба"})]),
+        LlmResponse(text=""),
+    ])
+    await handler.handle_incoming(make_msg("Позовите человека"))
+    await env.idle()
+    assert turn.HANDOVER_REPLY == "Передаю ваш вопрос администратору, он скоро ответит."
+    assert env.gw.texts(CLIENT_JID) == [turn.HANDOVER_REPLY]
+    assert (await _conv(pool))["status"] == "needs_operator"
+
+
+async def test_bot_not_configured_does_not_reply(env, pool, monkeypatch):
+    from types import SimpleNamespace
+
+    from iler import settings_store
+
+    real = settings_store.load_all
+
+    async def patched():
+        s = await real()
+        fields = {k: getattr(s.bot, k) for k in type(s.bot).model_fields}
+        fields["prompt"] = "   "  # works before and after BotSettings gains a `prompt` field
+        bot = SimpleNamespace(**fields)
+        return SimpleNamespace(bot=bot, llm=s.llm, notify=s.notify, senet=s.senet)
+
+    monkeypatch.setattr(settings_store, "load_all", patched)
+    await handler.handle_incoming(make_msg("Привет"))
+    await env.idle()
+    assert env.llm.calls == []
+    assert env.gw.sent == []
+
+
+def test_is_admin_normalizes_local_8_prefix():
+    notify = NotifySettings(admin_phones=["8 701 000 00 99"])
+    assert admission.is_admin(ADMIN_JID, notify)
+    assert admission.is_admin("77010000099", notify)
+    notify = NotifySettings(admin_phones=["+7 701 000 00 99"])
+    assert admission.is_admin("87010000099", notify)
+    assert not admission.is_admin("87010000098", notify)
+    assert admission.normalize_phone("87011234567") == "77011234567"
+    assert admission.normalize_phone("8701") == "8701"
+
+
+def test_lid_chat_without_phone_logged_once(caplog):
+    import logging
+
+    notify = NotifySettings(admin_phones=[ADMIN_PHONE])
+    msg = make_msg("+1", phone="", jid="123456789012345@lid")
+    with caplog.at_level(logging.INFO, logger="iler.engine.admission"):
+        assert not admission.is_admin_chat(msg, notify)
+        assert not admission.is_admin_chat(msg, notify)
+    assert sum("123456789012345@lid" in r.getMessage() for r in caplog.records) == 1

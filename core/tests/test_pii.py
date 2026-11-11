@@ -37,6 +37,16 @@ def test_same_value_same_placeholder_across_messages():
     assert "[PHONE_1]" in a and "[PHONE_1]" in b and "[PHONE_2]" in b
 
 
+def test_one_line_sanitizes_and_truncates():
+    from iler.engine.pii import one_line
+
+    assert one_line("a\nb\r\n\tc\x00d‮e​f", 100) == "a b c d e f"
+    assert one_line("«цитата»", 100) == '"цитата"'
+    assert one_line("x" * 50, 10) == "x" * 9 + "…"
+    assert len(one_line("y" * 500, 300)) == 300
+    assert one_line(None, 10) == "" and one_line(3, 10) == "3"
+
+
 def test_restore_nested_args():
     m = PiiMasker()
     m.mask("я Айдар, +77011234567")
