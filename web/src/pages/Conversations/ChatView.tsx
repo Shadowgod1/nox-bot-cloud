@@ -1,0 +1,244 @@
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Link } from 'react-router'
+import { ArrowLeft, Bot, Hand, Send } from 'lucide-react'
+import { api } from '../../api/client'
+import type { Conversation, Message, Page } from '../../api/types'
+import { useEvent } from '../../hooks/useEvents'
+import { Button, EmptyState, ErrorState, Spinner, cx } from '../../components/ui'
+import { formatDateTime, formatTime, ru } from '../../i18n/ru'
+import { StatusBadge } from './StatusBadge'
+import { normalizeMessageEvent } from './normalize'
+
+interface Props {
+  conversationId: number
+  conversation: Conversation | null
+  onConversation: (c: Partial<Conversation> & { id: number }) => void
+}
+
+function mergeMessages(a: Message[], b: Message[]): Message[] {
+  const map = new Map<number, Message>()
+  for (const m of a) map.set(m.id, m)
+  for (const m of b) map.set(m.id, m)
+  return [...map.values()].sort((x, y) => x.id - y.id)
+}
+
+function dayKey(iso: string) {
+  return new Date(iso).toDateString()
+}
+
+const dayFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' })
+
+export function ChatView({ conversationId, conversation, onConversation }: Props) {
+  const [messages, setMessages] = useState<Message[]>([])
+  const [cursor, setCursor] = useState<number | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [acting, setActing] = useState(false)
+  const logRef = useRef<HTMLDivElement>(null)
+  const stickToBottom = useRef(true)
+
+  async function load() {
+    setLoading(true)
+    setError(null)
+    try {
+      const page = await api.get<Page<Message>>(`/api/conversations/${conversationId}/messages`, { silent: true })
+      setMessages((prev) => mergeMessages(prev, page.items))
+      setCursor(page.next_cursor)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId])
+
+  async function loadOlder() {
+    if (cursor == null) return
+    setLoadingOlder(true)
+    stickToBottom.current = false
+    try {
+      const page = await api.get<Page<Message>>(`/api/conversations/${conversationId}/messages?cursor=${cursor}`)
+      setMessages((prev) => mergeMessages(page.items, prev))
+      setCursor(page.next_cursor)
+    } catch {
+      /* toast */
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
+
+  useEvent('message.new', (data) => {
+    const m = normalizeMessageEvent(data)
+    if (m.conversation_id !== conversationId) return
+    const el = logRef.current
+    stickToBottom.current = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 120
+    setMessages((prev) => mergeMessages(prev, [m]))
+  })
+
+  useLayoutEffect(() => {
+    const el = logRef.current
+    if (el && stickToBottom.current && typeof el.scrollTo === 'function') el.scrollTo({ top: el.scrollHeight })
+  }, [messages])
+
+  async function send() {
+    const t = text.trim()
+    if (!t) return
+    setSending(true)
+    stickToBottom.current = true
+    try {
+      const res = await api.post<Message | undefined>(`/api/conversations/${conversationId}/send`, { text: t })
+      if (res && typeof res === 'object' && 'id' in res) setMessages((prev) => mergeMessages(prev, [res]))
+      setText('')
+    } catch {
+      /* toast; keep the draft */
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function act(kind: 'takeover' | 'release') {
+    setActing(true)
+    try {
+      const res = await api.post<Conversation | undefined>(`/api/conversations/${conversationId}/${kind}`)
+      onConversation(
+        res && typeof res === 'object' && 'id' in res
+          ? res
+          : { id: conversationId, status: kind === 'takeover' ? 'paused' : 'active', paused_until: null },
+      )
+    } catch {
+      /* toast */
+    } finally {
+      setActing(false)
+    }
+  }
+
+  const botActive = !conversation || conversation.status === 'active'
+
+  return (
+    <>
+      <header className="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-5 py-3">
+        <Link to="/conversations" className="-ml-1 rounded p-1 text-ink-2 hover:bg-sunken md:hidden" aria-label="К списку диалогов">
+          <ArrowLeft className="size-4" aria-hidden />
+        </Link>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-[15px] font-semibold text-ink">
+            {conversation ? conversation.name || conversation.phone : `Диалог #${conversationId}`}
+          </h2>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[13px] text-ink-2">
+            {conversation?.name && <span className="tabular">{conversation.phone}</span>}
+            {conversation && <StatusBadge conversation={conversation} />}
+          </div>
+        </div>
+        {botActive ? (
+          <Button onClick={() => act('takeover')} loading={acting} icon={<Hand className="size-4" aria-hidden />}>
+            Перехватить
+          </Button>
+        ) : (
+          <Button onClick={() => act('release')} loading={acting} icon={<Bot className="size-4" aria-hidden />}>
+            Вернуть боту
+          </Button>
+        )}
+      </header>
+
+      <div ref={logRef} role="log" aria-live="polite" aria-label="Сообщения" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        {loading && messages.length === 0 ? (
+          <Spinner />
+        ) : error && messages.length === 0 ? (
+          <ErrorState message={error} onRetry={load} />
+        ) : messages.length === 0 ? (
+          <EmptyState title="Сообщений нет">В этом диалоге ещё нет сообщений.</EmptyState>
+        ) : (
+          <div className="mx-auto flex max-w-[760px] flex-col gap-1.5">
+            {cursor != null && (
+              <div className="mb-2 flex justify-center">
+                <Button size="sm" variant="ghost" loading={loadingOlder} onClick={loadOlder}>
+                  Показать более ранние
+                </Button>
+              </div>
+            )}
+            {messages.map((m, i) => {
+              const prev = messages[i - 1]
+              const newDay = !prev || dayKey(prev.created_at) !== dayKey(m.created_at)
+              const sameAuthor = prev && !newDay && prev.author === m.author
+              return (
+                <div key={m.id} className="contents">
+                  {newDay && (
+                    <div className="my-3 text-center text-[12px] text-ink-3" role="separator">
+                      {dayFmt.format(new Date(m.created_at))}
+                    </div>
+                  )}
+                  <MessageBubble m={m} showAuthor={!sameAuthor} />
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      <form
+        className="border-t border-line bg-surface px-5 py-3"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void send()
+        }}
+      >
+        <div className="mx-auto flex max-w-[760px] items-end gap-2">
+          <label htmlFor="composer" className="sr-only">
+            Ответ клиенту
+          </label>
+          <textarea
+            id="composer"
+            rows={2}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault()
+                void send()
+              }
+            }}
+            placeholder={botActive ? 'Ответ от оператора. Бот встанет на паузу.' : 'Ответ клиенту'}
+            className="field-control max-h-40 min-h-[42px] resize-none leading-snug"
+          />
+          <Button type="submit" variant="primary" loading={sending} disabled={!text.trim()} icon={<Send className="size-4" aria-hidden />}>
+            Отправить
+          </Button>
+        </div>
+        <p className="mx-auto mt-1.5 max-w-[760px] text-[12px] text-ink-3">Ctrl + Enter — отправить</p>
+      </form>
+    </>
+  )
+}
+
+function MessageBubble({ m, showAuthor }: { m: Message; showAuthor: boolean }) {
+  const mine = m.direction === 'out'
+  if (m.author === 'system') {
+    return <p className="my-1 text-center text-[12px] text-ink-3">{m.text}</p>
+  }
+  return (
+    <div className={cx('flex flex-col', mine ? 'items-end' : 'items-start', showAuthor && 'mt-2')}>
+      {showAuthor && mine && (
+        <span className="mb-0.5 px-1 text-[12px] font-medium text-ink-3">{ru.author[m.author]}</span>
+      )}
+      <div
+        title={formatDateTime(m.created_at)}
+        className={cx(
+          'max-w-[min(560px,85%)] rounded-[12px] px-3.5 py-2 text-sm leading-relaxed break-words whitespace-pre-wrap',
+          !mine && 'rounded-tl-[4px] border border-line bg-surface text-ink',
+          mine && m.author === 'bot' && 'rounded-tr-[4px] bg-accent-soft text-ink',
+          mine && m.author === 'operator' && 'rounded-tr-[4px] bg-[oklch(93%_0.03_250)] text-ink',
+        )}
+      >
+        {m.text || <span className="text-ink-3 italic">вложение</span>}
+        <span className="tabular ml-2 inline-block translate-y-0.5 text-[11px] text-ink-3">{formatTime(m.created_at)}</span>
+      </div>
+    </div>
+  )
+}
