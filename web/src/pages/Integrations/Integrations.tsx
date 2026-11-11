@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Zap } from 'lucide-react'
 import { api } from '../../api/client'
-import type { CheckResult, NotifySettings, SenetSettings, SmtpSettings } from '../../api/types'
+import type { NotifySettings, SenetSettings, SenetTestRequest, SenetTestResult, SmtpSettings } from '../../api/types'
+import { useAuth } from '../../hooks/useAuth'
 import { useLoad } from '../../hooks/useLoad'
 import { PageBody } from '../../components/Layout'
 import { SecretInput, secretPayload, secretState, type SecretState } from '../../components/SecretInput'
-import { Button, CheckLine, ErrorState, Field, Input, PageHeader, Panel, Spinner, Switch, Textarea } from '../../components/ui'
+import { Button, CheckLine, type CheckView, ErrorState, Field, Input, PageHeader, Panel, Spinner, Switch, Textarea } from '../../components/ui'
 import { toast } from '../../components/toast'
 import { ru } from '../../i18n/ru'
 
@@ -29,14 +30,17 @@ interface SenetForm {
   app_key: SecretState
 }
 
-const toSenetForm = (s: SenetSettings): SenetForm => ({ enabled: s.enabled, orgname: s.orgname ?? '', app_key: secretState(s.app_key) })
+const NOT_CONFIGURED = 'укажите имя организации и ключ приложения'
+
+const toSenetForm =(s: SenetSettings): SenetForm => ({ enabled: s.enabled, orgname: s.orgname ?? '', app_key: secretState(s.app_key) })
 
 function SenetPanel() {
   const { data, error, loading, reload } = useLoad(() => api.get<SenetSettings>('/api/integrations/senet', { silent: true }))
   const [form, setForm] = useState<SenetForm | null>(null)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
-  const [check, setCheck] = useState<CheckResult | null>(null)
+  const [check, setCheck] = useState<CheckView | null>(null)
+  const { isOwner } = useAuth()
 
   useEffect(() => {
     if (data) setForm(toSenetForm(data))
@@ -65,10 +69,23 @@ function SenetPanel() {
   }
 
   async function test() {
-    setTesting(true)
+    if (!form) return
     setCheck(null)
+    const key = secretPayload(form.app_key)
+    if (!form.orgname.trim() || !key) {
+      setCheck({ ok: false, message: NOT_CONFIGURED })
+      return
+    }
+    setTesting(true)
     try {
-      if (await save()) setCheck(await api.post<CheckResult>('/api/integrations/senet/test'))
+      // Core tests the unsaved values (a masked key falls back to the stored one); nothing is saved.
+      const body: SenetTestRequest = { orgname: form.orgname.trim(), app_key: key }
+      const r = await api.post<SenetTestResult>('/api/integrations/senet/test', body)
+      setCheck(
+        r.ok
+          ? { ok: true, message: r.count !== undefined ? `компьютеров в SENET: ${r.count}` : undefined }
+          : { ok: false, message: r.error === 'not_configured' ? NOT_CONFIGURED : r.error },
+      )
     } catch {
       /* toast */
     } finally {
@@ -94,12 +111,13 @@ function SenetPanel() {
           <SecretInput label="Ключ приложения" value={form.app_key} onChange={(v) => setForm({ ...form, app_key: v })} />
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" variant="primary" loading={saving && !testing}>
+          <Button type="submit" variant="primary" loading={saving && !testing} disabled={!isOwner}>
             {ru.common.save}
           </Button>
-          <Button onClick={test} loading={testing} icon={<Zap className="size-4" aria-hidden />}>
+          <Button onClick={test} loading={testing} disabled={!isOwner} icon={<Zap className="size-4" aria-hidden />}>
             Проверить подключение
           </Button>
+          {!isOwner && <span className="text-[13px] text-ink-3">Изменять и проверять SENET может только владелец.</span>}
           <CheckLine result={check} />
         </div>
       </form>

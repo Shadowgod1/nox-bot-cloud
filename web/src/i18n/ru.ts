@@ -45,6 +45,39 @@ export const ru = {
     rateLimited: 'Слишком много попыток. Подождите немного.',
     generic: 'Что-то пошло не так.',
   },
+  /**
+   * Russian text for error codes core returns in `{error:{code,message}}` (core messages are English).
+   * Codes in `errorDetail` also get the server message appended (it carries the useful specifics).
+   */
+  errorCodes: {
+    invalid_credentials: 'Неверный e-mail или пароль.',
+    locked: 'Слишком много неудачных попыток входа. Попробуйте позже.',
+    unauthorized: 'Требуется вход.',
+    forbidden: 'Недостаточно прав для этого действия.',
+    csrf_failed: 'Сессия устарела. Обновите страницу.',
+    not_found: 'Не найдено.',
+    validation_error: 'Проверьте заполнение полей.',
+    already_set_up: 'Первичная настройка уже выполнена. Войдите в систему.',
+    email_taken: 'Пользователь с таким e-mail уже есть.',
+    cannot_delete_self: 'Нельзя удалить собственную учётную запись.',
+    last_owner: 'Нельзя удалить последнего владельца.',
+    already_decided: 'По заявке уже принято решение.',
+    already_connected: 'WhatsApp уже подключён.',
+    wrong_state: 'Код привязки можно получить только при отключённом WhatsApp.',
+    evolution_unavailable: 'Сервис WhatsApp недоступен.',
+    send_failed: 'Сообщение не отправлено.',
+    llm_error: 'Ошибка языковой модели.',
+    updater_unavailable: 'Сервис обновлений недоступен.',
+    updater_error: 'Ошибка сервиса обновлений.',
+    update_in_progress: 'Обновление уже выполняется.',
+    backup_in_progress: 'Уже выполняется резервное копирование или восстановление.',
+    backup_failed: 'Не удалось создать резервную копию.',
+    restore_failed: 'Не удалось восстановить данные.',
+    invalid_backup_name: 'Некорректное имя резервной копии.',
+    template_invalid: 'Шаблон повреждён.',
+    not_implemented: 'Функция пока не реализована.',
+  } as Record<string, string>,
+  errorDetail: ['validation_error', 'evolution_unavailable', 'send_failed', 'llm_error', 'backup_failed', 'restore_failed', 'template_invalid'],
   waStatus: {
     open: 'Подключён',
     connecting: 'Подключается',
@@ -70,7 +103,6 @@ export const ru = {
     expired: 'Истекла',
   } satisfies Record<BookingStatus, string>,
   updateState: {
-    idle: 'Нет активного обновления',
     queued: 'В очереди',
     backup: 'Создаётся резервная копия',
     pulling: 'Загрузка новой версии',

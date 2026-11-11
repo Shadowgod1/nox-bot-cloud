@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { CalendarCheck, Check, Clock, MessageSquare, X } from 'lucide-react'
-import { api, qs } from '../../api/client'
-import type { Booking, BookingStatus, Page } from '../../api/types'
+import { ApiError, api, qs } from '../../api/client'
+import type { Booking, BookingStatus } from '../../api/types'
 import { useLoad } from '../../hooks/useLoad'
 import { useEvent } from '../../hooks/useEvents'
 import { PageBody } from '../../components/Layout'
@@ -14,21 +14,21 @@ type Filter = 'all' | BookingStatus
 
 const tone = { pending: 'warn', confirmed: 'ok', rejected: 'danger', expired: 'neutral' } as const
 
-function normalize(r: Page<Booking> | Booking[]): Booking[] {
-  return Array.isArray(r) ? r : r.items
-}
-
 export function Bookings() {
   const [filter, setFilter] = useState<Filter>('pending')
+  // GET /api/bookings returns a plain array, newest first.
   const list = useLoad(
-    () => api.get<Page<Booking> | Booking[]>(`/api/bookings${qs({ status: filter === 'all' ? null : filter })}`, { silent: true }).then(normalize),
+    () => api.get<Booking[]>(`/api/bookings${qs({ status: filter === 'all' ? null : filter })}`, { silent: true }),
     [filter],
   )
 
-  useEvent('booking.updated', (b) => {
-    const known = list.data?.some((x) => x.id === b.id)
-    if (known) list.setData((d) => d?.map((x) => (x.id === b.id ? { ...x, ...b } : x)))
-    else void list.reload()
+  useEvent('booking.updated', ({ booking: b }) => {
+    list.setData((d) => {
+      if (!d) return d
+      if (d.some((x) => x.id === b.id)) return d.map((x) => (x.id === b.id ? b : x))
+      if (filter !== 'all' && b.status !== filter) return d
+      return [b, ...d].sort((x, y) => y.id - x.id)
+    })
   })
 
   const replace = (b: Booking) => list.setData((d) => d?.map((x) => (x.id === b.id ? b : x)))
@@ -65,7 +65,7 @@ export function Bookings() {
         ) : (
           <ul className="divide-y divide-line">
             {list.data.map((b) => (
-              <BookingRow key={b.id} booking={b} onChange={replace} />
+              <BookingRow key={b.id} booking={b} onChange={replace} onStale={() => void list.reload()} />
             ))}
           </ul>
         )}
@@ -79,33 +79,40 @@ function details(b: Booking) {
   const parts: string[] = []
   if (p.date) {
     const d = new Date(`${p.date}T00:00:00`)
-    parts.push(Number.isNaN(d.getTime()) ? p.date : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' }))
+    parts.push(Number.isNaN(d.getTime()) ? String(p.date) : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' }))
   }
-  if (p.time) parts.push(p.time)
-  if (p.duration_hours) parts.push(`${p.duration_hours} ч`)
-  if (p.seats) parts.push(`${p.seats} ${plural(p.seats, ['место', 'места', 'мест'])}`)
-  if (p.zone) parts.push(p.zone)
+  if (p.time) parts.push(String(p.time))
+  if (p.duration_hours !== undefined && p.duration_hours !== '') parts.push(`${p.duration_hours} ч`)
+  if (p.seats !== undefined && p.seats !== '') {
+    const n = Number(p.seats)
+    parts.push(Number.isFinite(n) ? `${n} ${plural(n, ['место', 'места', 'мест'])}` : `мест: ${p.seats}`)
+  }
+  if (p.zone) parts.push(String(p.zone))
   return parts.join(' · ')
 }
 
-function BookingRow({ booking: b, onChange }: { booking: Booking; onChange: (b: Booking) => void }) {
+function BookingRow({ booking: b, onChange, onStale }: { booking: Booking; onChange: (b: Booking) => void; onStale: () => void }) {
   const [mode, setMode] = useState<null | 'confirm' | 'reject'>(null)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
-  const who = b.client_name || b.payload?.name || b.phone || `Диалог #${b.conversation_id}`
+  const who = b.name || b.payload?.name || b.phone || `Диалог #${b.conversation_id}`
 
   async function decide() {
     if (!mode) return
     setBusy(true)
     try {
-      const res = await api.post<Booking | undefined>(`/api/bookings/${b.id}/${mode}`, { note: note.trim() || undefined })
-      const status: BookingStatus = mode === 'confirm' ? 'confirmed' : 'rejected'
-      onChange(res && typeof res === 'object' && 'id' in res ? res : { ...b, status, admin_note: note.trim() || null, decided_at: new Date().toISOString() })
+      // Body is optional in core: {note?: string}. Returns the updated BookingRequest.
+      const res = await api.post<Booking>(`/api/bookings/${b.id}/${mode}`, { note: note.trim() || null })
+      onChange(res)
       toast.success(mode === 'confirm' ? `Заявка #${b.id} подтверждена` : `Заявка #${b.id} отклонена`)
       setMode(null)
       setNote('')
-    } catch {
-      /* toast */
+    } catch (e) {
+      // 409 already_decided: someone answered first (e.g. "+N" in WhatsApp) — show the current state.
+      if (e instanceof ApiError && e.status === 409) {
+        setMode(null)
+        onStale()
+      }
     } finally {
       setBusy(false)
     }

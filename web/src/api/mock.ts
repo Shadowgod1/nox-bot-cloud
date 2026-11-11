@@ -1,35 +1,43 @@
 /* In-memory fake of the iler-core API for UI development: `npm run dev:mock` (VITE_MOCK=1).
  * Set VITE_MOCK_SETUP=1 to start in the first-run wizard. Never bundled in production builds:
- * client.ts imports it only behind `import.meta.env.VITE_MOCK === '1'`. */
+ * client.ts imports it only behind `import.meta.env.VITE_MOCK === '1'`.
+ * Response shapes, status codes and error codes mirror core (core/iler/api/*.py). */
 import type {
   BackupInfo,
   BotSettings,
   Booking,
   Conversation,
+  ConversationRow,
+  Dashboard,
   LlmSettings,
   Message,
   NotifySettings,
+  RestoreResult,
   SenetSettings,
   TemplateMeta,
-  User,
   UpdateStatus,
+  User,
+  UserListItem,
+  VersionInfo,
   WhatsAppStatus,
 } from './types'
 
 const MASK = '••••'
-const mask = (v: string | null) => (v ? MASK + v.slice(-4) : null)
+const mask = (v: string | null) => (v ? (v.length >= 8 ? MASK + v.slice(-4) : MASK) : null)
 
 const now = Date.now()
 const ago = (min: number) => new Date(now - min * 60_000).toISOString()
+
+type ConvState = Omit<Conversation, 'last_message'>
 
 interface State {
   needsSetup: boolean
   loggedIn: boolean
   user: User
-  users: User[]
+  users: UserListItem[]
   wa: WhatsAppStatus
   waPolls: number
-  conversations: Conversation[]
+  conversations: ConvState[]
   messages: Message[]
   bookings: Booking[]
   bot: BotSettings
@@ -52,19 +60,19 @@ const s: State = {
     { id: 1, email: 'owner@club.local', name: 'Айгерим', role: 'owner', created_at: ago(9000), last_login_at: ago(5) },
     { id: 2, email: 'reception@club.local', name: 'Ресепшн', role: 'operator', created_at: ago(8000), last_login_at: ago(300) },
   ],
-  wa: { status: 'open', phone: '+7 701 555 12 34', last_error: null },
+  wa: { status: 'open', phone: '77015551234', last_error: null },
   waPolls: 0,
   conversations: [
-    { id: 1, chat_jid: '77015550101@s.whatsapp.net', phone: '+77015550101', name: 'Данияр', status: 'needs_operator', paused_until: null, last_message_at: ago(3), unread: 2, last_text: 'Можно поговорить с администратором?' },
-    { id: 2, chat_jid: '77015550102@s.whatsapp.net', phone: '+77015550102', name: 'Алина', status: 'active', paused_until: null, last_message_at: ago(12), unread: 0, last_text: 'Заявка передана администратору.' },
-    { id: 3, chat_jid: '77015550103@s.whatsapp.net', phone: '+77015550103', name: '', status: 'paused', paused_until: new Date(now + 40 * 60_000).toISOString(), last_message_at: ago(55), unread: 0, last_text: 'Хорошо, ждём вас в 19:00' },
-    { id: 4, chat_jid: '77015550104@s.whatsapp.net', phone: '+77015550104', name: 'Тимур', status: 'closed', paused_until: null, last_message_at: ago(60 * 26), unread: 0, last_text: 'Спасибо!' },
+    { id: 1, chat_jid: '77015550101@s.whatsapp.net', phone: '77015550101', name: 'Данияр', status: 'needs_operator', paused_until: null, last_message_at: ago(3), unread: 2 },
+    { id: 2, chat_jid: '77015550102@s.whatsapp.net', phone: '77015550102', name: 'Алина', status: 'active', paused_until: null, last_message_at: ago(12), unread: 0 },
+    { id: 3, chat_jid: '77015550103@s.whatsapp.net', phone: '77015550103', name: '', status: 'paused', paused_until: new Date(now + 40 * 60_000).toISOString(), last_message_at: ago(55), unread: 0 },
+    { id: 4, chat_jid: '77015550104@s.whatsapp.net', phone: '77015550104', name: 'Тимур', status: 'closed', paused_until: null, last_message_at: ago(60 * 26), unread: 0 },
   ],
   messages: [],
   bookings: [
-    { id: 12, conversation_id: 2, payload: { date: '2026-11-12', time: '19:00', duration_hours: 3, seats: 5, zone: 'VIP', name: 'Алина', comment: 'День рождения' }, status: 'pending', admin_note: null, timeout_notified: false, created_at: ago(12), decided_at: null, decided_by: null, phone: '+77015550102', client_name: 'Алина' },
-    { id: 11, conversation_id: 3, payload: { date: '2026-11-11', time: '19:00', duration_hours: 2, seats: 2, zone: null, name: null, comment: null }, status: 'confirmed', admin_note: 'Места 14–15', created_at: ago(70), decided_at: ago(60), decided_by: 'Айгерим', phone: '+77015550103' },
-    { id: 10, conversation_id: 4, payload: { date: '2026-11-10', time: '23:00', duration_hours: 8, seats: 1, zone: 'Bootcamp' }, status: 'rejected', admin_note: 'Ночь занята турниром', created_at: ago(60 * 27), decided_at: ago(60 * 26), decided_by: 'Ресепшн', phone: '+77015550104', client_name: 'Тимур' },
+    { id: 12, conversation_id: 2, payload: { date: '2026-11-12', time: '19:00', duration_hours: 3, seats: 5, zone: 'VIP', name: 'Алина', comment: 'День рождения' }, status: 'pending', admin_note: null, timeout_notified: false, created_at: ago(12), decided_at: null, decided_by: null, phone: '77015550102', name: 'Алина' },
+    { id: 11, conversation_id: 3, payload: { date: '2026-11-11', time: '19:00', duration_hours: 2, seats: 2 }, status: 'confirmed', admin_note: 'Места 14–15', timeout_notified: false, created_at: ago(70), decided_at: ago(60), decided_by: 'Айгерим', phone: '77015550103', name: '' },
+    { id: 10, conversation_id: 4, payload: { date: '2026-11-10', time: '23:00', duration_hours: 8, seats: 1, zone: 'Bootcamp' }, status: 'rejected', admin_note: 'Ночь занята турниром', timeout_notified: true, created_at: ago(60 * 27), decided_at: ago(60 * 26), decided_by: 'Ресепшн', phone: '77015550104', name: 'Тимур' },
   ],
   bot: {
     enabled: true,
@@ -91,20 +99,20 @@ const s: State = {
     booking_timeout_message: 'Администратор скоро свяжется с вами по заявке.',
   },
   llm: { provider: 'openai', openai_key: null, openai_model: 'gpt-4.1-mini', openai_fallback_model: null, gemini_key: null, gemini_model: 'gemini-2.5-flash', emergency_provider: null, _openai: 'sk-mock-1234abcd', _gemini: null },
-  notify: { admin_phones: ['+77015550000'], admin_group_jid: null, smtp: null, _smtpPass: null },
+  notify: { admin_phones: ['77015550000'], admin_group_jid: null, smtp: null, _smtpPass: null },
   senet: { enabled: false, orgname: null, app_key: null, _key: null },
   backups: [
-    { name: 'iler-backup-20261111-040000.tar.gz', size: 18_734_112, created_at: ago(60 * 8), sha256: 'a1b2…' },
-    { name: 'iler-backup-20261110-040000.tar.gz', size: 18_102_877, created_at: ago(60 * 32), sha256: 'c3d4…' },
+    { name: 'iler-backup-20261111-040000.tar.gz', size: 18_734_112, created_at: ago(60 * 8), sha256: 'a1b2c3d4' },
+    { name: 'iler-backup-20261110-040000.tar.gz', size: 18_102_877, created_at: ago(60 * 32), sha256: 'c3d4e5f6' },
   ],
-  update: { state: 'idle' },
+  update: { job_id: null, state: null, log: '' },
   updateTicks: 0,
   nextId: 1000,
 }
 
 {
   const add = (conversation_id: number, author: Message['author'], text: string, min: number) =>
-    s.messages.push({ id: s.nextId++, conversation_id, author, direction: author === 'client' ? 'in' : 'out', text, created_at: ago(min) })
+    s.messages.push({ id: s.nextId++, conversation_id, author, direction: author === 'client' ? 'in' : 'out', text, media: null, created_at: ago(min) })
   add(1, 'client', 'Здравствуйте, у вас есть свободные места на вечер?', 9)
   add(1, 'bot', 'Здравствуйте! Сейчас свободно 6 мест в зоне Стандарт и 2 в VIP.', 8)
   add(1, 'client', 'А если нас 10 человек, можно скидку?', 4)
@@ -114,7 +122,31 @@ const s: State = {
   add(3, 'client', 'Мы будем в 19:00', 60)
   add(3, 'operator', 'Хорошо, ждём вас в 19:00', 55)
   add(4, 'client', 'Спасибо!', 60 * 26)
+  // Older conversations so the list has more than one page (page size 30).
+  for (let k = 0; k < 34; k++) {
+    const id = 100 + k
+    const min = 60 * 30 + k * 97
+    const phone = `7701556${String(1000 + k)}`
+    s.conversations.push({ id, chat_jid: `${phone}@s.whatsapp.net`, phone, name: k % 3 ? `Клиент ${k + 1}` : '', status: 'closed', paused_until: null, last_message_at: ago(min), unread: 0 })
+    add(id, 'client', 'Сколько стоит час в VIP?', min + 1)
+    add(id, 'bot', 'Час в VIP стоит 1 200 ₸.', min)
+  }
+  // A long history in conversation 1 so "Показать более ранние" has something to load.
+  for (let k = 0; k < 40; k++) {
+    s.messages.push({ id: 500 + k, conversation_id: 1, author: k % 2 ? 'bot' : 'client', direction: k % 2 ? 'out' : 'in', text: `Старое сообщение ${k + 1}`, media: null, created_at: ago(60 * 48 + (40 - k) * 5) })
+  }
 }
+
+/* ---------- output helpers (same shapes as core) ---------- */
+
+function lastMessage(cid: number): Conversation['last_message'] {
+  let last: Message | undefined
+  for (const m of s.messages) if (m.conversation_id === cid && (!last || m.id > last.id)) last = m
+  return last ? { text: last.text, author: last.author, direction: last.direction, created_at: last.created_at } : null
+}
+const convOut = (c: ConvState): Conversation => ({ ...c, last_message: lastMessage(c.id) })
+const convRow = (c: ConvState): ConversationRow => ({ ...c, created_at: ago(60 * 24 * 30) })
+const sortKey = (c: ConvState) => (c.last_message_at ? Date.parse(c.last_message_at) * 1000 : 0)
 
 const llmOut = (): LlmSettings => ({ ...strip(s.llm), openai_key: mask(s.llm._openai), gemini_key: mask(s.llm._gemini) })
 const notifyOut = (): NotifySettings => ({ ...strip(s.notify), smtp: s.notify.smtp ? { ...s.notify.smtp, password: mask(s.notify._smtpPass) } : null })
@@ -126,7 +158,7 @@ function strip<T extends object>(o: T): T {
   return c as T
 }
 
-/** Masked value sent back = unchanged; null = remove; anything else = new secret. */
+/** Omitted or masked = unchanged; null or "" = remove; anything else = new secret (core settings.py). */
 function applySecret(current: string | null, incoming: unknown): string | null {
   if (incoming === undefined) return current
   if (incoming === null || incoming === '') return null
@@ -147,22 +179,31 @@ function publish(type: string, data: unknown) {
   for (const es of listeners) es._emit(type, data)
 }
 
+function addMessage(conversation_id: number, author: Message['author'], text: string): Message {
+  const msg: Message = { id: s.nextId++, conversation_id, direction: author === 'client' ? 'in' : 'out', author, text, media: null, created_at: new Date().toISOString() }
+  s.messages.push(msg)
+  publish('message.new', { conversation_id, message: { ...msg, evo_message_id: null } })
+  return msg
+}
+
 type Handler = (m: RegExpMatchArray, body: Record<string, unknown>, url: URL) => Response | Promise<Response>
 const routes: [string, RegExp, Handler][] = []
 const on = (method: string, pattern: string, h: Handler) =>
   routes.push([method, new RegExp(`^${pattern.replace(/:(\w+)/g, '([^/]+)')}$`), h])
 
+/* ---------- setup / auth ---------- */
+
 on('GET', '/api/setup/state', () => json({ needs_setup: s.needsSetup }))
 on('POST', '/api/setup/owner', (_m, b) => {
-  if (!s.needsSetup) return fail(409, 'conflict', 'Владелец уже создан')
-  if (String(b.password ?? '').length < 10) return fail(422, 'validation', 'Пароль должен быть не короче 10 символов')
+  if (!s.needsSetup) return fail(409, 'already_set_up', 'Setup is already complete')
+  if (String(b.password ?? '').length < 10) return fail(422, 'validation_error', 'body.password: Value error, password must be at least 10 characters')
   s.needsSetup = false
-  s.user = { id: 1, email: String(b.email), name: String(b.name), role: 'owner' }
-  s.users = [s.user]
+  s.user = { id: 1, email: String(b.email).trim().toLowerCase(), name: String(b.name ?? ''), role: 'owner' }
+  s.users = [{ ...s.user, created_at: new Date().toISOString(), last_login_at: null }]
   s.wa = { status: 'close', phone: null, last_error: null }
   s.llm._openai = null
-  login()
-  return json(s.user, 201)
+  login() // core sets the session + CSRF cookies here
+  return json(s.user)
 })
 function login() {
   s.loggedIn = true
@@ -170,7 +211,7 @@ function login() {
   document.cookie = 'iler_csrf=mock-csrf-token; path=/'
 }
 on('POST', '/api/auth/login', (_m, b) => {
-  if (!b.email || !b.password) return fail(401, 'invalid_credentials', 'Неверный e-mail или пароль')
+  if (!b.email || !b.password) return fail(401, 'invalid_credentials', 'Wrong e-mail or password')
   login()
   return json(s.user)
 })
@@ -181,92 +222,140 @@ on('POST', '/api/auth/logout', () => {
 })
 on('GET', '/api/auth/me', () => json(s.user))
 on('POST', '/api/auth/password', (_m, b) =>
-  String(b.new ?? '').length < 10 ? fail(422, 'validation', 'Новый пароль должен быть не короче 10 символов') : json({ ok: true }),
+  String(b.new ?? '').length < 10
+    ? fail(422, 'validation_error', 'body.new: Value error, password must be at least 10 characters')
+    : json({ ok: true }),
 )
 
-on('GET', '/api/dashboard', () =>
-  json({
-    whatsapp: s.wa,
+/* ---------- dashboard ---------- */
+
+on('GET', '/api/dashboard', () => {
+  const body: Dashboard = {
+    whatsapp: { status: s.wa.status, phone: s.wa.phone },
     bot_enabled: s.bot.enabled,
-    today: { conversations: 14, replies: 63, bookings: s.bookings.filter((b) => b.status === 'pending').length + 3, needs_operator: s.conversations.filter((c) => c.status === 'needs_operator').length },
-    errors: [{ at: ago(95), source: 'llm', message: 'Таймаут ответа модели, использована резервная модель' }],
-  }),
-)
+    today: {
+      conversations: 14,
+      client_messages: 41,
+      bot_replies: 63,
+      bookings_pending: s.bookings.filter((b) => b.status === 'pending').length,
+      bookings_total: 3,
+    },
+    errors_24h: { llm: 1, send: 0 },
+  }
+  return json(body)
+})
+
+/* ---------- whatsapp ---------- */
 
 on('GET', '/api/whatsapp/status', () => {
   if (s.wa.status === 'connecting' && ++s.waPolls >= 3) {
-    s.wa = { status: 'open', phone: '+7 701 555 12 34', last_error: null }
+    s.wa = { status: 'open', phone: '77015551234', last_error: null }
     publish('whatsapp.status', s.wa)
   }
   return json(s.wa)
 })
 on('POST', '/api/whatsapp/connect', () => {
-  s.wa = { status: 'connecting', phone: null, last_error: null }
+  if (s.wa.status === 'open') return fail(409, 'already_connected', 'WhatsApp is already connected')
+  s.wa = { status: 'connecting', phone: s.wa.phone, last_error: s.wa.last_error }
   s.waPolls = 0
+  publish('whatsapp.status', s.wa)
   return json({ qr_base64: QR_SVG })
 })
 on('POST', '/api/whatsapp/pairing', (_m, b) => {
-  if (String(b.phone ?? '').replace(/\D/g, '').length < 10) return fail(400, 'bad_phone', 'Укажите номер в международном формате')
-  s.wa = { status: 'connecting', phone: null, last_error: null }
+  const digits = String(b.phone ?? '').replace(/\D/g, '')
+  if (digits.length < 10 || digits.length > 15) return fail(422, 'validation_error', 'body.phone: Value error, phone must have 10-15 digits')
+  if (s.wa.status !== 'close') return fail(409, 'wrong_state', `Pairing is possible only when disconnected (now: ${s.wa.status})`)
+  s.wa = { status: 'connecting', phone: s.wa.phone, last_error: s.wa.last_error }
   s.waPolls = 0
+  publish('whatsapp.status', s.wa)
   return json({ code: 'K7Q2M9XD' })
 })
 on('POST', '/api/whatsapp/logout', () => {
   s.wa = { status: 'close', phone: null, last_error: null }
+  publish('whatsapp.status', s.wa)
   return json({ ok: true })
 })
 
+/* ---------- conversations ---------- */
+
+const limitOf = (url: URL) => Math.min(100, Math.max(1, Number(url.searchParams.get('limit') ?? 30) || 30))
+
 on('GET', '/api/conversations', (_m, _b, url) => {
   const st = url.searchParams.get('status')
-  const q = (url.searchParams.get('q') ?? '').toLowerCase()
-  const items = s.conversations
+  const q = (url.searchParams.get('q') ?? '').trim().toLowerCase()
+  const digits = q.replace(/\D/g, '')
+  const cursor = url.searchParams.get('cursor')
+  const limit = limitOf(url)
+  let rows = s.conversations
     .filter((c) => !st || c.status === st)
-    .filter((c) => !q || c.name.toLowerCase().includes(q) || c.phone.includes(q))
-    .sort((a, b) => (b.last_message_at ?? '').localeCompare(a.last_message_at ?? ''))
-  return json({ items, next_cursor: null })
+    .filter((c) => !q || c.name.toLowerCase().includes(q) || c.phone.includes(q) || (!!digits && c.phone.includes(digits)))
+    .sort((a, b) => sortKey(b) - sortKey(a) || b.id - a.id)
+  if (cursor) {
+    const m = /^(-?\d+)_(\d+)$/.exec(cursor)
+    if (!m) return fail(422, 'validation_error', 'cursor: invalid')
+    const [key, cid] = [Number(m[1]), Number(m[2])]
+    rows = rows.filter((c) => sortKey(c) < key || (sortKey(c) === key && c.id < cid))
+  }
+  const page = rows.slice(0, limit)
+  const last = page[page.length - 1]
+  return json({ items: page.map(convOut), next_cursor: rows.length > limit && last ? `${sortKey(last)}_${last.id}` : null })
 })
-on('GET', '/api/conversations/:id/messages', (m) => {
+on('GET', '/api/conversations/:id/messages', (m, _b, url) => {
   const id = Number(m[1])
   const c = s.conversations.find((x) => x.id === id)
-  if (c) c.unread = 0
-  return json({ items: s.messages.filter((x) => x.conversation_id === id), next_cursor: null })
+  if (!c) return fail(404, 'not_found', 'Conversation not found')
+  const cursor = url.searchParams.get('cursor')
+  const limit = limitOf(url)
+  const rows = s.messages
+    .filter((x) => x.conversation_id === id && (!cursor || x.id < Number(cursor)))
+    .sort((a, b) => b.id - a.id) // newest first, like core
+  const page = rows.slice(0, limit)
+  if (c.unread) {
+    c.unread = 0
+    publish('conversation.updated', convOut(c))
+  }
+  return json({ items: page, next_cursor: rows.length > limit ? String(page[page.length - 1].id) : null })
 })
 on('POST', '/api/conversations/:id/send', (m, b) => {
   const id = Number(m[1])
   const c = s.conversations.find((x) => x.id === id)
-  if (!c) return fail(404, 'not_found', 'Диалог не найден')
-  const msg: Message = { id: s.nextId++, conversation_id: id, direction: 'out', author: 'operator', text: String(b.text ?? ''), created_at: new Date().toISOString() }
-  s.messages.push(msg)
-  Object.assign(c, { last_text: msg.text, last_message_at: msg.created_at, status: 'paused', paused_until: new Date(Date.now() + s.bot.handover_pause_minutes * 60_000).toISOString() })
-  publish('conversation.updated', c)
-  return json(msg)
+  if (!c) return fail(404, 'not_found', 'Conversation not found')
+  const text = String(b.text ?? '')
+  if (!text.trim()) return fail(422, 'validation_error', 'body.text: Value error, text must not be blank')
+  const msg = addMessage(id, 'operator', text)
+  Object.assign(c, { last_message_at: msg.created_at, status: 'paused', paused_until: new Date(Date.now() + s.bot.handover_pause_minutes * 60_000).toISOString() })
+  publish('conversation.updated', { conversation: convRow(c) })
+  return json({ ok: true })
 })
-on('POST', '/api/conversations/:id/takeover', (m) => {
+const setStatus = (status: 'paused' | 'active'): Handler => (m) => {
   const c = s.conversations.find((x) => x.id === Number(m[1]))
-  if (!c) return fail(404, 'not_found', 'Диалог не найден')
-  Object.assign(c, { status: 'paused', paused_until: null })
-  return json(c)
-})
-on('POST', '/api/conversations/:id/release', (m) => {
-  const c = s.conversations.find((x) => x.id === Number(m[1]))
-  if (!c) return fail(404, 'not_found', 'Диалог не найден')
-  Object.assign(c, { status: 'active', paused_until: null })
-  return json(c)
-})
+  if (!c) return fail(404, 'not_found', 'Conversation not found')
+  Object.assign(c, { status, paused_until: null })
+  publish('conversation.updated', convOut(c))
+  return json(convOut(c))
+}
+on('POST', '/api/conversations/:id/takeover', setStatus('paused'))
+on('POST', '/api/conversations/:id/release', setStatus('active'))
+
+/* ---------- bookings ---------- */
 
 on('GET', '/api/bookings', (_m, _b, url) => {
   const st = url.searchParams.get('status')
-  return json({ items: s.bookings.filter((b) => !st || b.status === st), next_cursor: null })
+  return json(s.bookings.filter((b) => !st || b.status === st).sort((a, b) => b.id - a.id))
 })
 const decide = (status: 'confirmed' | 'rejected'): Handler => (m, b) => {
   const bk = s.bookings.find((x) => x.id === Number(m[1]))
-  if (!bk) return fail(404, 'not_found', 'Заявка не найдена')
-  if (bk.status !== 'pending') return fail(409, 'conflict', 'Заявка уже обработана')
-  Object.assign(bk, { status, admin_note: (b.note as string) || null, decided_at: new Date().toISOString(), decided_by: s.user.name })
+  if (!bk) return fail(404, 'not_found', 'Booking request not found')
+  if (bk.status !== 'pending') return fail(409, 'already_decided', `Booking request is already ${bk.status}`)
+  const note = typeof b.note === 'string' && b.note.trim() ? b.note.trim() : null
+  Object.assign(bk, { status, admin_note: note, decided_at: new Date().toISOString(), decided_by: s.user.name || s.user.email })
+  publish('booking.updated', { booking: bk })
   return json(bk)
 }
 on('POST', '/api/bookings/:id/confirm', decide('confirmed'))
 on('POST', '/api/bookings/:id/reject', decide('rejected'))
+
+/* ---------- settings ---------- */
 
 on('GET', '/api/settings/bot', () => json(s.bot))
 on('PUT', '/api/settings/bot', (_m, b) => {
@@ -281,10 +370,14 @@ on('PUT', '/api/settings/llm', (_m, b) => {
   Object.assign(s.llm, rest)
   return json(llmOut())
 })
-on('POST', '/api/settings/llm/test', async () => {
+on('POST', '/api/settings/llm/test', async (_m, b) => {
   await sleep(700)
-  const key = s.llm.provider === 'openai' ? s.llm._openai : s.llm._gemini
-  return key ? json({ ok: true, message: `Модель ответила за 640 мс` }) : json({ ok: false, message: 'Ключ не задан' })
+  // Unsaved values from the body win; masked / omitted keys fall back to the stored ones.
+  const provider = (b.provider as string | undefined) ?? s.llm.provider
+  const key = provider === 'openai' ? applySecret(s.llm._openai, b.openai_key) : applySecret(s.llm._gemini, b.gemini_key)
+  if (!key) return json({ ok: false, error: `${provider} API key is not configured` })
+  if (key.includes('bad')) return json({ ok: false, error: 'Incorrect API key provided' })
+  return json({ ok: true })
 })
 on('GET', '/api/settings/notify', () => json(notifyOut()))
 on('PUT', '/api/settings/notify', (_m, b) => {
@@ -295,17 +388,21 @@ on('PUT', '/api/settings/notify', (_m, b) => {
 })
 on('GET', '/api/integrations/senet', () => json(senetOut()))
 on('PUT', '/api/integrations/senet', (_m, b) => {
-  s.senet._key = applySecret(s.senet._key, b.app_key)
+  const key = b.app_key
+  if (typeof key === 'string' && !key.startsWith(MASK)) s.senet._key = key.trim() || null
   s.senet.enabled = Boolean(b.enabled)
-  s.senet.orgname = (b.orgname as string) || null
+  s.senet.orgname = typeof b.orgname === 'string' && b.orgname.trim() ? b.orgname.trim().toLowerCase() : null
   return json(senetOut())
 })
-on('POST', '/api/integrations/senet/test', async () => {
+on('POST', '/api/integrations/senet/test', async (_m, b) => {
   await sleep(600)
-  return s.senet.orgname && s.senet._key
-    ? json({ ok: true, message: 'Подключено: 42 компьютера, свободно 17' })
-    : json({ ok: false, message: 'Укажите имя организации и ключ' })
+  const org = (typeof b.orgname === 'string' && b.orgname) || s.senet.orgname
+  const key = typeof b.app_key === 'string' && b.app_key && !b.app_key.startsWith(MASK) ? b.app_key : s.senet._key
+  if (!org || !key) return json({ ok: false, error: 'not_configured' })
+  return json({ ok: true, count: 42 })
 })
+
+/* ---------- test chat ---------- */
 
 on('POST', '/api/test-chat', async (_m, b) => {
   await sleep(900)
@@ -314,17 +411,19 @@ on('POST', '/api/test-chat', async (_m, b) => {
   if (last.includes('брон')) {
     return json({
       reply: 'Заявку передала администратору, он подтвердит в течение 15 минут.',
-      tool_calls: [{ name: 'create_booking_request', args: { date: '2026-11-12', time: '19:00', duration_hours: 2, seats: 3 }, result: { id: 13, status: 'pending' } }],
+      tool_calls: [{ name: 'create_booking_request', args: { date: '2026-11-12', time: '19:00', duration_hours: 2, seats: 3 }, result: 'Заявка #13 создана', error: null }],
     })
   }
   if (last.includes('свобод') || last.includes('мест')) {
     return json({
       reply: 'Сейчас свободно 17 компьютеров: 13 в Стандарте и 4 в VIP.',
-      tool_calls: [{ name: 'senet_free_workstations', args: {}, result: { total: 42, free: 17 } }],
+      tool_calls: [{ name: 'senet_free_workstations', args: {}, result: 'Свободно 17 из 42', error: null }],
     })
   }
   return json({ reply: 'Час в зоне Стандарт стоит 800 ₸, в VIP — 1 200 ₸. Подсказать что-нибудь ещё?', tool_calls: [] })
 })
+
+/* ---------- templates ---------- */
 
 on('GET', '/api/templates', () =>
   json([
@@ -332,64 +431,95 @@ on('GET', '/api/templates', () =>
     { id: 'generic', name: 'Универсальный', description: 'Вежливый ассистент: ответы на вопросы, приём заявок, передача оператору.' },
   ] satisfies TemplateMeta[]),
 )
-on('POST', '/api/templates/:id/apply', () => json({ ok: true }))
+on('POST', '/api/templates/:id/apply', (m) => {
+  if (!['computer_club', 'generic'].includes(decodeURIComponent(m[1]))) return fail(404, 'not_found', 'Template not found')
+  return json(s.bot) // core returns the resulting BotSettings
+})
+
+/* ---------- users ---------- */
 
 on('GET', '/api/users', () => json(s.users))
 on('POST', '/api/users', (_m, b) => {
-  if (String(b.password ?? '').length < 10) return fail(422, 'validation', 'Пароль должен быть не короче 10 символов')
-  const u: User = { id: s.nextId++, email: String(b.email), name: String(b.name ?? ''), role: b.role === 'owner' ? 'owner' : 'operator', created_at: new Date().toISOString(), last_login_at: null }
-  s.users.push(u)
-  return json(u, 201)
+  if (String(b.password ?? '').length < 10) return fail(422, 'validation_error', 'body.password: Value error, password must be at least 10 characters')
+  const email = String(b.email ?? '').trim().toLowerCase()
+  if (s.users.some((u) => u.email === email)) return fail(409, 'email_taken', 'A user with this e-mail already exists')
+  const u: User = { id: s.nextId++, email, name: String(b.name ?? ''), role: b.role === 'owner' ? 'owner' : 'operator' }
+  s.users.push({ ...u, created_at: new Date().toISOString(), last_login_at: null })
+  return json(u)
 })
 on('DELETE', '/api/users/:id', (m) => {
   const id = Number(m[1])
-  if (id === s.user.id) return fail(409, 'conflict', 'Нельзя удалить самого себя')
-  s.users = s.users.filter((u) => u.id !== id)
-  return json(undefined, 204)
+  if (id === s.user.id) return fail(409, 'cannot_delete_self', 'You cannot delete your own account')
+  const u = s.users.find((x) => x.id === id)
+  if (!u) return fail(404, 'not_found', 'User not found')
+  if (u.role === 'owner' && s.users.filter((x) => x.role === 'owner').length <= 1) return fail(409, 'last_owner', 'Cannot delete the last owner')
+  s.users = s.users.filter((x) => x.id !== id)
+  return json({ ok: true })
 })
 
-on('GET', '/api/system/version', () => json({ current: '1.0.0', available: s.update.state === 'healthy' ? null : '1.0.1' }))
+/* ---------- system ---------- */
+
+on('GET', '/api/system/version', () => {
+  const body: VersionInfo = { current: '1.0.0', available: s.update.state === 'healthy' ? null : '1.0.1', core_version: '1.0.0', updater_available: true }
+  return json(body)
+})
 on('POST', '/api/system/update', () => {
-  s.update = { state: 'queued', job_id: 'job-1', log: '' }
+  if (s.update.state && !['healthy', 'failed', 'rolled_back'].includes(s.update.state)) return fail(409, 'update_in_progress', 'An update is already running')
+  s.update = { job_id: 'job-1', state: 'queued', log: '' }
   s.updateTicks = 0
   return json({ job_id: 'job-1' })
 })
 on('GET', '/api/system/update/status', () => {
-  const steps: UpdateStatus['state'][] = ['queued', 'backup', 'pulling', 'restarting', 'healthy']
-  if (s.update.state !== 'idle' && s.update.state !== 'healthy') {
+  const steps = ['queued', 'backup', 'pulling', 'restarting', 'healthy'] as const
+  if (s.update.state && s.update.state !== 'healthy') {
     s.updateTicks++
     const st = steps[Math.min(steps.length - 1, s.updateTicks)]
-    s.update = { ...s.update, state: st, log: `${s.update.log ?? ''}[${new Date().toLocaleTimeString('ru-RU')}] ${st}\n` }
+    s.update = { ...s.update, state: st, log: `${s.update.log}[${new Date().toLocaleTimeString('ru-RU')}] ${st}\n` }
   }
   return json(s.update)
 })
 
-on('GET', '/api/backups', () => json(s.backups))
+on('GET', '/api/backups', () => json({ items: s.backups }))
 on('POST', '/api/backups', async () => {
   await sleep(1200)
+  const b = newBackup()
+  s.backups.unshift(b)
+  return json(b)
+})
+on('POST', '/api/backups/:name/restore', async (m) => {
+  const name = decodeURIComponent(m[1])
+  if (!s.backups.some((b) => b.name === name)) return fail(404, 'not_found', 'Backup not found')
+  await sleep(1500)
+  const safety = newBackup()
+  s.backups.unshift(safety)
+  const body: RestoreResult = { restored: name, version: '1.0.0', safety_backup: safety.name, redis: 'staged' }
+  return json(body)
+})
+
+function newBackup(): BackupInfo {
   const d = new Date()
   const p = (n: number) => String(n).padStart(2, '0')
-  const b: BackupInfo = { name: `iler-backup-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.tar.gz`, size: 18_900_000, created_at: d.toISOString() }
-  s.backups.unshift(b)
-  return json(b, 201)
-})
-on('POST', '/api/backups/:name/restore', async () => {
-  await sleep(1500)
-  return json({ ok: true })
-})
+  return {
+    name: `iler-backup-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.tar.gz`,
+    size: 18_900_000,
+    created_at: d.toISOString(),
+    sha256: 'e7f8a9b0',
+  }
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-const PUBLIC = ['/api/setup/state', '/api/setup/owner', '/api/auth/login']
+const PUBLIC = ['/api/setup/state', '/api/setup/owner', '/api/auth/login', '/api/auth/logout']
 
 export async function mockFetch(input: string, init: RequestInit = {}): Promise<Response> {
   const url = new URL(input, window.location.origin)
   const method = (init.method ?? 'GET').toUpperCase()
   await sleep(150 + Math.random() * 200)
-  if (s.needsSetup && !url.pathname.startsWith('/api/setup')) return fail(409, 'setup_required', 'Требуется первичная настройка')
-  if (!s.loggedIn && !PUBLIC.includes(url.pathname)) return fail(401, 'unauthorized', 'Требуется вход')
-  if (method !== 'GET' && !new Headers(init.headers).get('X-ILER-CSRF') && !PUBLIC.includes(url.pathname)) {
-    return fail(403, 'csrf', 'Сессия устарела, обновите страницу')
+  // Like core: before setup there are no users, hence no session — everything else is 401.
+  if ((s.needsSetup || !s.loggedIn) && !PUBLIC.includes(url.pathname)) return fail(401, 'unauthorized', 'Not signed in')
+  const csrfExempt = ['/api/setup/owner', '/api/auth/login', '/api/auth/logout']
+  if (method !== 'GET' && !new Headers(init.headers).get('X-ILER-CSRF') && !csrfExempt.includes(url.pathname)) {
+    return fail(403, 'csrf_failed', 'CSRF token missing or invalid')
   }
   for (const [m, re, h] of routes) {
     if (m !== method) continue
@@ -399,10 +529,10 @@ export async function mockFetch(input: string, init: RequestInit = {}): Promise<
       return h(match, body, url)
     }
   }
-  return fail(404, 'not_found', `Mock: нет обработчика ${method} ${url.pathname}`)
+  return fail(404, 'not_found', `Mock: no handler for ${method} ${url.pathname}`)
 }
 
-/** Minimal EventSource stand-in: emits a client message every ~25 s. */
+/** Minimal EventSource stand-in: a client writes every ~25 s (payloads shaped like core's engine events). */
 export class MockEventSource {
   readonly url: string
   readyState = 1
@@ -418,11 +548,9 @@ export class MockEventSource {
     let i = 0
     this.timer = setInterval(() => {
       const c = s.conversations[i % 2 === 0 ? 1 : 0]
-      const msg: Message = { id: s.nextId++, conversation_id: c.id, direction: 'in', author: 'client', text: lines[i++ % lines.length], created_at: new Date().toISOString() }
-      s.messages.push(msg)
-      Object.assign(c, { last_text: msg.text, last_message_at: msg.created_at, unread: c.unread + 1 })
-      this._emit('message.new', msg)
-      this._emit('conversation.updated', c)
+      const msg = addMessage(c.id, 'client', lines[i++ % lines.length])
+      Object.assign(c, { last_message_at: msg.created_at, unread: c.unread + 1 })
+      publish('conversation.updated', { conversation: convRow(c) })
     }, 25_000)
   }
 

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { ArrowLeft, Bot, Hand, Send } from 'lucide-react'
 import { api } from '../../api/client'
-import type { Conversation, Message, Page } from '../../api/types'
+import type { Conversation, Message, Ok, Page } from '../../api/types'
 import { useEvent } from '../../hooks/useEvents'
 import { Button, EmptyState, ErrorState, Spinner, cx } from '../../components/ui'
 import { formatDateTime, formatTime, ru } from '../../i18n/ru'
@@ -15,12 +15,16 @@ interface Props {
   onConversation: (c: Partial<Conversation> & { id: number }) => void
 }
 
-function mergeMessages(a: Message[], b: Message[]): Message[] {
+/** Pages come newest first; the chat shows oldest first, so merge by id and sort ascending. */
+export function mergeMessages(a: Message[], b: Message[]): Message[] {
   const map = new Map<number, Message>()
   for (const m of a) map.set(m.id, m)
   for (const m of b) map.set(m.id, m)
   return [...map.values()].sort((x, y) => x.id - y.id)
 }
+
+const messagesUrl = (id: number, cursor?: string | null) =>
+  `/api/conversations/${id}/messages${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`
 
 function dayKey(iso: string) {
   return new Date(iso).toDateString()
@@ -30,7 +34,8 @@ const dayFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long',
 
 export function ChatView({ conversationId, conversation, onConversation }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
-  const [cursor, setCursor] = useState<number | null>(null)
+  const [cursor, setCursor] = useState<string | null>(null)
+  const olderLoaded = useRef(false)
   const [loading, setLoading] = useState(true)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -44,9 +49,10 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
     setLoading(true)
     setError(null)
     try {
-      const page = await api.get<Page<Message>>(`/api/conversations/${conversationId}/messages`, { silent: true })
+      const page = await api.get<Page<Message>>(messagesUrl(conversationId), { silent: true })
       setMessages((prev) => mergeMessages(prev, page.items))
-      setCursor(page.next_cursor)
+      // Keep the cursor of already loaded older pages; a refresh only brings in the newest messages.
+      if (!olderLoaded.current) setCursor(page.next_cursor)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -64,7 +70,8 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
     setLoadingOlder(true)
     stickToBottom.current = false
     try {
-      const page = await api.get<Page<Message>>(`/api/conversations/${conversationId}/messages?cursor=${cursor}`)
+      const page = await api.get<Page<Message>>(messagesUrl(conversationId, cursor))
+      olderLoaded.current = true
       setMessages((prev) => mergeMessages(page.items, prev))
       setCursor(page.next_cursor)
     } catch {
@@ -93,9 +100,16 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
     setSending(true)
     stickToBottom.current = true
     try {
-      const res = await api.post<Message | undefined>(`/api/conversations/${conversationId}/send`, { text: t })
-      if (res && typeof res === 'object' && 'id' in res) setMessages((prev) => mergeMessages(prev, [res]))
+      // Core answers {ok: true}; the message itself arrives via SSE `message.new`.
+      await api.post<Ok>(`/api/conversations/${conversationId}/send`, { text: t })
       setText('')
+      // Fallback when the event stream is down: pull the newest page.
+      setTimeout(() => {
+        void api
+          .get<Page<Message>>(messagesUrl(conversationId), { silent: true })
+          .then((page) => setMessages((prev) => mergeMessages(prev, page.items)))
+          .catch(() => undefined)
+      }, 1500)
     } catch {
       /* toast; keep the draft */
     } finally {
@@ -106,12 +120,7 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
   async function act(kind: 'takeover' | 'release') {
     setActing(true)
     try {
-      const res = await api.post<Conversation | undefined>(`/api/conversations/${conversationId}/${kind}`)
-      onConversation(
-        res && typeof res === 'object' && 'id' in res
-          ? res
-          : { id: conversationId, status: kind === 'takeover' ? 'paused' : 'active', paused_until: null },
-      )
+      onConversation(await api.post<Conversation>(`/api/conversations/${conversationId}/${kind}`))
     } catch {
       /* toast */
     } finally {

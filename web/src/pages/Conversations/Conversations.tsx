@@ -1,18 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useParams } from 'react-router'
 import { MessagesSquare, Search } from 'lucide-react'
 import { api, qs } from '../../api/client'
 import type { Conversation, ConversationStatus, Page } from '../../api/types'
 import { useLoad } from '../../hooks/useLoad'
 import { useEvent } from '../../hooks/useEvents'
-import { EmptyState, ErrorState, Input, Segmented, Spinner, cx } from '../../components/ui'
+import { Button, EmptyState, ErrorState, Input, Segmented, Spinner, cx } from '../../components/ui'
 import { formatShort } from '../../i18n/ru'
 import { ChatView } from './ChatView'
 import { StatusBadge } from './StatusBadge'
-import { normalizeMessageEvent } from './normalize'
+import { byLastMessageDesc, normalizeConversationEvent, normalizeMessageEvent } from './normalize'
 
 type Filter = 'all' | ConversationStatus
-
 
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value)
@@ -40,9 +39,37 @@ export function Conversations() {
   )
   const items = useMemo(() => list.data?.items ?? [], [list.data])
   const selected = items.find((c) => c.id === selectedId) ?? null
+  const [loadingMore, setLoadingMore] = useState(false)
+  // Bumped whenever the first page is (re)requested, so a late "load more" cannot mix filters.
+  const listKey = useRef(0)
+  useEffect(() => {
+    listKey.current++
+  }, [filter, q])
 
   const patch = (cid: number, fn: (c: Conversation) => Conversation) =>
     list.setData((d) => (d ? { ...d, items: d.items.map((c) => (c.id === cid ? fn(c) : c)) } : d))
+
+  async function loadMore() {
+    const cursor = list.data?.next_cursor
+    if (!cursor) return
+    const key = listKey.current
+    setLoadingMore(true)
+    try {
+      const page = await api.get<Page<Conversation>>(
+        `/api/conversations${qs({ status: filter === 'all' ? null : filter, q, cursor })}`,
+      )
+      if (key !== listKey.current) return
+      list.setData((d) => {
+        if (!d) return d
+        const seen = new Set(d.items.map((c) => c.id))
+        return { items: [...d.items, ...page.items.filter((c) => !seen.has(c.id))], next_cursor: page.next_cursor }
+      })
+    } catch {
+      /* toast */
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   useEvent('message.new', (data) => {
     const m = normalizeMessageEvent(data)
@@ -57,20 +84,32 @@ export function Conversations() {
         c.id === m.conversation_id
           ? {
               ...c,
-              last_text: m.text,
+              last_message: { text: m.text, author: m.author, direction: m.direction, created_at: m.created_at },
               last_message_at: m.created_at,
-              unread: c.id === selectedId || m.direction === 'out' ? 0 : c.unread + 1,
+              unread: c.id === selectedId || m.direction === 'out' ? 0 : c.unread + (m.author === 'client' ? 1 : 0),
             }
           : c,
       )
-      updated.sort((a, b) => (b.last_message_at ?? '').localeCompare(a.last_message_at ?? ''))
+      updated.sort(byLastMessageDesc)
       return { ...d, items: updated }
     })
   })
 
   useEvent('conversation.updated', (data) => {
-    if (items.some((c) => c.id === data.id)) patch(data.id, (c) => ({ ...c, ...data }))
-    else void list.reload()
+    const upd = normalizeConversationEvent(data)
+    if (!items.some((c) => c.id === upd.id)) {
+      void list.reload()
+      return
+    }
+    list.setData((d) => {
+      if (!d) return d
+      const updated = d.items
+        .map((c) => (c.id === upd.id ? { ...c, ...upd, unread: c.id === selectedId ? 0 : upd.unread } : c))
+        // Under a status filter, a conversation that changed status leaves the list.
+        .filter((c) => filter === 'all' || c.status === filter || c.id === selectedId)
+      updated.sort(byLastMessageDesc)
+      return { ...d, items: updated }
+    })
   })
 
   // Opening a conversation marks it read locally (server resets `unread` on fetch).
@@ -147,7 +186,7 @@ export function Conversations() {
                       <span className="tabular shrink-0 text-[12px] text-ink-3">{formatShort(c.last_message_at)}</span>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-[13px] text-ink-2">{c.last_text || (c.name ? c.phone : '—')}</span>
+                      <span className="truncate text-[13px] text-ink-2">{preview(c)}</span>
                       {c.unread > 0 && (
                         <span
                           className="tabular grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-semibold text-white"
@@ -165,6 +204,13 @@ export function Conversations() {
                   </NavLink>
                 </li>
               ))}
+              {list.data?.next_cursor && (
+                <li className="flex justify-center p-3">
+                  <Button size="sm" variant="ghost" loading={loadingMore} onClick={loadMore}>
+                    Показать ещё
+                  </Button>
+                </li>
+              )}
             </ul>
           )}
         </div>
@@ -190,3 +236,11 @@ export function Conversations() {
   )
 }
 
+const AUTHOR_PREFIX: Partial<Record<string, string>> = { bot: 'Бот: ', operator: 'Вы: ' }
+
+function preview(c: Conversation): string {
+  const m = c.last_message
+  if (!m) return c.name ? c.phone : '—'
+  const text = m.text || 'вложение'
+  return `${AUTHOR_PREFIX[m.author] ?? ''}${text}`
+}
