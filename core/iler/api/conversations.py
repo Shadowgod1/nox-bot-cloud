@@ -1,31 +1,247 @@
-"""conversations API — stub from Task 1; implemented by Task 8."""
+"""Conversations API (spec section 7): list, message history, operator send, takeover / release.
 
-from fastapi import APIRouter
+Pagination is cursor-based and stable under inserts:
+- conversations are ordered by (last_message_at DESC NULLS LAST, id DESC); the cursor is an opaque
+  string "<sort_key>_<id>" taken from the last item of the previous page;
+- messages are returned newest first; the cursor is the id of the oldest message on the previous page.
+"""
 
-from iler.errors import not_implemented
+import logging
+import re
+from datetime import datetime
+from typing import Literal
 
-router = APIRouter()
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field, field_validator
 
-@router.get("/api/conversations")
-async def get_conversations():
-    not_implemented()
+from iler import events
+from iler.auth.deps import User, audit, csrf_protect, current_user
+from iler.db.pool import get_pool
+from iler.errors import ApiError
 
+log = logging.getLogger("iler.api.conversations")
 
-@router.get("/api/conversations/{conversation_id}/messages")
-async def get_conversations_conversation_id_messages(conversation_id: str):
-    not_implemented()
+router = APIRouter(tags=["conversations"])
 
+Status = Literal["active", "paused", "needs_operator", "closed"]
+MAX_LIMIT = 100
+DEFAULT_LIMIT = 30
 
-@router.post("/api/conversations/{conversation_id}/send")
-async def post_conversations_conversation_id_send(conversation_id: str):
-    not_implemented()
-
-
-@router.post("/api/conversations/{conversation_id}/takeover")
-async def post_conversations_conversation_id_takeover(conversation_id: str):
-    not_implemented()
+# Sort key: last_message_at as epoch microseconds; conversations without messages sort last (0).
+_SORT_KEY = "coalesce((extract(epoch FROM c.last_message_at) * 1000000)::bigint, 0)"
 
 
-@router.post("/api/conversations/{conversation_id}/release")
-async def post_conversations_conversation_id_release(conversation_id: str):
-    not_implemented()
+class LastMessage(BaseModel):
+    text: str
+    author: str
+    direction: str
+    created_at: datetime
+
+
+class ConversationOut(BaseModel):
+    id: int
+    chat_jid: str
+    phone: str
+    name: str
+    status: Status
+    paused_until: datetime | None
+    last_message_at: datetime | None
+    unread: int
+    last_message: LastMessage | None = None
+
+
+class ConversationPage(BaseModel):
+    items: list[ConversationOut]
+    next_cursor: str | None
+
+
+class MessageOut(BaseModel):
+    id: int
+    conversation_id: int
+    direction: Literal["in", "out"]
+    author: Literal["client", "bot", "operator", "system"]
+    text: str
+    media: dict | list | None
+    created_at: datetime
+
+
+class MessagePage(BaseModel):
+    items: list[MessageOut]
+    next_cursor: str | None
+
+
+class SendRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("text")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("text must not be blank")
+        return v
+
+
+class OkOut(BaseModel):
+    ok: bool = True
+
+
+_CONV_SELECT = f"""
+SELECT c.id, c.chat_jid, c.phone, c.name, c.status, c.paused_until, c.last_message_at, c.unread,
+       {_SORT_KEY} AS sort_key,
+       lm.text AS lm_text, lm.author AS lm_author, lm.direction AS lm_direction, lm.created_at AS lm_created_at
+FROM conversations c
+LEFT JOIN LATERAL (
+    SELECT m.text, m.author, m.direction, m.created_at FROM messages m
+    WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1
+) lm ON true
+"""
+
+
+def _conv_out(row) -> dict:
+    last = None
+    if row["lm_created_at"] is not None:
+        last = {
+            "text": row["lm_text"], "author": row["lm_author"], "direction": row["lm_direction"],
+            "created_at": row["lm_created_at"],
+        }
+    return {
+        "id": row["id"], "chat_jid": row["chat_jid"], "phone": row["phone"], "name": row["name"],
+        "status": row["status"], "paused_until": row["paused_until"], "last_message_at": row["last_message_at"],
+        "unread": row["unread"], "last_message": last,
+    }
+
+
+def _event_payload(conv: dict) -> dict:
+    return ConversationOut.model_validate(conv).model_dump(mode="json")
+
+
+def _like_escape(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _parse_conv_cursor(cursor: str) -> tuple[int, int]:
+    m = re.fullmatch(r"(-?\d+)_(\d+)", cursor)
+    if not m:
+        raise ApiError(422, "validation_error", "cursor: invalid")
+    return int(m.group(1)), int(m.group(2))
+
+
+async def _load_conversation(conversation_id: int) -> dict:
+    row = await get_pool().fetchrow(_CONV_SELECT + " WHERE c.id = $1", conversation_id)
+    if row is None:
+        raise ApiError(404, "not_found", "Conversation not found")
+    return _conv_out(row)
+
+
+@router.get("/api/conversations", response_model=ConversationPage)
+async def list_conversations(
+    status: Status | None = None,
+    q: str | None = Query(None, max_length=200),
+    cursor: str | None = None,
+    limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    _user: User = Depends(current_user),
+):
+    where: list[str] = []
+    args: list = []
+
+    def arg(value) -> str:
+        args.append(value)
+        return f"${len(args)}"
+
+    if status:
+        where.append(f"c.status = {arg(status)}")
+    if q and q.strip():
+        term = q.strip()
+        pattern = arg(f"%{_like_escape(term)}%")
+        conds = [f"c.phone ILIKE {pattern}", f"c.name ILIKE {pattern}"]
+        digits = re.sub(r"\D", "", term)
+        if digits and digits != term:  # "+7 701 ..." should match a phone stored as digits
+            conds.append(f"c.phone LIKE {arg(f'%{digits}%')}")
+        where.append("(" + " OR ".join(conds) + ")")
+    if cursor:
+        key, cid = _parse_conv_cursor(cursor)
+        where.append(f"({_SORT_KEY}, c.id) < ({arg(key)}, {arg(cid)})")
+    sql = _CONV_SELECT
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += f" ORDER BY sort_key DESC, c.id DESC LIMIT {arg(limit + 1)}"
+    rows = await get_pool().fetch(sql, *args)
+    page = rows[:limit]
+    next_cursor = f"{page[-1]['sort_key']}_{page[-1]['id']}" if len(rows) > limit else None
+    return {"items": [_conv_out(r) for r in page], "next_cursor": next_cursor}
+
+
+@router.get("/api/conversations/{conversation_id}/messages", response_model=MessagePage)
+async def list_messages(
+    conversation_id: int,
+    cursor: int | None = Query(None, ge=1),
+    limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    _user: User = Depends(current_user),
+):
+    pool = get_pool()
+    unread = await pool.fetchval("SELECT unread FROM conversations WHERE id = $1", conversation_id)
+    if unread is None:
+        raise ApiError(404, "not_found", "Conversation not found")
+    if cursor is None:
+        rows = await pool.fetch(
+            "SELECT id, conversation_id, direction, author, text, media, created_at FROM messages"
+            " WHERE conversation_id = $1 ORDER BY id DESC LIMIT $2",
+            conversation_id, limit + 1,
+        )
+    else:
+        rows = await pool.fetch(
+            "SELECT id, conversation_id, direction, author, text, media, created_at FROM messages"
+            " WHERE conversation_id = $1 AND id < $2 ORDER BY id DESC LIMIT $3",
+            conversation_id, cursor, limit + 1,
+        )
+    page = rows[:limit]
+    if unread:
+        await pool.execute("UPDATE conversations SET unread = 0 WHERE id = $1", conversation_id)
+        events.publish("conversation.updated", _event_payload(await _load_conversation(conversation_id)))
+    return {
+        "items": [dict(r) for r in page],
+        "next_cursor": str(page[-1]["id"]) if len(rows) > limit else None,
+    }
+
+
+@router.post("/api/conversations/{conversation_id}/send", response_model=OkOut)
+async def send_message(
+    conversation_id: int,
+    body: SendRequest,
+    user: User = Depends(current_user),
+    _csrf=Depends(csrf_protect),
+):
+    await _load_conversation(conversation_id)
+    from iler.engine.sender import send_operator_message  # lazy: engine is optional at import time
+
+    try:
+        await send_operator_message(conversation_id, body.text, user.name or user.email)
+    except ApiError:
+        raise
+    except Exception as e:  # noqa: BLE001 - surface as a uniform API error
+        log.exception("operator send failed for conversation %s", conversation_id)
+        raise ApiError(502, "send_failed", f"Message was not sent: {type(e).__name__}") from e
+    return {"ok": True}
+
+
+async def _set_status(conversation_id: int, status: str, user: User, action: str) -> dict:
+    await _load_conversation(conversation_id)
+    await get_pool().execute(
+        "UPDATE conversations SET status = $2, paused_until = NULL WHERE id = $1", conversation_id, status
+    )
+    conv = await _load_conversation(conversation_id)
+    await audit(user.id, action, {"conversation_id": conversation_id})
+    events.publish("conversation.updated", _event_payload(conv))
+    return conv
+
+
+@router.post("/api/conversations/{conversation_id}/takeover", response_model=ConversationOut)
+async def takeover(conversation_id: int, user: User = Depends(current_user), _csrf=Depends(csrf_protect)):
+    """Operator takes the conversation: the bot stays silent until release (indefinite pause)."""
+    return await _set_status(conversation_id, "paused", user, "conversation.takeover")
+
+
+@router.post("/api/conversations/{conversation_id}/release", response_model=ConversationOut)
+async def release(conversation_id: int, user: User = Depends(current_user), _csrf=Depends(csrf_protect)):
+    """Give the conversation back to the bot."""
+    return await _set_status(conversation_id, "active", user, "conversation.release")
