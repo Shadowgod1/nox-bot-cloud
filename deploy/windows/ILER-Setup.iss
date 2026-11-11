@@ -26,6 +26,11 @@ OutputDir={#BundleRoot}\dist
 OutputBaseFilename=ILER-Setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
+#ifdef Span
+; split output: small exe + ILER-Setup-<ver>-N.bin volumes (for transfer limits); keep all in one folder
+DiskSpanning=yes
+DiskSliceSize=419430400
+#endif
 WizardStyle=modern
 UninstallDisplayName=ILER Bot
 CloseApplications=no
