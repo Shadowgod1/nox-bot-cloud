@@ -1,0 +1,196 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      ILER_TEST_DATABASE_URL: postgresql://postgres:test@localhost:55432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: core/pyproject.toml
+      - name: Install
+        run: pip install -e "core[dev]"
+      - name: pytest
+        working-directory: core
+        run: pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip notice
+        if: hashFiles('web/package.json') == ''
+        run: echo "web/ not present yet, skipping"
+      - uses: actions/setup-node@v4
+        if: hashFiles('web/package.json') != ''
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: npm ci
+        if: hashFiles('web/package.json') != ''
+        working-directory: web
+        run: npm ci
+      - name: test
+        if: hashFiles('web/package.json') != ''
+        working-directory: web
+        run: npm test -- --run
+      - name: typecheck
+        if: hashFiles('web/package.json') != ''
+        working-directory: web
+        run: npx tsc --noEmit
+      - name: build
+        if: hashFiles('web/package.json') != ''
+        working-directory: web
+        run: npm run build
+
+  updater-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -r updater/requirements.txt -r fake-evolution/requirements.txt pytest
+      - name: pytest
+        run: pytest -q updater
+      - name: fake-evolution imports
+        working-directory: fake-evolution
+        run: python -c "import app"
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          find deploy scripts -name '*.sh' -print0 | xargs -0 shellcheck -x
+
+  psscriptanalyzer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          $results = Invoke-ScriptAnalyzer -Path deploy/windows -Recurse -Settings deploy/windows/PSScriptAnalyzerSettings.psd1
+          $results | Format-Table -AutoSize RuleName, Severity, ScriptName, Line, Message -Wrap
+          foreach ($f in Get-ChildItem deploy/windows -Filter *.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors; exit 1 }
+          }
+          if ($results) { exit 1 }
+
+  check-names:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: forbidden names
+        env:
+          ILER_FORBIDDEN_NAMES: ${{ secrets.ILER_FORBIDDEN_NAMES }}
+        run: bash scripts/check-names.sh
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: compose.yml
+        run: docker compose -f compose.yml --env-file deploy/.env.example config -q
+      - name: compose.yml + compose.test.yml
+        run: docker compose -f compose.yml -f compose.test.yml --env-file deploy/.env.example config -q
+      - name: no unpinned third-party images
+        run: |
+          docker compose -f compose.yml --env-file deploy/.env.example config --images \
+            | grep -v '^ghcr.io/' | grep -v '@sha256:' && { echo "unpinned image(s) above"; exit 1; } || true
+          ! grep -nE 'image:.*:latest' compose.yml compose.test.yml
+
+  e2e-smoke:
+    # needs core endpoints + web/ (Task 12); skipped until tests/e2e/smoke.py exists
+    runs-on: ubuntu-latest
+    needs: [compose-config]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip notice
+        if: hashFiles('tests/e2e/smoke.py') == ''
+        run: echo "tests/e2e/smoke.py not present yet, skipping"
+      - uses: actions/setup-python@v5
+        if: hashFiles('tests/e2e/smoke.py') != ''
+        with:
+          python-version: "3.12"
+      - name: Start stack
+        if: hashFiles('tests/e2e/smoke.py') != ''
+        run: docker compose -f compose.yml -f compose.test.yml up -d --build --wait --wait-timeout 300
+      - name: Smoke test
+        if: hashFiles('tests/e2e/smoke.py') != ''
+        run: |
+          pip install httpx
+          python tests/e2e/smoke.py
+      - name: Logs on failure
+        if: failure() && hashFiles('tests/e2e/smoke.py') != ''
+        run: docker compose -f compose.yml -f compose.test.yml logs --tail 200
+      - name: Tear down
+        if: always() && hashFiles('tests/e2e/smoke.py') != ''
+        run: docker compose -f compose.yml -f compose.test.yml down -v
+
+  install-smoke:
+    # spec section 10: install.sh on a clean runner with locally built images (--offline)
+    runs-on: ubuntu-latest
+    needs: [shellcheck, compose-config]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip notice
+        if: hashFiles('web/Dockerfile') == ''
+        run: echo "web/Dockerfile not present yet, skipping"
+      - name: Build images and offline bundle
+        if: hashFiles('web/Dockerfile') != ''
+        env:
+          ILER_VERSION: ci
+        run: |
+          docker compose -f compose.yml build
+          bash scripts/build-offline-bundle.sh ci --no-pull
+      - name: Install from the offline bundle
+        if: hashFiles('web/Dockerfile') != ''
+        run: |
+          mkdir -p /tmp/bundle && tar -xzf dist/iler-bot-ci-offline.tar.gz -C /tmp/bundle
+          sudo bash /tmp/bundle/iler-bot-ci/deploy/install.sh --offline /tmp/bundle/iler-bot-ci/images.tar --port 8088 --yes
+          curl -fsS http://127.0.0.1:8088/ >/dev/null
+          curl -fsS http://127.0.0.1:8088/health
+      - name: Re-run is idempotent
+        if: hashFiles('web/Dockerfile') != ''
+        run: |
+          sudo cp /opt/iler/.env /tmp/env.before
+          sudo bash /tmp/bundle/iler-bot-ci/deploy/install.sh --offline /tmp/bundle/iler-bot-ci/images.tar --yes
+          sudo diff /tmp/env.before /opt/iler/.env
+      - name: Uninstall
+        if: always() && hashFiles('web/Dockerfile') != ''
+        run: sudo bash /opt/iler/deploy/install.sh --uninstall --purge --yes || true
