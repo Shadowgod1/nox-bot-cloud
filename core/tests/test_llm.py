@@ -179,18 +179,18 @@ async def test_llm_fake_env(pool, monkeypatch):
 
 async def test_check_key(use_fakes):
     use_fakes(openai=FakeLLM([LlmResponse(text="pong")]))
-    await router.check_key(LlmSettings(openai_key=SecretStr("k")))
+    await router.check_key(LlmSettings())
     use_fakes(openai=FakeLLM([LlmError("401 invalid key", retryable=False)]))
     with pytest.raises(LlmError):
-        await router.check_key(LlmSettings(openai_key=SecretStr("bad")))
+        await router.check_key(LlmSettings())
 
 
 async def test_missing_key_raises_llm_error():
     router.set_provider_factory(None)
     with pytest.raises(LlmError):
-        await router.check_key(LlmSettings(provider="openai", openai_key=None))
+        await router.check_key(LlmSettings(provider="openai"))
     with pytest.raises(LlmError):
-        await router.check_key(LlmSettings(provider="gemini", gemini_key=None))
+        await router.check_key(LlmSettings(provider="gemini"))
 
 
 def _openai_body(**message):
@@ -324,3 +324,15 @@ async def test_list_models_claude_is_fixed_and_bad_key_raises():
     assert await router.list_models(LlmSettings(provider="anthropic")) == ["claude-sonnet-5-5", "claude-haiku-5-5"]
     with pytest.raises(LlmError):
         await router.list_models(LlmSettings(provider="openai"))  # no key
+
+
+async def test_chain_skips_providers_without_ilER_key(monkeypatch):
+    from iler.config import get_settings
+
+    cfg = get_settings()
+    monkeypatch.setattr(cfg, "anthropic_key", "sk-ant-vendor")
+    monkeypatch.setattr(cfg, "openai_key", "")
+    monkeypatch.setattr(cfg, "gemini_key", "")
+    chain = router._chain(LlmSettings(provider="openai", emergency_provider="gemini"))
+    assert chain == [("anthropic", "claude-sonnet-5-5")]
+    assert router.available_providers() == ["anthropic"]

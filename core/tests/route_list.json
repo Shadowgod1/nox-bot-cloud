@@ -100,6 +100,10 @@
 "/api/settings/llm"
 ],
 [
+"get",
+"/api/settings/llm/providers"
+],
+[
 "put",
 "/api/settings/llm"
 ],

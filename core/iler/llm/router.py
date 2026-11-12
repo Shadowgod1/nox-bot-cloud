@@ -43,17 +43,28 @@ def set_provider_factory(factory: ProviderFactory | None) -> None:
     _factory_override = factory
 
 
-_KEY_FIELDS = {"openai": "openai_key", "gemini": "gemini_key", "anthropic": "anthropic_key"}
+PROVIDERS = ("anthropic", "openai", "gemini")
 _MODEL_FIELDS = {"openai": "openai_model", "gemini": "gemini_model", "anthropic": "anthropic_model"}
 
 
+def vendor_key(name: str) -> str:
+    """ILER's API key for a provider (environment, set by the technician); "" when not configured."""
+    return getattr(config.get_settings(), f"{name}_key", "") if name in PROVIDERS else ""
+
+
+def available_providers() -> list[str]:
+    """Providers the owner can choose: those with an ILER key (all of them in fake mode)."""
+    if config.get_settings().llm_fake:
+        return list(PROVIDERS)
+    return [p for p in PROVIDERS if vendor_key(p)]
+
+
 def _default_factory(name: str, settings: LlmSettings) -> LlmProvider:
-    if name not in _KEY_FIELDS:
+    if name not in PROVIDERS:
         raise LlmError(f"unknown LLM provider: {name}", retryable=False)
-    secret = getattr(settings, _KEY_FIELDS[name])
-    key = secret.get_secret_value() if secret is not None else ""
+    key = vendor_key(name)
     if not key:
-        raise LlmError(f"{name}: API key is not configured", retryable=False)
+        raise LlmError(f"{name}: ключ ILER не настроен (обратитесь в поддержку ILER)", retryable=False)
     provider = _provider_cache.get((name, key))
     if provider is None:
         if name == "openai":
@@ -93,11 +104,17 @@ def _chain(settings: LlmSettings) -> list[tuple[str, str]]:
     """Ordered (provider, model) attempts."""
     if config.get_settings().llm_fake:
         return [("fake", "fake")]
-    chain = [(settings.provider, _model_for(settings.provider, settings))]
-    if settings.provider == "openai" and settings.openai_fallback_model:
+    # a provider without an ILER key cannot work: use the first one that has a key instead
+    available = available_providers()
+    primary = settings.provider
+    if available and primary not in available:
+        primary = available[0]
+    chain = [(primary, _model_for(primary, settings))]
+    if primary == "openai" and settings.openai_fallback_model:
         chain.append(("openai", settings.openai_fallback_model))
-    if settings.emergency_provider and settings.emergency_provider != settings.provider:
-        chain.append((settings.emergency_provider, _model_for(settings.emergency_provider, settings)))
+    emergency = settings.emergency_provider
+    if emergency and emergency != primary and (not available or emergency in available):
+        chain.append((emergency, _model_for(emergency, settings)))
     return chain
 
 

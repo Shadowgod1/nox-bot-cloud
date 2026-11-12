@@ -137,6 +137,18 @@ async def put_settings_bot(body: BotSettings, user: User = Depends(current_user)
 
 # --- llm (owner) --------------------------------------------------------------------------------
 
+class LlmProviders(BaseModel):
+    providers: list[str]
+
+
+@router.get("/api/settings/llm/providers", response_model=LlmProviders)
+async def get_settings_llm_providers(_: User = Depends(require_owner)):
+    """Providers that have an ILER key configured on this server (the only ones the owner can pick)."""
+    from iler.llm.router import available_providers
+
+    return {"providers": available_providers()}
+
+
 @router.get("/api/settings/llm", response_model=LlmPublic)
 async def get_settings_llm(_: User = Depends(require_owner)):
     return masked(await settings_store.get("llm", LlmSettings))

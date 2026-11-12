@@ -53,6 +53,10 @@ services:
       # one-time token for the first-run wizard (printed by install.sh as the setup link)
       ILER_SETUP_TOKEN: ${ILER_SETUP_TOKEN}
       ILER_REDIS_PASSWORD: ${ILER_REDIS_PASSWORD}
+      # ILER's LLM keys (set by the technician with deploy/set-llm-keys.sh; not editable in the admin UI)
+      ILER_OPENAI_KEY: ${ILER_OPENAI_KEY:-}
+      ILER_GEMINI_KEY: ${ILER_GEMINI_KEY:-}
+      ILER_ANTHROPIC_KEY: ${ILER_ANTHROPIC_KEY:-}
       ILER_TZ: ${ILER_TZ:-Asia/Almaty}
       ILER_DATA_DIR: /data
     volumes:

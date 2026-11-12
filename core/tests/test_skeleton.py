@@ -6,7 +6,7 @@ from pydantic import SecretStr
 
 from iler import crypto, settings_store
 from iler.db import migrate
-from iler.settings_models import LlmSettings
+from iler.settings_models import LlmSettings, SenetSettings
 from iler.tools import registry
 
 SPEC_TABLES = {
@@ -35,16 +35,16 @@ def test_crypto_roundtrip():
 
 
 async def test_settings_secret_encrypted_at_rest(pool):
-    await settings_store.put("llm", LlmSettings(openai_key=SecretStr("sk-test-123")))
-    raw = await pool.fetchval("SELECT value::text FROM settings WHERE key='llm'")
+    await settings_store.put("senet", SenetSettings(app_key=SecretStr("sk-test-123")))
+    raw = await pool.fetchval("SELECT value::text FROM settings WHERE key='senet'")
     assert "sk-test-123" not in raw
-    loaded = await settings_store.get("llm", LlmSettings)
-    assert loaded.openai_key.get_secret_value() == "sk-test-123"
+    loaded = await settings_store.get("senet", SenetSettings)
+    assert loaded.app_key.get_secret_value() == "sk-test-123"
 
 
 async def test_settings_default_when_missing(pool):
     loaded = await settings_store.get("llm", LlmSettings)
-    assert loaded.provider == "openai" and loaded.openai_key is None
+    assert loaded.provider == "openai" and loaded.anthropic_model == "claude-sonnet-5-5"
 
 
 @pytest.mark.parametrize("method,path", ROUTES)
@@ -70,11 +70,11 @@ async def test_secret_with_foreign_key_is_treated_as_unset(pool, monkeypatch, ca
 
     from iler.config import get_settings
 
-    await settings_store.put("llm", LlmSettings(openai_key=SecretStr("sk-test-123"), openai_model="gpt-x"))
+    await settings_store.put("senet", SenetSettings(app_key=SecretStr("sk-test-123"), orgname="club"))
     monkeypatch.setattr(get_settings(), "secret_key", base64.b64encode(b"z" * 32).decode())
     with caplog.at_level("ERROR"):
-        loaded = await settings_store.get("llm", LlmSettings)
-    assert loaded.openai_key is None and loaded.openai_model == "gpt-x"
+        loaded = await settings_store.get("senet", SenetSettings)
+    assert loaded.app_key is None and loaded.orgname == "club"
     assert "secret key mismatch" in caplog.text
 
 

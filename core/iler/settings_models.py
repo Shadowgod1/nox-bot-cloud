@@ -74,14 +74,12 @@ ANTHROPIC_MODELS = ("claude-sonnet-5-5", "claude-haiku-5-5")
 
 
 class LlmSettings(BaseModel):
+    # API keys are not settings: they are ILER's and come from the environment (config.Settings)
     provider: Literal["openai", "gemini", "anthropic"] = "openai"
-    openai_key: SecretStr | None = None
     # defaults only; the admin UI offers the models listed by the provider for the owner's key
     openai_model: str = "gpt-5.4-mini"
     openai_fallback_model: str | None = None
-    gemini_key: SecretStr | None = None
     gemini_model: str = "gemini-3.8-flash"
-    anthropic_key: SecretStr | None = None
     anthropic_model: Literal["claude-sonnet-5-5", "claude-haiku-5-5"] = "claude-sonnet-5-5"
     # WhatsApp chat: low effort keeps replies fast; the owner can raise it
     anthropic_effort: Literal["low", "medium", "high"] = "low"

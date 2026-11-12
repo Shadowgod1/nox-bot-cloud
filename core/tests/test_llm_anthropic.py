@@ -252,12 +252,15 @@ async def test_router_fails_over_from_anthropic_refusal(pool, factory):
     assert res.text == "gemini here"
 
 
-async def test_check_key_via_default_factory_applies_effort():
+async def test_check_key_via_default_factory_applies_effort(monkeypatch):
+    from iler.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "anthropic_key", KEY)  # ILER's key comes from the environment
     router.set_provider_factory(None)
     api = Api((200, _message([{"type": "text", "text": "pong"}])), _err(401, "authentication_error", "bad"))
     router._provider_cache[("anthropic", KEY)] = api.provider()
     try:
-        s = LlmSettings(provider="anthropic", anthropic_key=SecretStr(KEY), anthropic_effort="high")
+        s = LlmSettings(provider="anthropic", anthropic_effort="high")
         await router.check_key(s)
         assert api.bodies[0]["model"] == "claude-sonnet-5-5"
         assert api.bodies[0]["output_config"] == {"effort": "high"}
@@ -271,10 +274,10 @@ async def test_check_key_via_default_factory_applies_effort():
 async def test_check_key_missing_anthropic_key():
     router.set_provider_factory(None)
     with pytest.raises(LlmError):
-        await router.check_key(LlmSettings(provider="anthropic", anthropic_key=None))
+        await router.check_key(LlmSettings(provider="anthropic"))
 
 
 def test_settings_defaults():
     s = LlmSettings()
-    assert s.anthropic_model == "claude-sonnet-5-5" and s.anthropic_effort == "low" and s.anthropic_key is None
+    assert s.anthropic_model == "claude-sonnet-5-5" and s.anthropic_effort == "low"
     assert LlmSettings(provider="anthropic", emergency_provider="anthropic").provider == "anthropic"

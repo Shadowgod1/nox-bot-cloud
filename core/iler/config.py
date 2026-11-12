@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     setup_token: str = ""
     # Redis password (backups talk to redis with it).
     redis_password: str = ""
+    # ILER's own LLM API keys, set by the ILER technician (deploy/set-llm-keys.sh); never editable in the UI
+    openai_key: str = ""
+    gemini_key: str = ""
+    anthropic_key: str = ""
     tz: str = "Asia/Almaty"
     data_dir: str = "/data"
     disable_workers: bool = False

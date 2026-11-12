@@ -29,56 +29,37 @@ async def test_settings_require_auth(client):
     assert (await client.get("/api/settings/llm")).status_code == 401
 
 
-async def test_settings_llm_get_masks_keys(owner):
-    await settings_store.put("llm", LlmSettings(openai_key=SecretStr(KEY)))
+async def test_settings_llm_has_no_keys_and_ignores_keys_sent(owner):
+    """API keys are ILER's (environment); the owner can neither see nor set them."""
     r = await owner.get("/api/settings/llm")
     assert r.status_code == 200
     body = r.json()
-    assert body["openai_key"] == "••••abcd"
-    assert body["gemini_key"] is None
-    assert KEY not in r.text
+    assert not any(k.endswith("_key") for k in body)
+    r = await owner.put("/api/settings/llm", json=body | {"openai_model": "gpt-5.5", "openai_key": KEY,
+                                                          "anthropic_key": "sk-ant-x"}, headers=csrf(owner))
+    assert r.status_code == 200, r.text
+    assert KEY not in r.text and not any(k.endswith("_key") for k in r.json())
+    stored = await settings_store.get("llm", LlmSettings)
+    assert stored.openai_model == "gpt-5.5" and not hasattr(stored, "openai_key")
 
 
-async def test_put_settings_keeps_secret_when_masked_value_sent(owner):
-    await settings_store.put("llm", LlmSettings(openai_key=SecretStr(KEY), gemini_key=SecretStr("g-key-999999")))
+async def test_settings_llm_providers_are_those_with_ilER_keys(owner, monkeypatch):
+    from iler.config import get_settings
+
+    cfg = get_settings()
+    monkeypatch.setattr(cfg, "anthropic_key", "sk-ant-vendor")
+    monkeypatch.setattr(cfg, "openai_key", "")
+    monkeypatch.setattr(cfg, "gemini_key", "AIza-vendor")
+    r = await owner.get("/api/settings/llm/providers")
+    assert r.json() == {"providers": ["anthropic", "gemini"]}
+
+
+async def test_settings_llm_effort_validation(owner):
     body = (await owner.get("/api/settings/llm")).json()
-    body["openai_model"] = "gpt-4.1"
-    body.pop("gemini_key")  # omitted secret is kept as well
-    r = await owner.put("/api/settings/llm", json=body, headers=csrf(owner))
-    assert r.status_code == 200, r.text
-    assert r.json()["openai_key"] == "••••abcd"
-    stored = await settings_store.get("llm", LlmSettings)
-    assert stored.openai_model == "gpt-4.1"
-    assert stored.openai_key.get_secret_value() == KEY
-    assert stored.gemini_key.get_secret_value() == "g-key-999999"
-
-    # a new value replaces, null/"" clears
-    body = {**body, "openai_key": "sk-new-key-0000wxyz", "gemini_key": ""}
-    r = await owner.put("/api/settings/llm", json=body, headers=csrf(owner))
-    assert r.status_code == 200, r.text
-    stored = await settings_store.get("llm", LlmSettings)
-    assert stored.openai_key.get_secret_value() == "sk-new-key-0000wxyz"
-    assert stored.gemini_key is None
-
-    # masked value with nothing stored does not become a secret
-    r = await owner.put("/api/settings/llm", json={**body, "gemini_key": "••••abcd"}, headers=csrf(owner))
-    assert (await settings_store.get("llm", LlmSettings)).gemini_key is None
-
-
-async def test_settings_llm_anthropic_key_masked_and_kept(owner):
-    ant = "sk-ant-api03-secret-zz9876"
-    await settings_store.put("llm", LlmSettings(provider="anthropic", anthropic_key=SecretStr(ant)))
-    r = await owner.get("/api/settings/llm")
-    body = r.json()
-    assert body["anthropic_key"] == "••••9876" and ant not in r.text
     assert body["anthropic_model"] == "claude-sonnet-5-5" and body["anthropic_effort"] == "low"
-
     r = await owner.put("/api/settings/llm", json={**body, "anthropic_effort": "high"}, headers=csrf(owner))
     assert r.status_code == 200, r.text
-    assert ant not in r.text
-    stored = await settings_store.get("llm", LlmSettings)
-    assert stored.anthropic_key.get_secret_value() == ant and stored.anthropic_effort == "high"
-
+    assert (await settings_store.get("llm", LlmSettings)).anthropic_effort == "high"
     r = await owner.put("/api/settings/llm", json={**body, "anthropic_effort": "max"}, headers=csrf(owner))
     assert r.status_code == 422
 
@@ -165,7 +146,7 @@ async def test_operator_cannot_touch_llm_settings(owner, app):
 
 
 async def test_settings_llm_test_calls_provider(owner, app):
-    await settings_store.put("llm", LlmSettings(openai_key=SecretStr(KEY)))
+    await settings_store.put("llm", LlmSettings())
     seen: list[LlmSettings] = []
 
     async def fake_check(settings: LlmSettings) -> None:
@@ -178,14 +159,13 @@ async def test_settings_llm_test_calls_provider(owner, app):
         r = await owner.post("/api/settings/llm/test", headers=csrf(owner))
         assert r.status_code == 200, r.text
         assert r.json() == {"ok": True}
-        assert seen[-1].openai_key.get_secret_value() == KEY
 
-        # unsaved form values are tested too; masked key falls back to the stored one
+        # unsaved form values are tested too
         body = (await owner.get("/api/settings/llm")).json() | {"openai_model": "broken"}
         r = await owner.post("/api/settings/llm/test", json=body, headers=csrf(owner))
         assert r.status_code == 200
         assert r.json() == {"ok": False, "error": "invalid api key"}
-        assert seen[-1].openai_key.get_secret_value() == KEY
+        assert seen[-1].openai_model == "broken"
         # testing does not save
         assert (await settings_store.get("llm", LlmSettings)).openai_model != "broken"
     finally:
@@ -196,7 +176,7 @@ async def test_openapi_exposes_secrets_as_strings(client):
     r = await client.get("/api/openapi.json")
     assert r.status_code == 200
     schemas = r.json()["components"]["schemas"]
-    key = schemas["LlmSettingsPublic"]["properties"]["openai_key"]
+    key = schemas["SmtpSettingsPublic"]["properties"]["password"]
     assert {"type": "string"} in key["anyOf"]
     assert "SmtpSettingsPublic" in schemas
 
@@ -280,15 +260,15 @@ async def test_template_apply_endpoint_removed(owner):
 
 
 
-async def test_settings_llm_models_lists_for_unsaved_key(owner, app):
+async def test_settings_llm_models_lists_for_unsaved_settings(owner, app):
     from iler.api.settings import get_model_lister
 
-    await settings_store.put("llm", LlmSettings(openai_key=SecretStr(KEY)))
+    await settings_store.put("llm", LlmSettings())
     seen: list[LlmSettings] = []
 
     async def fake_list(settings: LlmSettings) -> list[str]:
         seen.append(settings)
-        if settings.gemini_key and settings.gemini_key.get_secret_value() == "bad":
+        if settings.provider == "gemini":
             raise LlmError("gemini HTTP 400: API key not valid", retryable=False)
         return ["gpt-5.4-mini", "gpt-5.4-nano"]
 
@@ -296,7 +276,7 @@ async def test_settings_llm_models_lists_for_unsaved_key(owner, app):
     try:
         r = await owner.post("/api/settings/llm/models", headers=csrf(owner))
         assert r.json() == {"ok": True, "models": ["gpt-5.4-mini", "gpt-5.4-nano"]}
-        body = (await owner.get("/api/settings/llm")).json() | {"provider": "gemini", "gemini_key": "bad"}
+        body = (await owner.get("/api/settings/llm")).json() | {"provider": "gemini"}
         r = await owner.post("/api/settings/llm/models", json=body, headers=csrf(owner))
         assert r.json() == {"ok": False, "models": [], "error": "gemini HTTP 400: API key not valid"}
         assert (await settings_store.get("llm", LlmSettings)).provider == "openai"  # nothing saved
