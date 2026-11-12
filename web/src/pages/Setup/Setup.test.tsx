@@ -11,12 +11,9 @@ import type { BotSettings, LlmSettings, TemplateMeta } from '../../api/types'
 
 const LLM: LlmSettings = {
   provider: 'openai',
-  openai_key: null,
   openai_model: 'gpt-4.1-mini',
   openai_fallback_model: null,
-  gemini_key: null,
   gemini_model: 'gemini-2.5-flash',
-  anthropic_key: null,
   anthropic_model: 'claude-sonnet-5-5',
   anthropic_effort: 'low',
   emergency_provider: null,
@@ -91,56 +88,92 @@ describe('Setup wizard', () => {
 })
 
 describe('LlmStep', () => {
+  it('shows only the providers ILER has keys for, without a key field', async () => {
+    mockApi({
+      'GET /api/settings/llm': LLM,
+      'GET /api/settings/llm/providers': { providers: ['anthropic', 'gemini'] },
+      'POST /api/settings/llm/models': { ok: true, models: [] },
+    })
+    render(<LlmStep onDone={vi.fn()} />)
+    // the stored provider (openai) has no ILER key: the first available one is preselected
+    expect(await screen.findByRole('radio', { name: /Anthropic \(Claude\)/ })).toBeChecked()
+    expect(screen.getByRole('radio', { name: /Google Gemini/ })).not.toBeChecked()
+    expect(screen.queryByRole('radio', { name: /OpenAI/ })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/Ключ/)).toBeNull()
+    expect(screen.getByText(/подключение ILER/)).toBeInTheDocument()
+  })
+
+  it('tells the user to contact ILER support when no keys are configured', async () => {
+    const user = userEvent.setup()
+    const onDone = vi.fn()
+    mockApi({ 'GET /api/settings/llm': LLM, 'GET /api/settings/llm/providers': { providers: [] } })
+    render(<LlmStep onDone={onDone} />)
+    expect(await screen.findByText(/Ключи ILER не настроены\. Обратитесь в поддержку ILER/)).toBeInTheDocument()
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Проверить подключение' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Настроить позже' }))
+    expect(onDone).toHaveBeenCalled()
+  })
+
   it('connects Claude with Haiku and effort, saving only after a successful check', async () => {
     const user = userEvent.setup()
     const fetchMock = mockApi({
       'GET /api/settings/llm': LLM,
-      'POST /api/settings/llm/models': { ok: true, models: ['claude-sonnet-5-5', 'claude-haiku-5-5'] },
+      'GET /api/settings/llm/providers': { providers: ['anthropic', 'openai'] },
+      'POST /api/settings/llm/models': (init: RequestInit) =>
+        JSON.parse(String(init.body)).provider === 'anthropic'
+          ? { ok: true, models: ['claude-sonnet-5-5', 'claude-haiku-5-5'] }
+          : { ok: true, models: ['gpt-5.4-mini'] },
       'POST /api/settings/llm/test': { ok: true },
       'PUT /api/settings/llm': (init: RequestInit) => JSON.parse(String(init.body)),
     })
     render(<LlmStep onDone={vi.fn()} />)
 
-    await user.click(await screen.findByRole('radio', { name: /Anthropic \(Claude\)/ }))
+    // the stored provider (openai) is available: it is preselected
+    expect(await screen.findByRole('radio', { name: /OpenAI/ })).toBeChecked()
+    await user.click(screen.getByRole('radio', { name: /Anthropic \(Claude\)/ }))
     const model = screen.getByLabelText('Модель')
     expect(model).toHaveValue('claude-sonnet-5-5')
     expect([...(model as HTMLSelectElement).options].map((o) => o.value)).toEqual(['claude-sonnet-5-5', 'claude-haiku-5-5'])
     expect(screen.getByLabelText('Глубина размышлений')).toHaveValue('low')
 
-    await user.type(screen.getByLabelText('Ключ API'), 'sk-ant-test-1')
     await user.selectOptions(model, 'claude-haiku-5-5')
     await user.selectOptions(screen.getByLabelText('Глубина размышлений'), 'Средняя')
-    await user.click(screen.getByRole('button', { name: 'Проверить ключ' }))
+    await user.click(screen.getByRole('button', { name: 'Проверить подключение' }))
 
     await waitFor(() => expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(1))
     const tested = JSON.parse(String((callsTo(fetchMock, 'POST', '/api/settings/llm/test')[0][1] as RequestInit).body))
-    expect(tested).toMatchObject({
-      provider: 'anthropic',
-      anthropic_key: 'sk-ant-test-1',
-      anthropic_model: 'claude-haiku-5-5',
-      anthropic_effort: 'medium',
-      openai_key: null,
-    })
+    expect(tested).toMatchObject({ provider: 'anthropic', anthropic_model: 'claude-haiku-5-5', anthropic_effort: 'medium' })
+    expect(Object.keys(tested).filter((k) => k.endsWith('_key'))).toEqual([])
   })
 
-  it('lists OpenAI models for the key, preselects a recommended one and saves the final choice', async () => {
+  it('loads OpenAI models on selection, preselects a recommended one, checks without a key and saves the final choice', async () => {
     const user = userEvent.setup()
     const onDone = vi.fn()
     const fetchMock = mockApi({
       'GET /api/settings/llm': LLM,
+      'GET /api/settings/llm/providers': { providers: ['openai'] },
       'POST /api/settings/llm/models': { ok: true, models: ['gpt-5.5', 'gpt-5.4-nano'] },
       'POST /api/settings/llm/test': { ok: true },
       'PUT /api/settings/llm': (init: RequestInit) => JSON.parse(String(init.body)),
     })
     render(<LlmStep onDone={onDone} />)
-    await user.type(await screen.findByLabelText('Ключ API'), 'sk-test-1')
-    expect(screen.queryByLabelText('Глубина размышлений')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Проверить ключ' }))
-
-    // gpt-5.4-mini is not available for this key: the next recommended listed model is used
+    // gpt-5.4-mini is not available through ILER: the next recommended listed model is preselected, without pressing the button
     await waitFor(() => expect(screen.getByLabelText('Модель')).toHaveValue('gpt-5.4-nano'))
+    expect(screen.getByRole('option', { name: 'gpt-5.5' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Глубина размышлений')).not.toBeInTheDocument()
+    expect(callsTo(fetchMock, 'POST', '/api/settings/llm/test')).toHaveLength(0)
+
+    await user.click(screen.getByRole('button', { name: 'Проверить подключение' }))
+    await waitFor(() => expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(1))
+    // models -> test -> put, in that order
+    const order = fetchMock.mock.calls
+      .map(([url, init]) => `${((init as RequestInit | undefined)?.method ?? 'GET').toUpperCase()} ${String(url)}`)
+      .filter((c) => !c.startsWith('GET'))
+    expect(order.slice(-3)).toEqual(['POST /api/settings/llm/models', 'POST /api/settings/llm/test', 'PUT /api/settings/llm'])
     const tested = JSON.parse(String((callsTo(fetchMock, 'POST', '/api/settings/llm/test')[0][1] as RequestInit).body))
-    expect(tested).toMatchObject({ provider: 'openai', openai_key: 'sk-test-1', openai_model: 'gpt-5.4-nano' })
+    expect(tested).toMatchObject({ provider: 'openai', openai_model: 'gpt-5.4-nano' })
+    expect(Object.keys(tested).filter((k) => k.endsWith('_key'))).toEqual([])
 
     await user.selectOptions(screen.getByLabelText('Модель'), 'gpt-5.5')
     await user.click(screen.getByRole('button', { name: 'Продолжить' }))
@@ -149,16 +182,16 @@ describe('LlmStep', () => {
     expect(JSON.parse(String((puts[puts.length - 1][1] as RequestInit).body))).toMatchObject({ openai_model: 'gpt-5.5' })
   })
 
-  it('shows the provider error when the key cannot list models', async () => {
+  it('shows the provider error when the connection check fails', async () => {
     const user = userEvent.setup()
     const fetchMock = mockApi({
       'GET /api/settings/llm': LLM,
+      'GET /api/settings/llm/providers': { providers: ['openai', 'gemini'] },
       'POST /api/settings/llm/models': { ok: false, models: [], error: 'gemini HTTP 400: API key not valid' },
     })
     render(<LlmStep onDone={vi.fn()} />)
     await user.click(await screen.findByRole('radio', { name: /Google Gemini/ }))
-    await user.type(screen.getByLabelText('Ключ API'), 'bad')
-    await user.click(screen.getByRole('button', { name: 'Проверить ключ' }))
+    await user.click(screen.getByRole('button', { name: 'Проверить подключение' }))
     expect(await screen.findByText(/API key not valid/)).toBeInTheDocument()
     expect(callsTo(fetchMock, 'POST', '/api/settings/llm/test')).toHaveLength(0)
     expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(0)

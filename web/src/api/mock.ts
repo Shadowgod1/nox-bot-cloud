@@ -9,6 +9,7 @@ import type {
   Conversation,
   ConversationRow,
   Dashboard,
+  LlmProvider,
   LlmSettings,
   Message,
   NotifySettings,
@@ -42,7 +43,9 @@ interface State {
   messages: Message[]
   bookings: Booking[]
   bot: BotSettings
-  llm: LlmSettings & { _openai: string | null; _gemini: string | null; _anthropic: string | null }
+  llm: LlmSettings
+  /** Providers with an ILER (vendor) key: configured by a technician on the server, never in the UI. */
+  vendorProviders: LlmProvider[]
   notify: NotifySettings & { _smtpPass: string | null }
   senet: SenetSettings & { _key: string | null }
   backups: BackupInfo[]
@@ -104,7 +107,8 @@ const s: State = {
     booking_request_timeout_min: 15,
     booking_timeout_message: 'Администратор скоро свяжется с вами по заявке.',
   },
-  llm: { provider: 'openai', openai_key: null, openai_model: 'gpt-5.4-mini', openai_fallback_model: null, gemini_key: null, gemini_model: 'gemini-3.8-flash', anthropic_key: null, anthropic_model: 'claude-sonnet-5-5', anthropic_effort: 'low', emergency_provider: null, _openai: 'sk-mock-1234abcd', _gemini: null, _anthropic: null },
+  llm: { provider: 'openai', openai_model: 'gpt-5.4-mini', openai_fallback_model: null, gemini_model: 'gemini-3.8-flash', anthropic_model: 'claude-sonnet-5-5', anthropic_effort: 'low', emergency_provider: null },
+  vendorProviders: ['anthropic', 'openai'],
   notify: { admin_phones: ['77015550000'], admin_group_jid: null, smtp: null, _smtpPass: null },
   senet: { enabled: false, orgname: null, app_key: null, _key: null },
   backups: [
@@ -154,7 +158,7 @@ const convOut = (c: ConvState): Conversation => ({ ...c, last_message: lastMessa
 const convRow = (c: ConvState): ConversationRow => ({ ...c, created_at: ago(60 * 24 * 30) })
 const sortKey = (c: ConvState) => (c.last_message_at ? Date.parse(c.last_message_at) * 1000 : 0)
 
-const llmOut = (): LlmSettings => ({ ...strip(s.llm), openai_key: mask(s.llm._openai), gemini_key: mask(s.llm._gemini), anthropic_key: mask(s.llm._anthropic) })
+const llmOut = (): LlmSettings => ({ ...s.llm })
 const notifyOut = (): NotifySettings => ({ ...strip(s.notify), smtp: s.notify.smtp ? { ...s.notify.smtp, password: mask(s.notify._smtpPass) } : null })
 const senetOut = (): SenetSettings => ({ ...strip(s.senet), app_key: mask(s.senet._key) })
 
@@ -211,7 +215,6 @@ on('POST', '/api/setup/owner', (_m, b, _url, init) => {
   s.user = { id: 1, email: String(b.email).trim().toLowerCase(), name: String(b.name ?? ''), role: 'owner' }
   s.users = [{ ...s.user, created_at: new Date().toISOString(), last_login_at: null }]
   s.wa = { status: 'close', phone: null, last_error: null }
-  s.llm._openai = null
   s.bot = { ...s.bot, prompt: '', template_id: null, template_values: {}, prompt_edited: false }
   login() // core sets the session + CSRF cookies here
   return json(s.user)
@@ -374,35 +377,24 @@ on('PUT', '/api/settings/bot', (_m, b) => {
   return json(s.bot)
 })
 on('GET', '/api/settings/llm', () => json(llmOut()))
+on('GET', '/api/settings/llm/providers', () => json({ providers: s.vendorProviders }))
 on('PUT', '/api/settings/llm', (_m, b) => {
-  s.llm._openai = applySecret(s.llm._openai, b.openai_key)
-  s.llm._gemini = applySecret(s.llm._gemini, b.gemini_key)
-  s.llm._anthropic = applySecret(s.llm._anthropic, b.anthropic_key)
+  // like core: keys are not part of the settings; anything the client sends for them is ignored
   const { openai_key: _a, gemini_key: _g, anthropic_key: _c, ...rest } = b
   Object.assign(s.llm, rest)
   return json(llmOut())
 })
 on('POST', '/api/settings/llm/test', async (_m, b) => {
   await sleep(700)
-  // Unsaved values from the body win; masked / omitted keys fall back to the stored ones.
-  const provider = (b.provider as string | undefined) ?? s.llm.provider
-  const key =
-    provider === 'openai'
-      ? applySecret(s.llm._openai, b.openai_key)
-      : provider === 'anthropic'
-        ? applySecret(s.llm._anthropic, b.anthropic_key)
-        : applySecret(s.llm._gemini, b.gemini_key)
-  if (!key) return json({ ok: false, error: `${provider} API key is not configured` })
-  if (key.includes('bad')) return json({ ok: false, error: 'Incorrect API key provided' })
+  const provider = ((b.provider as string | undefined) ?? s.llm.provider) as LlmProvider
+  if (!s.vendorProviders.includes(provider)) return json({ ok: false, error: `${provider} API key is not configured` })
   return json({ ok: true })
 })
 on('POST', '/api/settings/llm/models', async (_m, b) => {
   await sleep(400)
-  const provider = (b.provider as string | undefined) ?? s.llm.provider
+  const provider = ((b.provider as string | undefined) ?? s.llm.provider) as LlmProvider
+  if (!s.vendorProviders.includes(provider)) return json({ ok: false, models: [], error: `${provider} API key is not configured` })
   if (provider === 'anthropic') return json({ ok: true, models: ['claude-sonnet-5-5', 'claude-haiku-5-5'] })
-  const key = provider === 'openai' ? applySecret(s.llm._openai, b.openai_key) : applySecret(s.llm._gemini, b.gemini_key)
-  if (!key) return json({ ok: false, models: [], error: `${provider} API key is not configured` })
-  if (key.includes('bad')) return json({ ok: false, models: [], error: 'Incorrect API key provided' })
   return json({
     ok: true,
     models: provider === 'openai' ? ['gpt-5.5', 'gpt-5.4-mini', 'gpt-5.4-nano'] : ['gemini-3.8-flash', 'gemini-3.5-flash-lite'],

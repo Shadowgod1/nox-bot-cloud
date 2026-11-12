@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { CircleAlert } from 'lucide-react'
 import type { LlmProvider, LlmSettings } from '../../api/types'
 import { Input, Select } from '../../components/ui'
 
@@ -18,9 +19,27 @@ export const RECOMMENDED: Record<Exclude<LlmProvider, 'anthropic'>, string[]> = 
 }
 
 export const MODEL_HINT: Record<LlmProvider, string> = {
-  openai: 'Список берётся из вашего аккаунта OpenAI после проверки ключа.',
-  gemini: 'Список берётся из вашего аккаунта Google AI Studio после проверки ключа.',
+  openai: 'Список моделей OpenAI, доступных через подключение ILER.',
+  gemini: 'Список моделей Gemini, доступных через подключение ILER.',
   anthropic: 'Sonnet отвечает умнее, Haiku — быстрее и в ~20 раз дешевле.',
+}
+
+export const PROVIDER_LABEL: Record<LlmProvider, string> = {
+  openai: 'OpenAI',
+  gemini: 'Google Gemini',
+  anthropic: 'Anthropic (Claude)',
+}
+
+/** Shown when the server has no ILER (vendor) key for any provider. */
+export const NO_VENDOR_KEYS = 'Ключи ILER не настроены. Обратитесь в поддержку ILER — техник добавит их при установке.'
+
+export function NoVendorKeys() {
+  return (
+    <div role="alert" className="flex items-start gap-3 rounded-[10px] border border-warn/40 bg-warn-soft px-4 py-3 text-sm text-ink">
+      <CircleAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden />
+      <p>{NO_VENDOR_KEYS}</p>
+    </div>
+  )
 }
 
 /** POST /api/settings/llm/models: models of the primary provider for (unsaved) settings. */

@@ -190,12 +190,9 @@ export type SecretValue = string | null
 
 export interface LlmSettings {
   provider: LlmProvider
-  openai_key: SecretValue
   openai_model: string
   openai_fallback_model: string | null
-  gemini_key: SecretValue
   gemini_model: string
-  anthropic_key: SecretValue
   anthropic_model: string
   anthropic_effort: AnthropicEffort
   emergency_provider: LlmProvider | null
@@ -221,6 +218,11 @@ export interface SenetSettings {
   enabled: boolean
   orgname: string | null
   app_key: SecretValue
+}
+
+/** GET /api/settings/llm/providers: providers that have an ILER (vendor) key, in order anthropic, openai, gemini. */
+export interface LlmProvidersResult {
+  providers: LlmProvider[]
 }
 
 /** POST /api/settings/llm/test (body: optional unsaved LlmSettings; nothing is saved). */

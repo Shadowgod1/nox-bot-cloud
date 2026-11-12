@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { Check, CheckCircle2, CircleAlert } from 'lucide-react'
 import { api, ApiError } from '../../api/client'
-import type { AnthropicEffort, LlmProvider, LlmSettings, LlmTestResult, User } from '../../api/types'
+import type { AnthropicEffort, LlmProvider, LlmProvidersResult, LlmSettings, LlmTestResult, User } from '../../api/types'
 import { useAuth } from '../../hooks/useAuth'
 import { useLoad } from '../../hooks/useLoad'
 import { AuthFrame } from '../Login/Login'
@@ -11,9 +11,22 @@ import { BotSetupStep } from './BotSetupStep'
 import { StepHeader } from './StepHeader'
 import { Button, CheckLine, type CheckView, ErrorState, Field, Input, Select, Spinner, cx } from '../../components/ui'
 import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_EFFORT_HINT, ANTHROPIC_EFFORTS } from '../System/anthropic'
-import { MODEL_FIELD, MODEL_HINT, ModelSelect, RECOMMENDED, pickModel, type LlmModelsResult } from '../System/models'
+import {
+  MODEL_FIELD,
+  MODEL_HINT,
+  ModelSelect,
+  NoVendorKeys,
+  PROVIDER_LABEL,
+  RECOMMENDED,
+  pickModel,
+  type LlmModelsResult,
+} from '../System/models'
 
-const KEY_FIELD = { openai: 'openai_key', gemini: 'gemini_key', anthropic: 'anthropic_key' } as const
+const PROVIDER_DESC: Record<LlmProvider, string> = {
+  anthropic: 'Claude Sonnet и Haiku',
+  openai: 'Модели GPT',
+  gemini: 'Модели Gemini от Google',
+}
 
 const STEPS = ['Владелец', 'Языковая модель', 'WhatsApp', 'Настройка бота', 'Готово'] as const
 const TOKEN_KEY = 'iler_setup_token'
@@ -198,8 +211,8 @@ function OwnerStep({ token, onDone }: { token: string | null; onDone: () => void
 
 export function LlmStep({ onDone }: { onDone: () => void }) {
   const current = useLoad(() => api.get<LlmSettings>('/api/settings/llm', { silent: true }))
-  const [provider, setProvider] = useState<LlmProvider>('openai')
-  const [key, setKey] = useState('')
+  const available = useLoad(() => api.get<LlmProvidersResult>('/api/settings/llm/providers', { silent: true }))
+  const [chosenProvider, setProvider] = useState<LlmProvider | null>(null)
   const [model, setModel] = useState<Record<LlmProvider, string>>({
     openai: RECOMMENDED.openai[0],
     gemini: RECOMMENDED.gemini[0],
@@ -210,25 +223,51 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState(false)
   const [check, setCheck] = useState<CheckView | null>(null)
 
-  function payloadFor(chosen: string): LlmSettings | null {
+  const providers = available.data?.providers ?? []
+  // the user's pick, else the stored provider if ILER has a key for it, else the first available one
+  const provider: LlmProvider | null =
+    chosenProvider ?? (current.data && providers.includes(current.data.provider) ? current.data.provider : (providers[0] ?? null))
+
+  function payloadFor(p: LlmProvider, chosen: string): LlmSettings | null {
     if (!current.data) return null
     return {
       ...current.data,
-      provider,
-      [KEY_FIELD[provider]]: key.trim(),
-      [MODEL_FIELD[provider]]: chosen,
-      ...(provider === 'anthropic' ? { anthropic_effort: effort } : {}),
+      provider: p,
+      [MODEL_FIELD[p]]: chosen,
+      ...(p === 'anthropic' ? { anthropic_effort: effort } : {}),
     }
   }
 
+  // Populate the model select as soon as an OpenAI / Gemini provider is selected.
+  const settingsLoaded = Boolean(current.data)
+  useEffect(() => {
+    if (!settingsLoaded || !provider || provider === 'anthropic' || models[provider]) return
+    let cancelled = false
+    api
+      .post<LlmModelsResult>('/api/settings/llm/models', payloadFor(provider, model[provider]), { silent: true })
+      .then((r) => {
+        if (cancelled || !r.ok) return // the check button shows the provider error
+        setModels((m) => ({ ...m, [provider]: r.models }))
+        setModel((m) => ({ ...m, [provider]: pickModel(provider, m[provider], r.models) }))
+      })
+      .catch(() => {
+        /* the check button reports it */
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, settingsLoaded])
+
   async function verify(e: FormEvent) {
     e.preventDefault()
-    const base = payloadFor(model[provider])
-    if (!base || !key.trim()) return
+    if (!provider) return
+    const base = payloadFor(provider, model[provider])
+    if (!base) return
     setBusy(true)
     setCheck(null)
     try {
-      // 1) list the provider's models (validates OpenAI/Gemini keys without spending tokens)
+      // 1) list the provider's models (checks the connection without spending tokens)
       const listed = await api.post<LlmModelsResult>('/api/settings/llm/models', base)
       if (!listed.ok) {
         setCheck({ ok: false, message: listed.error })
@@ -238,7 +277,7 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
       setModels((m) => ({ ...m, [provider]: listed.models }))
       setModel((m) => ({ ...m, [provider]: chosen }))
       // 2) a one-word request with the chosen model; store the settings only when it works
-      const payload = payloadFor(chosen)!
+      const payload = payloadFor(provider, chosen)!
       const r = await api.post<LlmTestResult>('/api/settings/llm/test', payload)
       if (r.ok) await api.put<LlmSettings>('/api/settings/llm', payload)
       setCheck({ ok: r.ok, message: r.ok ? undefined : r.error })
@@ -251,7 +290,7 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
 
   async function proceed() {
     // the model may have been changed after the check: store the final choice
-    const payload = payloadFor(model[provider])
+    const payload = provider ? payloadFor(provider, model[provider]) : null
     if (!payload) return
     setBusy(true)
     try {
@@ -264,28 +303,40 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
     }
   }
 
+  const loadError = current.error ?? available.error
+  const later = (
+    <button type="button" onClick={onDone} className="self-start text-[13px] text-ink-2 underline hover:text-ink">
+      Настроить позже
+    </button>
+  )
+
   return (
     <>
       <StepHeader
         title="Подключите языковую модель"
-        text="Бот формулирует ответы с помощью OpenAI, Google Gemini или Anthropic Claude. Ключ хранится только на этом сервере в зашифрованном виде."
+        text="Бот формулирует ответы через подключение ILER к OpenAI, Google Gemini или Anthropic Claude. Ключи доступа предоставляет ILER — вам остаётся выбрать модель."
       />
-      {current.loading ? (
+      {current.loading || available.loading ? (
         <Spinner />
-      ) : current.error ? (
-        <ErrorState message={current.error.message} onRetry={current.reload} />
+      ) : loadError ? (
+        <ErrorState
+          message={loadError.message}
+          onRetry={() => {
+            void current.reload()
+            void available.reload()
+          }}
+        />
+      ) : !provider ? (
+        <div className="flex flex-col gap-5">
+          <NoVendorKeys />
+          {later}
+        </div>
       ) : (
         <form onSubmit={verify} className="flex flex-col gap-5">
           <fieldset>
             <legend className="mb-2 text-[13px] font-medium text-ink">Провайдер</legend>
             <div className="grid gap-3 sm:grid-cols-3">
-              {(
-                [
-                  ['openai', 'OpenAI', 'Ключ вида sk-… из platform.openai.com'],
-                  ['gemini', 'Google Gemini', 'Ключ из Google AI Studio'],
-                  ['anthropic', 'Anthropic (Claude)', 'Ключ вида sk-ant-… из консоли Anthropic'],
-                ] as const
-              ).map(([value, title, desc]) => (
+              {providers.map((value) => (
                 <label
                   key={value}
                   className={cx(
@@ -305,26 +356,13 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
                     className="mt-1 accent-[var(--color-accent)]"
                   />
                   <span>
-                    <span className="block text-sm font-medium text-ink">{title}</span>
-                    <span className="block text-[13px] text-ink-2">{desc}</span>
+                    <span className="block text-sm font-medium text-ink">{PROVIDER_LABEL[value]}</span>
+                    <span className="block text-[13px] text-ink-2">{PROVIDER_DESC[value]}</span>
                   </span>
                 </label>
               ))}
             </div>
           </fieldset>
-          <Field label="Ключ API">
-            <Input
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              className="font-mono text-[13px]"
-              value={key}
-              onChange={(e) => {
-                setKey(e.target.value)
-                setCheck(null)
-              }}
-            />
-          </Field>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Модель" hint={MODEL_HINT[provider]}>
               <ModelSelect
@@ -348,8 +386,8 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit" variant={check?.ok ? 'secondary' : 'primary'} loading={busy && !check?.ok} disabled={!key.trim()}>
-              Проверить ключ
+            <Button type="submit" variant={check?.ok ? 'secondary' : 'primary'} loading={busy && !check?.ok}>
+              Проверить подключение
             </Button>
             {check?.ok && (
               <Button variant="primary" onClick={() => void proceed()} loading={busy}>
@@ -358,9 +396,7 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
             )}
             <CheckLine result={check} />
           </div>
-          <button type="button" onClick={onDone} className="self-start text-[13px] text-ink-2 underline hover:text-ink">
-            Настроить позже
-          </button>
+          {later}
         </form>
       )}
     </>
