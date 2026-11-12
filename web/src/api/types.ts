@@ -65,6 +65,8 @@ export interface Dashboard {
     /** Outbound messages that ended failed/uncertain in the last 24 h. */
     send: number
   }
+  /** Result of the last backup attempt (status null = no backup has run yet). */
+  backup: { status: 'ok' | 'error' | null; at: string | null; message: string | null }
   health: DashboardHealth
   coins: DashboardCoins
 }
@@ -74,9 +76,9 @@ export interface DashboardHealth {
   last_client_message_at: string | null
   /** Mean model latency of today's successful requests, ms. */
   avg_reply_ms_today: number | null
-  /** Conversations handed to the operator today. */
+  /** Conversations that got status needs_operator today, for any reason. */
   handovers_today: number
-  /** Share (0..1) of today's client conversations the bot answered. */
+  /** Share (0..1) of today's client conversations the bot answered itself (a handover reply does not count). */
   answered_share_today: number | null
 }
 
@@ -96,6 +98,8 @@ export interface DashboardCoins {
   /** Every day from the 1st to today, zeros included. */
   days: { date: string; coins: number }[]
   by_model: { model: string; coins: number }[]
+  /** Models used this month with no price entry: billed at the highest tariff. */
+  unpriced_models: string[]
 }
 
 export type ConversationStatus = 'active' | 'paused' | 'needs_operator' | 'closed'

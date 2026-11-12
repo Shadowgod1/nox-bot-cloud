@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { Dashboard } from './Dashboard'
-import { formatAgo, formatDayMonth, formatSeconds } from './health'
+import { formatAgo, formatDayMonth, formatPercent, formatSeconds } from './health'
 import { FakeEventSource, mockApi } from '../../test/utils'
 import { __resetEventsForTests } from '../../hooks/useEvents'
 import type { Dashboard as DashboardData, DashboardCoins } from '../../api/types'
@@ -31,6 +31,7 @@ function coins(over: Partial<DashboardCoins> = {}): DashboardCoins {
       { model: 'claude-sonnet-5-5', coins: 9000 },
       { model: 'claude-haiku-5-5', coins: 3400.5 },
     ],
+    unpriced_models: [],
     ...over,
   }
 }
@@ -41,6 +42,7 @@ function dashboard(over: Partial<DashboardData> = {}): DashboardData {
     bot_enabled: true,
     today: { conversations: 14, client_messages: 41, bot_replies: 63, bookings_pending: 0, bookings_total: 3 },
     errors_24h: { llm: 0, send: 0 },
+    backup: { status: 'ok', at: minutesAgo(600), message: null },
     health: {
       last_bot_reply_at: minutesAgo(5),
       last_client_message_at: minutesAgo(6),
@@ -107,6 +109,18 @@ describe('Dashboard', () => {
     expect(forecast()).not.toHaveAttribute('data-level', 'ok')
   })
 
+  it('shows no price warning when every model has a price', async () => {
+    await renderWith(dashboard())
+    expect(screen.queryByTestId('coins-unpriced')).not.toBeInTheDocument()
+  })
+
+  it('names the unpriced models', async () => {
+    await renderWith(dashboard({ coins: coins({ unpriced_models: ['gpt-x-new'] }) }))
+    expect(screen.getByTestId('coins-unpriced')).toHaveTextContent(
+      'Для модели gpt-x-new нет цены — расход посчитан по максимальному тарифу, уточните у ILER.',
+    )
+  })
+
   it('goes amber on errors in the last 24 hours', async () => {
     const hero = await renderWith(dashboard({ errors_24h: { llm: 2, send: 0 } }))
     expect(hero).toHaveAttribute('data-level', 'warn')
@@ -168,6 +182,15 @@ describe('dashboard formatting', () => {
     expect(formatAgo('2026-11-12T09:49:00Z', now)).toBe('11 минут назад')
     expect(formatAgo('2026-11-12T07:00:00Z', now)).toBe('3 часа назад')
     expect(formatAgo('2026-11-10T09:00:00Z', now)).toBe('2 дня назад')
+  })
+
+  it('never shows 100% before the limit is used up', () => {
+    expect(formatPercent(99.7)).toBe('99%')
+    expect(formatPercent(99)).toBe('99%')
+    expect(formatPercent(100)).toBe('100%')
+    expect(formatPercent(98.6)).toBe('99%')
+    expect(formatPercent(41.3)).toBe('41%')
+    expect(formatPercent(0.5)).toBe('0,5%')
   })
 
   it('formats dates and seconds', () => {

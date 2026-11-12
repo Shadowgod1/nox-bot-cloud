@@ -84,6 +84,14 @@ export function CoinsCard({ coins }: { coins: DashboardCoins }) {
             <span>{forecast.text}</span>
           </p>
         )}
+
+        {coins.unpriced_models.length > 0 && (
+          <p data-testid="coins-unpriced" className="mt-3 text-[12px] text-ink-3">
+            {coins.unpriced_models.length === 1 ? 'Для модели' : 'Для моделей'}{' '}
+            {coins.unpriced_models.map(modelLabel).join(', ')} нет цены — расход посчитан по максимальному
+            тарифу, уточните у ILER.
+          </p>
+        )}
       </div>
 
       <div className="grid border-t border-line md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] md:divide-x md:divide-line">

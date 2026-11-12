@@ -539,3 +539,25 @@ async def test_coin_limit_hands_over_without_calling_llm(env, pool, monkeypatch)
     assert conv["status"] == "needs_operator"
     assert env.gw.texts(CLIENT_JID) == ["Передаю ваш вопрос администратору, он скоро ответит."]
     assert len(env.gw.texts(ADMIN_JID)) == 1 and "Лимит коинов" in env.gw.texts(ADMIN_JID)[0]
+
+
+async def test_coin_limit_handover_reply_once_per_day(env, pool, monkeypatch):
+    from iler import usage
+
+    async def reached():
+        return True
+
+    monkeypatch.setattr(usage, "limit_reached", reached)
+    await env.set_bot(handover_pause_minutes=30)
+    env.llm = FakeLLM(script=[])  # must not be called
+    await handler.handle_incoming(make_msg("Привет"))
+    await env.idle()
+    conv = await _conv(pool)
+    assert conv["status"] == "needs_operator"
+    assert conv["paused_until"] > datetime.now(UTC) + timedelta(hours=23)  # at least a day, not 30 minutes
+    # the operator releases the chat without answering; the client writes again the same day
+    await pool.execute("UPDATE conversations SET status = 'active', paused_until = NULL WHERE id = $1", conv["id"])
+    await handler.handle_incoming(make_msg("Алло?"))
+    await env.idle()
+    assert env.gw.texts(CLIENT_JID) == ["Передаю ваш вопрос администратору, он скоро ответит."]
+    assert (await _conv(pool))["status"] == "needs_operator"

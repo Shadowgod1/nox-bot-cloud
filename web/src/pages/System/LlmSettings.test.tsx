@@ -71,6 +71,23 @@ describe('LLM settings with ILER keys', () => {
   })
 })
 
+describe('key check', () => {
+  it('clears the check result when the primary provider changes', async () => {
+    mockApi({
+      'GET /api/settings/llm': llm,
+      'GET /api/settings/llm/providers': ALL,
+      'POST /api/settings/llm/models': { ok: true, models: [] },
+      'POST /api/settings/llm/test': { ok: false, error: 'openai: Ключ ILER отклонён провайдером — обратитесь в ILER' },
+    })
+    render(<LlmSettingsPanel />)
+    await screen.findByLabelText('Основной провайдер')
+    await userEvent.click(screen.getByRole('button', { name: 'Проверить' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Не работает: openai: Ключ ILER отклонён')
+    await userEvent.selectOptions(screen.getByLabelText('Основной провайдер'), 'Anthropic (Claude)')
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+})
+
 describe('Anthropic (Claude) settings', () => {
   it('offers Claude as primary and emergency provider and saves model and effort', async () => {
     const fetchMock = mockApi({

@@ -48,7 +48,6 @@ export function Bookings() {
             { value: 'pending', label: 'Ожидают' },
             { value: 'confirmed', label: 'Подтверждённые' },
             { value: 'rejected', label: 'Отклонённые' },
-            { value: 'expired', label: 'Истёкшие' },
             { value: 'all', label: 'Все' },
           ]}
         />

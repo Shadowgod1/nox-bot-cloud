@@ -151,7 +151,6 @@ export function Conversations() {
               { value: 'needs_operator', label: 'Оператор', count: filter === 'all' ? needsOperator : undefined },
               { value: 'active', label: 'Бот' },
               { value: 'paused', label: 'Пауза' },
-              { value: 'closed', label: 'Закрытые' },
             ]}
           />
         </div>

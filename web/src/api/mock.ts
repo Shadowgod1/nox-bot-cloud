@@ -255,6 +255,7 @@ on('GET', '/api/dashboard', () => {
       bookings_total: 3,
     },
     errors_24h: { llm: 1, send: 0 },
+    backup: { status: 'ok', at: ago(60 * 8), message: null },
     health: {
       last_bot_reply_at: ago(4),
       last_client_message_at: ago(5),
@@ -303,6 +304,7 @@ function mockCoins(): Dashboard['coins'] {
       { model: 'claude-sonnet-5-5', coins: Math.round(spent * 0.82 * 10) / 10 },
       { model: 'claude-haiku-5-5', coins: Math.round(spent * 0.18 * 10) / 10 },
     ],
+    unpriced_models: [],
   }
 }
 

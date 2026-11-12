@@ -154,7 +154,13 @@ export function LlmSettingsPanel() {
       >
         <div className="grid gap-5 md:grid-cols-2">
           <Field label="Основной провайдер">
-            <Select value={form.provider} onChange={(e) => set('provider', e.target.value as LlmProvider)}>
+            <Select
+              value={form.provider}
+              onChange={(e) => {
+                set('provider', e.target.value as LlmProvider)
+                setCheck(null) // the last check was for the previous provider
+              }}
+            >
               {options}
             </Select>
           </Field>

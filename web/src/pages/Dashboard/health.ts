@@ -69,9 +69,10 @@ export function formatNumber(n: number): string {
   return Math.round(n).toLocaleString('ru-RU')
 }
 
-/** 41.3 -> "41%", 0.5 -> "0,5%". */
+/** 41.3 -> "41%", 0.5 -> "0,5%", 99.7 -> "99%" (never "100%" before the limit is actually used up). */
 export function formatPercent(p: number): string {
-  return `${p > 0 && p < 1 ? p.toLocaleString('ru-RU', { maximumFractionDigits: 1 }) : Math.round(p)}%`
+  if (p > 0 && p < 1) return `${p.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`
+  return `${p >= 99 && p < 100 ? Math.floor(p) : Math.round(p)}%`
 }
 
 /** "2026-11-27" -> "27 ноября" (parsed as a local calendar date, no TZ shift). */

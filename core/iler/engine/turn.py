@@ -20,6 +20,7 @@ log = logging.getLogger("iler.engine.turn")
 HANDOVER_TOOL = "handover_to_operator"
 HANDOVER_REPLY = "Передаю ваш вопрос администратору, он скоро ответит."
 AFTER_HOURS_REPEAT = timedelta(hours=12)  # the after-hours text goes to a conversation at most this often
+NO_COINS_REPEAT_MINUTES = 24 * 60  # coin-limit handover: minimum pause and reply repeat interval
 
 
 def _not_configured(bot) -> bool:
@@ -74,10 +75,19 @@ async def _handle_llm_failure(conv, error: LlmError) -> None:
 
 async def _handover_no_coins(conv, turn_id: str) -> None:
     """The monthly coin limit is used up: the client is told an administrator will answer, the
-    conversation waits for the operator and the admins are told (once per conversation per day)."""
+    conversation waits for the operator and the admins are told (once per conversation per day).
+
+    The pause is at least a day and the reply is not repeated if it already went out within a day, so a
+    client who keeps writing while the limit is exhausted does not get the same phrase over and over."""
     bot = await settings_store.get("bot", BotSettings)
-    await store.set_status(conv["id"], "needs_operator", pause_minutes=bot.handover_pause_minutes)
-    await sender.send_reply(conv["id"], sender.split_reply(HANDOVER_REPLY), turn_id=turn_id)
+    pause = max(bot.handover_pause_minutes, NO_COINS_REPEAT_MINUTES)
+    await store.set_status(conv["id"], "needs_operator", pause_minutes=pause)
+    prev = await store.last_bot_message(conv["id"])
+    recent = timedelta(minutes=NO_COINS_REPEAT_MINUTES)
+    if prev is not None and prev["text"] == HANDOVER_REPLY and prev["created_at"] > datetime.now(UTC) - recent:
+        log.info("conversation %s: coin-limit handover reply already sent recently", conv["id"])
+    else:
+        await sender.send_reply(conv["id"], sender.split_reply(HANDOVER_REPLY), turn_id=turn_id)
     who = conv["name"] or "клиент"
     phone = f" +{conv['phone']}" if conv["phone"] else ""
     await sender.notify_admins(

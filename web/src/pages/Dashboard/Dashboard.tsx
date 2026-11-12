@@ -9,7 +9,6 @@ import { PageBody } from '../../components/Layout'
 import { WhatsAppConnect } from '../../components/WhatsAppConnect'
 import { Badge, Button, ErrorState, PageHeader, Panel, Spinner, Switch } from '../../components/ui'
 import { toast } from '../../components/toast'
-import { useAuth } from '../../hooks/useAuth'
 import { plural, ru } from '../../i18n/ru'
 import { StatusHero } from './StatusHero'
 import { CoinsCard } from './CoinsCard'
@@ -26,7 +25,6 @@ export function Dashboard() {
   const [connecting, setConnecting] = useState(params.get('connect') === '1')
   const [toggling, setToggling] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
-  const { isOwner } = useAuth()
 
   // The dashboard payload has no last_error; it comes with the live `whatsapp.status` event.
   const [waError, setWaError] = useState<string | null>(null)
@@ -191,13 +189,6 @@ export function Dashboard() {
           title="Ошибки за 24 часа"
           description="Сбои обращений к модели и неотправленные сообщения."
           bodyClassName="p-0"
-          actions={
-            isOwner && errorsTotal > 0 ? (
-              <Link to="/system" className="inline-flex items-center gap-1 text-[13px] font-medium text-accent hover:underline">
-                Подробнее в «Системе» <ArrowRight className="size-3" aria-hidden />
-              </Link>
-            ) : undefined
-          }
         >
           {errorsTotal === 0 ? (
             <div className="flex items-center gap-2.5 px-5 py-4 text-sm text-ink-2">

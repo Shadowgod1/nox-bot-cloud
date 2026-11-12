@@ -13,7 +13,15 @@ Operator notes for `deploy/`. The design is in `docs/superpowers/specs/2026-11-1
 | Windows Server 2022+ | supported |
 | Windows Server 2019, Windows 10 < 22H2 | not supported (no WSL2 / too old) |
 
-Minimum hardware: 2 vCPU, 4 GB RAM, 40 GB SSD (recommended 4 vCPU / 8 GB / 100 GB).
+Requirements (full list: iler-vault, docs/requirements.md):
+
+- Windows: 64-bit, hardware virtualization (VT-x / AMD-V) enabled, 2 cores / 8 GB RAM / 40 GB free SSD minimum
+  (recommended 4 cores / 16 GB / 100 GB); WSL gets 75% of RAM (min 3 GB); admin rights to install.
+- Ubuntu / Debian: 2 vCPU / 4 GB RAM / 40 GB SSD minimum (recommended 4 vCPU / 8 GB / 100 GB). The containers
+  use up to ~3.2 GB RAM.
+- Both: permanent internet (WhatsApp, model API, updates; Docker Engine is downloaded during install), admin UI on
+  TCP 8080 from the LAN only, no inbound connections from the internet, machine on 24/7 with sleep off, a
+  separate WhatsApp number.
 
 Windows: run `ILER-Setup-<version>.exe` as Administrator. It enables WSL2 (may ask for one reboot and then
 continues automatically), installs its own Ubuntu 24.04 distro with Docker Engine inside, loads the
@@ -97,10 +105,15 @@ sudo bash deploy/install.sh --restore /path/iler-backup-YYYYMMDD-HHMMSS.tar.gz -
 - Restores both databases. It also restores the Redis snapshot (the WhatsApp session) into the redis
   volume while redis is stopped. A restore started from the admin UI restores only the databases and
   reports `"redis": "skipped"`.
-- Stored secrets (LLM keys, SMTP password, Senet key) are encrypted with `ILER_SECRET_KEY` from the
-  **original** server's `.env`. `--env` imports that key, and only that key. Without it, the
+- Secrets stored in the database (SMTP password, Senet key) are encrypted with `ILER_SECRET_KEY` from
+  the **original** server's `.env`. `--env` imports that key, and only that key. Without it, the
   secrets cannot be decrypted. Core logs `secret key mismatch`, treats the secrets as unset, and
   they must be entered again in the admin UI.
+- ILER's LLM keys and the monthly coin limit are **not** in the database or the backup: they live
+  only in `.env` (`ILER_ANTHROPIC_KEY`, `ILER_OPENAI_KEY`, `ILER_GEMINI_KEY`, `ILER_MONTHLY_COINS`),
+  and `--env` does not import them. After a restore on a new machine the ILER technician must run
+  `sudo bash /opt/iler/deploy/set-llm-keys.sh` again; until then the bot cannot answer (the LLM key check
+  in the admin UI reports "ключ ILER не настроен").
 
 ## Uninstall
 

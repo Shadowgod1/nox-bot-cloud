@@ -77,24 +77,30 @@ async def message_exists(evo_message_id: str) -> bool:
     ))
 
 
+# when the conversation (last) got needs_operator: the dashboard counts today's handovers from it
+_NEEDS_OP_AT = "needs_operator_at = CASE WHEN $2 = 'needs_operator' THEN now() ELSE needs_operator_at END"
+
+
 async def set_status(conversation_id: int, status: str, *, pause_minutes: int | None = None,
                      clear_pause: bool = False):
     """Change status (optionally pausing for N minutes); publishes conversation.updated."""
     pool = get_pool()
     if pause_minutes is not None:
         row = await pool.fetchrow(
-            f"UPDATE conversations SET status = $2, paused_until = now() + $3::interval WHERE id = $1"
-            f" RETURNING {CONV_COLS}",
+            f"UPDATE conversations SET status = $2, {_NEEDS_OP_AT}, paused_until = now() + $3::interval"
+            f" WHERE id = $1 RETURNING {CONV_COLS}",
             conversation_id, status, timedelta(minutes=pause_minutes),
         )
     elif clear_pause:
         row = await pool.fetchrow(
-            f"UPDATE conversations SET status = $2, paused_until = NULL WHERE id = $1 RETURNING {CONV_COLS}",
+            f"UPDATE conversations SET status = $2, {_NEEDS_OP_AT}, paused_until = NULL"
+            f" WHERE id = $1 RETURNING {CONV_COLS}",
             conversation_id, status,
         )
     else:
         row = await pool.fetchrow(
-            f"UPDATE conversations SET status = $2 WHERE id = $1 RETURNING {CONV_COLS}", conversation_id, status
+            f"UPDATE conversations SET status = $2, {_NEEDS_OP_AT} WHERE id = $1 RETURNING {CONV_COLS}",
+            conversation_id, status,
         )
     if row is not None:
         publish_conversation(row)

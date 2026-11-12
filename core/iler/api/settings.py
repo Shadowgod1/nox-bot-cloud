@@ -190,7 +190,7 @@ async def post_settings_llm_test(
     check_key: KeyChecker = Depends(get_key_checker),
 ):
     """Checks the stored settings, or unsaved form values if a body is sent (nothing is saved)."""
-    from iler.llm.base import LlmError
+    from iler.llm.base import LlmError, public_error
 
     settings = await settings_store.get("llm", LlmSettings)
     if body is not None:
@@ -200,7 +200,7 @@ async def post_settings_llm_test(
         if inspect.isawaitable(result):
             await result
     except LlmError as exc:
-        return LlmTestResult(ok=False, error=str(exc) or "LLM check failed")
+        return LlmTestResult(ok=False, error=public_error(str(exc)) or "LLM check failed")
     return LlmTestResult(ok=True)
 
 
@@ -232,7 +232,7 @@ async def post_settings_llm_models(
 ):
     """Models of the primary provider for the stored settings or unsaved form values (nothing is saved).
     Listing models validates the key without spending tokens."""
-    from iler.llm.base import LlmError
+    from iler.llm.base import LlmError, public_error
 
     settings = await settings_store.get("llm", LlmSettings)
     if body is not None:
@@ -240,7 +240,7 @@ async def post_settings_llm_models(
     try:
         models = await list_models(settings)
     except LlmError as exc:
-        return LlmModelsResult(ok=False, error=str(exc) or "LLM check failed")
+        return LlmModelsResult(ok=False, error=public_error(str(exc)) or "LLM check failed")
     return LlmModelsResult(ok=True, models=models)
 
 

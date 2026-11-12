@@ -18,10 +18,12 @@ MAX_RETRIES = 2  # the SDK retries 429 / 5xx / connection errors with backoff
 _LIST_EXCLUDE = ("audio", "realtime", "transcribe", "tts", "image", "search", "embedding", "instruct",
                  "moderation", "codex", "computer", "deep-research")
 _SNAPSHOT = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+_PRO = re.compile(r"-pro(-|$)")  # "-pro" models are served only by the Responses API, not Chat Completions
 
 
 def chat_model_ids(ids: list[str]) -> list[str]:
-    keep = {i for i in ids if i.startswith("gpt-") and not any(x in i for x in _LIST_EXCLUDE) and not _SNAPSHOT.search(i)}
+    keep = {i for i in ids if i.startswith("gpt-") and not any(x in i for x in _LIST_EXCLUDE)
+            and not _SNAPSHOT.search(i) and not _PRO.search(i)}
     return sorted(keep, reverse=True)
 
 

@@ -5,7 +5,7 @@ import json
 import sys
 import types
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
@@ -390,6 +390,22 @@ async def test_test_chat_llm_error_is_502(client, monkeypatch):
     assert r.status_code == 502 and r.json()["error"]["code"] == "llm_error"
 
 
+async def test_test_chat_hides_provider_auth_error(client, monkeypatch):
+    await login(client)
+    from iler.llm.base import LlmError
+
+    async def run_turn(*a, **k):
+        raise LlmError("all LLM providers failed: anthropic/claude-sonnet-5-5: anthropic HTTP 401: invalid"
+                       " x-api-key sk-ant-***wxyz; openai/gpt-5.4: openai connection error: ConnectError",
+                       retryable=False)
+
+    fake_engine_module(monkeypatch, "turn", run_turn=run_turn)
+    r = await client.post("/api/test-chat", json={"messages": [{"role": "user", "content": "hi"}]},
+                          headers=csrf(client))
+    assert r.status_code == 502 and "wxyz" not in r.text
+    assert r.json()["error"]["message"] == "anthropic: Ключ ILER отклонён провайдером — обратитесь в ILER"
+
+
 # --- dashboard ----------------------------------------------------------------------------------
 
 async def test_dashboard_counts_today_in_club_tz(client, pool, monkeypatch):
@@ -450,6 +466,30 @@ async def test_dashboard_counts_today_in_club_tz(client, pool, monkeypatch):
     assert backup["status"] == "error" and backup["message"] == "disk full" and backup["at"]
 
 
+async def test_dashboard_handovers_any_reason_and_handover_reply_not_answered(client, pool, monkeypatch):
+    from iler.engine import store
+    from iler.engine.turn import HANDOVER_REPLY
+
+    assert dashboard_api.HANDOVER_REPLY == HANDOVER_REPLY  # the dashboard keeps its own copy
+    await login(client)
+    now = datetime.now(UTC)
+    monkeypatch.setattr(dashboard_api, "_now", lambda: now)
+    c1 = await make_conv(pool, "77010000001")
+    c2 = await make_conv(pool, "77010000002")
+    c3 = await make_conv(pool, "77010000003")
+    await add_msg(pool, c1, "hi", "client", now)
+    await add_msg(pool, c1, HANDOVER_REPLY, "bot", now)  # coin limit / LLM failure handover
+    await add_msg(pool, c2, "hi", "client", now)
+    await add_msg(pool, c2, "Здравствуйте!", "bot", now)
+    await add_msg(pool, c3, "hi", "client", now)
+    await store.set_status(c1, "needs_operator", pause_minutes=60)  # e.g. coin limit
+    await store.set_status(c3, "needs_operator", pause_minutes=60)  # e.g. LLM failure
+    await store.set_status(c3, "active", clear_pause=True)  # released by the operator later: still counted
+    health = (await client.get("/api/dashboard")).json()["health"]
+    assert health["handovers_today"] == 2
+    assert health["answered_share_today"] == round(1 / 3, 3)
+
+
 def test_today_bounds_dst_zone():
     start, end = dashboard_api.today_bounds(datetime(2026, 3, 29, 12, 0, tzinfo=UTC), "Europe/Berlin")
     assert start == datetime(2026, 3, 28, 23, 0, tzinfo=UTC)  # CET midnight
@@ -490,10 +530,37 @@ async def test_dashboard_coins_spend_and_forecast(client, pool, monkeypatch):
     coins = (await client.get("/api/dashboard")).json()["coins"]
     assert coins["spent"] == 45.0 and coins["remaining"] == 55.0 and coins["percent"] == 45.0
     assert coins["exhausted"] is False and coins["days_in_month"] == 30
-    assert coins["runs_out_on"] == "2026-11-23"  # ~4.5 coins/day since Nov 1
+    # The pace counts from the first request of the month (Nov 2 10:00 UTC), not from Nov 1:
+    # 45 coins / 8.4167 days = 5.35/day. Projection = spent + pace * days left (19.9583 d to Dec 1 00:00
+    # local) = 45 + 106.71 = 151.71. The limit runs out (100 - 45) / 5.3465 = 10.29 days from now,
+    # i.e. 2026-11-21 08:53 local.
+    assert coins["avg_per_day"] == 5.35 and coins["projected_month"] == 151.71
+    assert coins["runs_out_on"] == "2026-11-21"
+    assert coins["unpriced_models"] == []
     assert len(coins["days"]) == 11 and coins["days"][1] == {"date": "2026-11-02", "coins": 30.0}
     assert coins["days"][-1] == {"date": "2026-11-11", "coins": 15.0}
     assert coins["by_model"] == [{"model": "claude-sonnet-5-5", "coins": 30.0}, {"model": "claude-haiku-5-5", "coins": 15.0}]
+
+
+async def test_coin_forecast_waits_for_a_full_day(pool, monkeypatch):
+    from iler import usage
+    from iler.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "monthly_coins", 100)
+    now = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
+    # the bot started 6 hours ago (installed mid-month): 30 coins so far, by an unpriced model too
+    await pool.execute(
+        "INSERT INTO ai_requests(provider, model, input_tokens, output_tokens, created_at) VALUES"
+        " ('anthropic', 'claude-sonnet-5-5', 5000, 500, $1), ('openai', 'gpt-x-unknown', 5000, 500, $2)",
+        now - timedelta(hours=6), now - timedelta(hours=1),
+    )
+    u = await usage.month_usage(now)
+    assert u.spent == 30.0
+    assert u.runs_out_on is None  # less than a day of data: no date yet
+    assert u.avg_per_day == 30.0  # what was spent counts as one day's pace, not 30 / 0.25 days
+    assert u.unpriced_models == ["gpt-x-unknown"]
+    later = await usage.month_usage(now + timedelta(hours=18))  # a full day since the first request
+    assert later.avg_per_day == 30.0 and later.runs_out_on == date(2026, 11, 23)
 
 
 async def test_coin_alerts_once_per_level(pool, monkeypatch):
@@ -520,6 +587,87 @@ async def test_coin_alerts_once_per_level(pool, monkeypatch):
     await usage.after_spend()
     assert len(sent) == 2 and "исчерпан" in sent[1][1]
     assert await usage.limit_reached()
+    usage.invalidate()
+
+
+async def _put_spend(pool, coins: float) -> None:
+    # claude-sonnet-5-5: $2 per 1M input tokens, so 500 input tokens = 1 coin
+    await pool.execute("INSERT INTO ai_requests(provider, model, input_tokens, output_tokens)"
+                       " VALUES ('anthropic', 'claude-sonnet-5-5', $1, 0)", round(coins * 500))
+
+
+async def test_coin_alert_compares_unrounded_ratio(pool, monkeypatch):
+    from iler import usage
+    from iler.config import get_settings
+    from iler.engine import sender
+
+    sent = []
+
+    async def fake_notify(text, *, key=None):
+        sent.append(key)
+        return []
+
+    monkeypatch.setattr(sender, "notify_admins", fake_notify)
+    monkeypatch.setattr(get_settings(), "monthly_coins", 10000)
+    await _put_spend(pool, 9999.6)  # 99.996%: shows as 100.0% but the limit is not used up
+    await usage.after_spend()
+    month = f"{usage.month_start(datetime.now(UTC), usage._tz()):%Y-%m}"
+    assert sent == [f"coins:{month}:10000:80"]
+    assert not await usage.limit_reached()
+    usage.invalidate()
+
+
+async def test_coin_alerts_rearm_when_limit_changes(pool, monkeypatch):
+    from iler import usage
+    from iler.config import get_settings
+    from iler.engine import sender
+
+    sent = []
+
+    async def fake_notify(text, *, key=None):
+        sent.append(text)
+        return []
+
+    monkeypatch.setattr(sender, "notify_admins", fake_notify)
+    monkeypatch.setattr(get_settings(), "monthly_coins", 10)
+    await _put_spend(pool, 10)  # 10 of 10: exhausted
+    await usage.after_spend()
+    assert len(sent) == 1 and "исчерпан" in sent[0]
+    monkeypatch.setattr(get_settings(), "monthly_coins", 20)  # ILER raised the limit: 50%
+    await usage.after_spend()
+    assert len(sent) == 1
+    await _put_spend(pool, 7)  # 17 of 20 = 85%: the 80% alert fires again for the new limit
+    await usage.after_spend()
+    assert len(sent) == 2 and "85%" in sent[1]
+    await _put_spend(pool, 3)  # 20 of 20
+    await usage.after_spend()
+    assert len(sent) == 3 and "исчерпан" in sent[2]
+    usage.invalidate()
+
+
+async def test_coin_alert_retried_until_delivered(pool, monkeypatch):
+    from iler import settings_store, usage
+    from iler.config import get_settings
+    from iler.engine import sender
+    from iler.settings_models import NotifySettings
+
+    await settings_store.put("notify", NotifySettings(admin_phones=["77001112233"]))
+    results = [["failed"], ["sent"]]
+    calls = []
+
+    async def fake_notify(text, *, key=None):
+        calls.append(key)
+        return results.pop(0) if results else ["sent"]
+
+    monkeypatch.setattr(sender, "notify_admins", fake_notify)
+    monkeypatch.setattr(get_settings(), "monthly_coins", 10)
+    await _put_spend(pool, 9)
+    await usage.after_spend()  # WhatsApp did not take it: not marked as sent
+    await usage.after_spend()  # retried, delivered
+    await usage.after_spend()  # nothing more to send
+    assert len(calls) == 2 and calls[0] == calls[1]
+    state = await settings_store.get("usage_alerts", usage.UsageAlerts)
+    assert state.sent == [80] and state.limit == 10
     usage.invalidate()
 
 

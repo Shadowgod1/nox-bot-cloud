@@ -305,8 +305,9 @@ def test_openai_chat_model_filter():
     from iler.llm.openai_provider import chat_model_ids
 
     ids = ["gpt-5.4-mini", "gpt-5.4-mini-2026-03-17", "gpt-realtime", "gpt-5.4-nano", "text-embedding-3-small",
-           "gpt-image-1", "gpt-4o-mini-tts", "o3", "gpt-5.5"]
-    assert chat_model_ids(ids) == ["gpt-5.5", "gpt-5.4-nano", "gpt-5.4-mini"]
+           "gpt-image-1", "gpt-4o-mini-tts", "o3", "gpt-5.5", "gpt-5.5-pro", "gpt-5-pro-2026-01-01",
+           "gpt-5.5-chat-latest"]
+    assert chat_model_ids(ids) == ["gpt-5.5-chat-latest", "gpt-5.5", "gpt-5.4-nano", "gpt-5.4-mini"]
 
 
 def test_gemini_chat_model_filter():
@@ -336,3 +337,18 @@ async def test_chain_skips_providers_without_ilER_key(monkeypatch):
     chain = router._chain(LlmSettings(provider="openai", emergency_provider="gemini"))
     assert chain == [("anthropic", "claude-sonnet-5-5")]
     assert router.available_providers() == ["anthropic"]
+
+
+def test_public_error_hides_provider_auth_errors():
+    from iler.llm.base import public_error
+
+    generic = "Ключ ILER отклонён провайдером — обратитесь в ILER"
+    assert public_error("anthropic HTTP 401: invalid x-api-key") == f"anthropic: {generic}"
+    assert public_error("openai HTTP 403: forbidden sk-***abcd") == f"openai: {generic}"
+    assert public_error("gemini HTTP 400: API key not valid. Please pass a valid API key.") == f"gemini: {generic}"
+    assert public_error("all LLM providers failed: openai/gpt-5.4: openai HTTP 401: Incorrect API key provided: "
+                        "sk-***abcd; gemini/gemini-3.8-flash: gemini HTTP 403: denied") == f"openai, gemini: {generic}"
+    # other errors are shown as they are
+    assert public_error("gemini HTTP 400: invalid argument") == "gemini HTTP 400: invalid argument"
+    assert public_error("openai HTTP 500: server error") == "openai HTTP 500: server error"
+    assert public_error("openai connection error: ConnectError") == "openai connection error: ConnectError"

@@ -14,6 +14,10 @@ from iler.db.pool import get_pool
 from iler.settings_models import BotSettings
 from iler.whatsapp import monitor
 
+# the fixed "passing you to an administrator" reply (kept in sync with iler.engine.turn.HANDOVER_REPLY;
+# not imported so the dashboard does not pull in the engine)
+HANDOVER_REPLY = "Передаю ваш вопрос администратору, он скоро ответит."
+
 router = APIRouter(tags=["dashboard"])
 
 
@@ -45,8 +49,12 @@ class Health(BaseModel):
     last_bot_reply_at: str | None  # ISO-8601 time of the latest bot message
     last_client_message_at: str | None
     avg_reply_ms_today: int | None  # mean LLM latency of today's successful requests
-    handovers_today: int  # conversations handed to the operator today (tool or LLM failure)
-    answered_share_today: float | None  # share (0..1) of today's client conversations the bot answered
+    # conversations that got status needs_operator today for any reason (handover tool, LLM failure, coin
+    # limit): conversations.needs_operator_at, plus successful handover tool calls for older rows
+    handovers_today: int
+    # share (0..1) of today's client conversations the bot answered itself; the "passing you to an
+    # administrator" reply (coin limit / LLM failure handover) does not count as an answer
+    answered_share_today: float | None
 
 
 class CoinDay(BaseModel):
@@ -71,6 +79,7 @@ class Coins(BaseModel):
     days_in_month: int
     days: list[CoinDay]
     by_model: list[CoinModel]
+    unpriced_models: list[str]  # used this month with no price entry: billed at the highest tariff
 
 
 class Dashboard(BaseModel):
@@ -120,18 +129,23 @@ async def get_dashboard(_user: User = Depends(current_user)):
           (SELECT max(created_at) FROM messages WHERE author = 'client') AS last_client_at,
           (SELECT avg(latency_ms) FROM ai_requests
              WHERE error IS NULL AND created_at >= $1 AND created_at < $2) AS avg_latency,
-          (SELECT count(DISTINCT ai_requests.conversation_id) FROM tool_calls
-             JOIN ai_requests ON ai_requests.id = tool_calls.ai_request_id
-             WHERE tool_calls.name = 'handover_to_operator' AND tool_calls.error IS NULL
-               AND tool_calls.created_at >= $1 AND tool_calls.created_at < $2) AS handovers,
+          (SELECT count(*) FROM (
+             SELECT id FROM conversations WHERE needs_operator_at >= $1 AND needs_operator_at < $2
+             UNION
+             SELECT ai_requests.conversation_id FROM tool_calls
+               JOIN ai_requests ON ai_requests.id = tool_calls.ai_request_id
+               WHERE tool_calls.name = 'handover_to_operator' AND tool_calls.error IS NULL
+                 AND ai_requests.conversation_id IS NOT NULL
+                 AND tool_calls.created_at >= $1 AND tool_calls.created_at < $2) h) AS handovers,
           (SELECT count(DISTINCT conversation_id) FROM messages
              WHERE author = 'client' AND created_at >= $1 AND created_at < $2) AS client_convs,
           (SELECT count(DISTINCT m.conversation_id) FROM messages m
              WHERE m.author = 'client' AND m.created_at >= $1 AND m.created_at < $2
                AND EXISTS (SELECT 1 FROM messages b WHERE b.conversation_id = m.conversation_id
-                           AND b.author = 'bot' AND b.created_at >= $1 AND b.created_at < $2)) AS answered_convs
+                           AND b.author = 'bot' AND b.created_at >= $1 AND b.created_at < $2
+                           AND b.text <> $4)) AS answered_convs
         """,
-        start, end, since,
+        start, end, since, HANDOVER_REPLY,
     )
     wa = await monitor.get_status()
     bot = await settings_store.get("bot", BotSettings)
@@ -177,4 +191,5 @@ async def _coins(now: datetime) -> dict:
         "days_in_month": u.days_in_month,
         "days": [{"date": d.isoformat(), "coins": c} for d, c in u.days],
         "by_model": [{"model": m, "coins": c} for m, c in u.by_model],
+        "unpriced_models": u.unpriced_models,
     }

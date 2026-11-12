@@ -65,7 +65,8 @@ Usage: sudo bash install.sh [options]
   --offline FILE      load images from FILE (docker save archive) instead of the registry
   --restore FILE      restore a backup archive after installing (databases + WhatsApp session)
   --env FILE          with --restore: take ILER_SECRET_KEY from the ORIGINAL server's .env, so
-                      stored secrets (API keys, SMTP password) can be decrypted
+                      stored secrets (SMTP password, SENET key) can be decrypted;
+                      LLM keys live only in .env: run set-llm-keys.sh again after a restore
   --uninstall         stop and remove the stack (volumes and backups are kept)
   --purge             with --uninstall: also delete volumes, backups and the install directory
   --yes               do not ask for confirmation

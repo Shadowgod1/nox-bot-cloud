@@ -6,12 +6,22 @@ price overrides (ILER_MODEL_PRICES, JSON ``{"model-prefix": [input_usd_per_mtok,
 are set by the ILER technician in .env; 0 means no limit.
 
 When the limit is reached the bot stops answering by itself and hands every new conversation to the
-operator; admins get a WhatsApp alert at 80% and at 100% (once per month each).
+operator; admins get a WhatsApp alert at 80% and at 100% (once per month and limit each; a level is
+marked as sent only after WhatsApp took the message, so a failed alert is retried on the next turn).
+
+Prices: a model with no entry in the price table (DEFAULT_PRICES + ILER_MODEL_PRICES) is billed at
+FALLBACK_PRICE, the highest tariff, so it never looks cheaper than it is. Such models are listed in
+``MonthUsage.unpriced_models`` and the dashboard shows a warning so the technician can add a price.
+
+Forecast: the pace is measured from the later of the month start and the first LLM request of the month
+(days before the bot started working are not counted); no "runs out on" date is given until that window
+is at least one day long.
 """
 
 import calendar
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -43,6 +53,7 @@ class CoinsExhausted(Exception):
 
 class UsageAlerts(BaseModel):
     month: str = ""  # "2026-11"
+    limit: int | None = None  # the limit the levels were sent for; a new limit re-arms the alerts
     sent: list[int] = []
 
 
@@ -58,10 +69,18 @@ def prices() -> dict[str, tuple[float, float]]:
     return table
 
 
+def _match(model: str, table: dict[str, tuple[float, float]]) -> str | None:
+    return max((p for p in table if model.startswith(p)), key=len, default=None)
+
+
 def price_for(model: str, table: dict[str, tuple[float, float]] | None = None) -> tuple[float, float]:
     table = table if table is not None else prices()
-    match = max((p for p in table if model.startswith(p)), key=len, default=None)
+    match = _match(model, table)
     return table[match] if match else FALLBACK_PRICE
+
+
+def is_priced(model: str, table: dict[str, tuple[float, float]] | None = None) -> bool:
+    return _match(model, table if table is not None else prices()) is not None
 
 
 def coins_for(model: str, input_tokens: int, output_tokens: int,
@@ -88,11 +107,12 @@ class MonthUsage:
     spent: float
     days: list[tuple[date, float]]  # every day of the month so far (zeros included)
     by_model: list[tuple[str, float]]
-    avg_per_day: float
-    projected: float  # spend by the end of the month at the current pace
-    runs_out_on: date | None  # day the limit is reached at the current pace (None: lasts the month)
+    avg_per_day: float  # pace since max(month start, first request of the month); at least a 1-day window
+    projected: float  # spent + pace * days left in the month
+    runs_out_on: date | None  # day the limit is reached at the current pace (None: lasts the month / too early)
     days_in_month: int
     alerts: list[int] = field(default_factory=list)
+    unpriced_models: list[str] = field(default_factory=list)  # used this month, billed at FALLBACK_PRICE
 
     @property
     def remaining(self) -> float | None:
@@ -115,7 +135,7 @@ async def month_usage(now: datetime | None = None) -> MonthUsage:
     dim = calendar.monthrange(start.year, start.month)[1]
     rows = await get_pool().fetch(
         "SELECT (created_at AT TIME ZONE $2)::date AS day, model,"
-        " sum(input_tokens)::bigint AS tin, sum(output_tokens)::bigint AS tout"
+        " sum(input_tokens)::bigint AS tin, sum(output_tokens)::bigint AS tout, min(created_at) AS first_at"
         " FROM ai_requests WHERE created_at >= $1 GROUP BY 1, 2",
         start.astimezone(UTC), str(tz),
     )
@@ -129,15 +149,22 @@ async def month_usage(now: datetime | None = None) -> MonthUsage:
     days = [(start.date() + timedelta(days=i), round(per_day.get(start.date() + timedelta(days=i), 0.0), 2))
             for i in range((local_today - start.date()).days + 1)]
     spent = sum(per_day.values())
-    # elapsed part of the month in days (today counts as the fraction already lived)
-    elapsed = max((now - start.astimezone(UTC)).total_seconds() / 86400, 1 / 24)
-    avg = spent / elapsed
+    # The pace counts only the time the bot has been spending this month: from the later of the month start
+    # and the first request (a bot installed on the 20th must not look cheap because of 19 empty days).
+    first_at = min((r["first_at"] for r in rows), default=None)
+    pace_start = max(start.astimezone(UTC), first_at) if first_at else start.astimezone(UTC)
+    elapsed = max((now - pace_start).total_seconds() / 86400, 0.0)
+    avg = spent / max(elapsed, 1.0)  # within the first day: what was spent so far counts as one day's pace
+    month_end = (start + timedelta(days=dim)).replace(tzinfo=None).replace(tzinfo=tz)  # DST-safe next month
+    days_left = max((month_end.astimezone(UTC) - now).total_seconds() / 86400, 0.0)
     limit = max(get_settings().monthly_coins, 0)
     runs_out = None
-    if limit and avg > 0:
-        when = start + timedelta(days=limit / avg)
-        if when.date() <= start.date() + timedelta(days=dim - 1):
-            runs_out = max(when.date(), local_today) if spent < limit else local_today
+    if limit and spent >= limit:
+        runs_out = local_today
+    elif limit and avg > 0 and elapsed >= 1.0:  # less than a day of data is too little for a date
+        when = now + timedelta(days=(limit - spent) / avg)
+        if when < month_end.astimezone(UTC):
+            runs_out = when.astimezone(tz).date()
     alerts = await settings_store.get("usage_alerts", UsageAlerts)
     return MonthUsage(
         limit=limit,
@@ -145,10 +172,11 @@ async def month_usage(now: datetime | None = None) -> MonthUsage:
         days=days,
         by_model=sorted(((m, round(c, 2)) for m, c in per_model.items()), key=lambda x: -x[1]),
         avg_per_day=round(avg, 2),
-        projected=round(avg * dim, 2),
+        projected=round(spent + avg * days_left, 2),
         runs_out_on=runs_out,
         days_in_month=dim,
-        alerts=alerts.sent if alerts.month == f"{start:%Y-%m}" else [],
+        alerts=alerts.sent if alerts.month == f"{start:%Y-%m}" and alerts.limit in (None, limit) else [],
+        unpriced_models=sorted(m for m in per_model if not is_priced(m, table)),
     )
 
 
@@ -173,7 +201,11 @@ async def limit_reached() -> bool:
 
 
 async def after_spend() -> None:
-    """Called after an LLM turn: refresh the cache and send the 80% / 100% alerts once per month."""
+    """Called after an LLM turn: refresh the cache and send the 80% / 100% alerts once per month and limit.
+
+    A level is marked as sent only when WhatsApp took the alert for at least one admin target; otherwise
+    it is retried on the next call (the idempotency key keeps already-delivered targets from repeats).
+    With no admin targets at all the level is marked anyway, so it is not retried on every turn."""
     invalidate()
     if get_settings().monthly_coins <= 0:
         return
@@ -182,22 +214,37 @@ async def after_spend() -> None:
         month = f"{month_start(datetime.now(UTC), _tz()):%Y-%m}"
         state = await settings_store.get("usage_alerts", UsageAlerts)
         if state.month != month:
-            state = UsageAlerts(month=month)
-        due = [lvl for lvl in ALERT_LEVELS if (usage.percent or 0) >= lvl and lvl not in state.sent]
+            state = UsageAlerts(month=month, limit=usage.limit)
+        elif state.limit is None:  # saved before the limit was tracked: adopt it, keep what was sent
+            state.limit = usage.limit
+        elif state.limit != usage.limit:  # ILER changed the limit: re-evaluate the levels for the new one
+            state = UsageAlerts(month=month, limit=usage.limit)
+        # same comparison as MonthUsage.exhausted (no rounding of the percentage)
+        due = [lvl for lvl in ALERT_LEVELS if usage.spent >= usage.limit * lvl / 100 and lvl not in state.sent]
         if not due:
+            await settings_store.put("usage_alerts", state)
             return
         level = max(due)
-        state.sent = sorted(set(state.sent) | set(due))
-        await settings_store.put("usage_alerts", state)
         from iler.engine import sender
+        from iler.settings_models import NotifySettings
 
         if level >= 100:
             text = (f"ILER Bot: лимит коинов на месяц исчерпан ({usage.spent:.0f} из {usage.limit}). "
                     "Бот больше не отвечает сам: новые сообщения ждут оператора в админке. "
                     "Чтобы увеличить лимит, обратитесь в ILER.")
         else:
+            pct = math.floor(usage.spent / usage.limit * 100 + 1e-9)  # floor: never claim more than was used
             out = f" При текущем темпе лимит закончится {usage.runs_out_on:%d.%m}." if usage.runs_out_on else ""
-            text = f"ILER Bot: израсходовано {usage.percent:.0f}% коинов на месяц ({usage.spent:.0f} из {usage.limit}).{out}"
-        await sender.notify_admins(text, key=f"coins:{month}:{level}")
+            text = f"ILER Bot: израсходовано {pct}% коинов на месяц ({usage.spent:.0f} из {usage.limit}).{out}"
+        statuses = await sender.notify_admins(text, key=f"coins:{month}:{usage.limit}:{level}")
+        if not any(st != "failed" for st in statuses):
+            targets = sender.admin_targets(await settings_store.get("notify", NotifySettings))
+            if targets:
+                log.warning("coin alert %s%% was not delivered to admins; will retry", level)
+                await settings_store.put("usage_alerts", state)
+                return
+            log.warning("coin alert %s%% not sent: no admin phones or group configured", level)
+        state.sent = sorted(set(state.sent) | set(due))
+        await settings_store.put("usage_alerts", state)
     except Exception:  # noqa: BLE001 - accounting must never break a reply
         log.exception("coin usage check failed")
