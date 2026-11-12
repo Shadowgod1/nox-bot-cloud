@@ -104,7 +104,7 @@ const s: State = {
     booking_request_timeout_min: 15,
     booking_timeout_message: 'Администратор скоро свяжется с вами по заявке.',
   },
-  llm: { provider: 'openai', openai_key: null, openai_model: 'gpt-4.1-mini', openai_fallback_model: null, gemini_key: null, gemini_model: 'gemini-2.5-flash', anthropic_key: null, anthropic_model: 'claude-opus-5-5', anthropic_effort: 'low', emergency_provider: null, _openai: 'sk-mock-1234abcd', _gemini: null, _anthropic: null },
+  llm: { provider: 'openai', openai_key: null, openai_model: 'gpt-5.4-mini', openai_fallback_model: null, gemini_key: null, gemini_model: 'gemini-3.8-flash', anthropic_key: null, anthropic_model: 'claude-sonnet-5-5', anthropic_effort: 'low', emergency_provider: null, _openai: 'sk-mock-1234abcd', _gemini: null, _anthropic: null },
   notify: { admin_phones: ['77015550000'], admin_group_jid: null, smtp: null, _smtpPass: null },
   senet: { enabled: false, orgname: null, app_key: null, _key: null },
   backups: [
@@ -395,6 +395,18 @@ on('POST', '/api/settings/llm/test', async (_m, b) => {
   if (!key) return json({ ok: false, error: `${provider} API key is not configured` })
   if (key.includes('bad')) return json({ ok: false, error: 'Incorrect API key provided' })
   return json({ ok: true })
+})
+on('POST', '/api/settings/llm/models', async (_m, b) => {
+  await sleep(400)
+  const provider = (b.provider as string | undefined) ?? s.llm.provider
+  if (provider === 'anthropic') return json({ ok: true, models: ['claude-sonnet-5-5', 'claude-haiku-5-5'] })
+  const key = provider === 'openai' ? applySecret(s.llm._openai, b.openai_key) : applySecret(s.llm._gemini, b.gemini_key)
+  if (!key) return json({ ok: false, models: [], error: `${provider} API key is not configured` })
+  if (key.includes('bad')) return json({ ok: false, models: [], error: 'Incorrect API key provided' })
+  return json({
+    ok: true,
+    models: provider === 'openai' ? ['gpt-5.5', 'gpt-5.4-mini', 'gpt-5.4-nano'] : ['gemini-3.8-flash', 'gemini-3.5-flash-lite'],
+  })
 })
 on('GET', '/api/settings/notify', () => json(notifyOut()))
 on('PUT', '/api/settings/notify', (_m, b) => {

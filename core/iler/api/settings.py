@@ -192,6 +192,46 @@ async def post_settings_llm_test(
     return LlmTestResult(ok=True)
 
 
+class LlmModelsResult(BaseModel):
+    ok: bool
+    models: list[str] = []
+    error: str | None = None
+
+
+ModelLister = Callable[[LlmSettings], Any]
+
+
+def get_model_lister() -> ModelLister:
+    from iler.llm.router import list_models
+
+    return list_models
+
+
+@router.post(
+    "/api/settings/llm/models",
+    response_model=LlmModelsResult,
+    response_model_exclude_none=True,
+    dependencies=[Depends(csrf_protect)],
+)
+async def post_settings_llm_models(
+    body: LlmPublic | None = Body(None),  # type: ignore[valid-type]
+    _: User = Depends(require_owner),
+    list_models: ModelLister = Depends(get_model_lister),
+):
+    """Models of the primary provider for the stored settings or unsaved form values (nothing is saved).
+    Listing models validates the key without spending tokens."""
+    from iler.llm.base import LlmError
+
+    settings = await settings_store.get("llm", LlmSettings)
+    if body is not None:
+        settings = _validated(LlmSettings, body.model_dump(exclude_unset=True), settings)
+    try:
+        models = await list_models(settings)
+    except LlmError as exc:
+        return LlmModelsResult(ok=False, error=str(exc) or "LLM check failed")
+    return LlmModelsResult(ok=True, models=models)
+
+
 # --- notify -------------------------------------------------------------------------------------
 
 _SMTP_TARGET = ("host", "port", "user")

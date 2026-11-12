@@ -16,6 +16,20 @@ RETRY_STATUSES = [429, 500, 502, 503, 504]
 _SIG_CACHE_MAX = 1000
 
 
+_LIST_EXCLUDE = ("embedding", "image", "tts", "live", "audio", "robotics", "computer", "aqa")
+
+
+def chat_model_ids(models: list) -> list[str]:
+    """Text models that support generateContent, without the "models/" prefix."""
+    keep = set()
+    for m in models:
+        name = (getattr(m, "name", "") or "").removeprefix("models/")
+        actions = getattr(m, "supported_actions", None) or []
+        if name.startswith("gemini") and "generateContent" in actions and not any(x in name for x in _LIST_EXCLUDE):
+            keep.add(name)
+    return sorted(keep, reverse=True)
+
+
 def _redact(text: str, secret: str) -> str:
     return text.replace(secret, "***") if secret else text
 
@@ -81,6 +95,17 @@ class GeminiProvider:
         self._signatures[call_id] = signature
         while len(self._signatures) > _SIG_CACHE_MAX:
             self._signatures.popitem(last=False)
+
+    async def list_models(self) -> list[str]:
+        """Text models available to this key; also validates the key without spending tokens."""
+        try:
+            models = [m async for m in await self._client.aio.models.list()]
+        except errors.APIError as e:
+            code = getattr(e, "code", None)
+            raise LlmError(_redact(f"gemini HTTP {code}: {e.message}", self._key), retryable=False) from None
+        except Exception as e:  # noqa: BLE001 - never leak SDK exceptions
+            raise LlmError(_redact(f"gemini error: {type(e).__name__}: {e}", self._key), retryable=True) from None
+        return chat_model_ids(models)
 
     async def complete(self, messages: list[ChatMessage], tools: list[Tool], model: str) -> LlmResponse:
         system, contents = self._contents(messages)

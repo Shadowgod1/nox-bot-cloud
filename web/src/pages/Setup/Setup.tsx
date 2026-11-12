@@ -10,12 +10,8 @@ import { WhatsAppConnect } from '../../components/WhatsAppConnect'
 import { BotSetupStep } from './BotSetupStep'
 import { StepHeader } from './StepHeader'
 import { Button, CheckLine, type CheckView, ErrorState, Field, Input, Select, Spinner, cx } from '../../components/ui'
-import {
-  ANTHROPIC_DEFAULT_MODEL,
-  ANTHROPIC_EFFORT_HINT,
-  ANTHROPIC_EFFORTS,
-  ANTHROPIC_MODEL_HINT,
-} from '../System/anthropic'
+import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_EFFORT_HINT, ANTHROPIC_EFFORTS } from '../System/anthropic'
+import { MODEL_FIELD, MODEL_HINT, ModelSelect, RECOMMENDED, pickModel, type LlmModelsResult } from '../System/models'
 
 const KEY_FIELD = { openai: 'openai_key', gemini: 'gemini_key', anthropic: 'anthropic_key' } as const
 
@@ -204,29 +200,63 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
   const current = useLoad(() => api.get<LlmSettings>('/api/settings/llm', { silent: true }))
   const [provider, setProvider] = useState<LlmProvider>('openai')
   const [key, setKey] = useState('')
-  const [claudeModel, setClaudeModel] = useState(ANTHROPIC_DEFAULT_MODEL)
+  const [model, setModel] = useState<Record<LlmProvider, string>>({
+    openai: RECOMMENDED.openai[0],
+    gemini: RECOMMENDED.gemini[0],
+    anthropic: ANTHROPIC_DEFAULT_MODEL,
+  })
+  const [models, setModels] = useState<Record<LlmProvider, string[] | null>>({ openai: null, gemini: null, anthropic: null })
   const [effort, setEffort] = useState<AnthropicEffort>('low')
   const [busy, setBusy] = useState(false)
   const [check, setCheck] = useState<CheckView | null>(null)
 
+  function payloadFor(chosen: string): LlmSettings | null {
+    if (!current.data) return null
+    return {
+      ...current.data,
+      provider,
+      [KEY_FIELD[provider]]: key.trim(),
+      [MODEL_FIELD[provider]]: chosen,
+      ...(provider === 'anthropic' ? { anthropic_effort: effort } : {}),
+    }
+  }
+
   async function verify(e: FormEvent) {
     e.preventDefault()
-    if (!current.data || !key.trim()) return
+    const base = payloadFor(model[provider])
+    if (!base || !key.trim()) return
     setBusy(true)
     setCheck(null)
     try {
-      const payload: LlmSettings = {
-        ...current.data,
-        provider,
-        [KEY_FIELD[provider]]: key.trim(),
-        ...(provider === 'anthropic'
-          ? { anthropic_model: claudeModel.trim() || ANTHROPIC_DEFAULT_MODEL, anthropic_effort: effort }
-          : {}),
+      // 1) list the provider's models (validates OpenAI/Gemini keys without spending tokens)
+      const listed = await api.post<LlmModelsResult>('/api/settings/llm/models', base)
+      if (!listed.ok) {
+        setCheck({ ok: false, message: listed.error })
+        return
       }
-      // Test the unsaved key first (core saves nothing on /test), store it only when it works.
+      const chosen = pickModel(provider, model[provider], listed.models)
+      setModels((m) => ({ ...m, [provider]: listed.models }))
+      setModel((m) => ({ ...m, [provider]: chosen }))
+      // 2) a one-word request with the chosen model; store the settings only when it works
+      const payload = payloadFor(chosen)!
       const r = await api.post<LlmTestResult>('/api/settings/llm/test', payload)
       if (r.ok) await api.put<LlmSettings>('/api/settings/llm', payload)
       setCheck({ ok: r.ok, message: r.ok ? undefined : r.error })
+    } catch {
+      /* toast */
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function proceed() {
+    // the model may have been changed after the check: store the final choice
+    const payload = payloadFor(model[provider])
+    if (!payload) return
+    setBusy(true)
+    try {
+      await api.put<LlmSettings>('/api/settings/llm', payload)
+      onDone()
     } catch {
       /* toast */
     } finally {
@@ -295,18 +325,17 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
               }}
             />
           </Field>
-          {provider === 'anthropic' && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Модель Claude" hint={ANTHROPIC_MODEL_HINT}>
-                <Input
-                  value={claudeModel}
-                  spellCheck={false}
-                  onChange={(e) => {
-                    setClaudeModel(e.target.value)
-                    setCheck(null)
-                  }}
-                />
-              </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Модель" hint={MODEL_HINT[provider]}>
+              <ModelSelect
+                key={provider}
+                provider={provider}
+                value={model[provider]}
+                models={models[provider]}
+                onChange={(m) => setModel((s) => ({ ...s, [provider]: m }))}
+              />
+            </Field>
+            {provider === 'anthropic' && (
               <Field label="Глубина размышлений" hint={ANTHROPIC_EFFORT_HINT}>
                 <Select value={effort} onChange={(e) => setEffort(e.target.value as AnthropicEffort)}>
                   {ANTHROPIC_EFFORTS.map(([value, label]) => (
@@ -316,14 +345,14 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
                   ))}
                 </Select>
               </Field>
-            </div>
-          )}
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit" variant={check?.ok ? 'secondary' : 'primary'} loading={busy} disabled={!key.trim()}>
+            <Button type="submit" variant={check?.ok ? 'secondary' : 'primary'} loading={busy && !check?.ok} disabled={!key.trim()}>
               Проверить ключ
             </Button>
             {check?.ok && (
-              <Button variant="primary" onClick={onDone}>
+              <Button variant="primary" onClick={() => void proceed()} loading={busy}>
                 Продолжить
               </Button>
             )}

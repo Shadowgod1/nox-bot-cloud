@@ -1,6 +1,6 @@
 """Anthropic (Claude) Messages API provider with native tool use.
 
-Notes for Claude Opus 5.5 (the default model):
+Notes for the Claude 5.5 models (the bot uses Sonnet 5.5 or Haiku 5.5):
 - thinking is always on and cannot be disabled; depth is controlled by ``output_config.effort`` only
   (no ``thinking`` / ``budget_tokens`` / ``temperature`` / ``top_p`` / ``top_k`` are sent);
 - ``tool_choice`` must stay ``auto`` (forced ``any`` / ``tool`` is rejected with 400);

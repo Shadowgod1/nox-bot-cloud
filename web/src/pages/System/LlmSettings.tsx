@@ -8,7 +8,8 @@ import { Button, CheckLine, type CheckView, ErrorState, Field, Input, Panel, Sel
 import { toast } from '../../components/toast'
 import { ru } from '../../i18n/ru'
 
-import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_EFFORT_HINT, ANTHROPIC_EFFORTS, ANTHROPIC_MODEL_HINT } from './anthropic'
+import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_EFFORT_HINT, ANTHROPIC_EFFORTS } from './anthropic'
+import { MODEL_HINT, ModelSelect, type LlmModelsResult } from './models'
 
 interface Form extends Omit<LlmSettings, 'openai_key' | 'gemini_key' | 'anthropic_key'> {
   openai_key: SecretState
@@ -44,6 +45,8 @@ export function LlmSettingsPanel() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [check, setCheck] = useState<CheckView | null>(null)
+  const [models, setModels] = useState<Record<'openai' | 'gemini', string[] | null>>({ openai: null, gemini: null })
+  const [listing, setListing] = useState<'openai' | 'gemini' | null>(null)
 
   useEffect(() => {
     if (data) setForm(toForm(data))
@@ -85,6 +88,32 @@ export function LlmSettingsPanel() {
     }
   }
 
+  async function loadModels(provider: 'openai' | 'gemini') {
+    if (!form) return
+    setListing(provider)
+    try {
+      // the provider's model list for the (unsaved) key; listing validates the key without spending tokens
+      const r = await api.post<LlmModelsResult>('/api/settings/llm/models', { ...toPayload(form), provider })
+      if (r.ok) setModels((m) => ({ ...m, [provider]: r.models }))
+      else toast.error(r.error ?? 'Не удалось получить список моделей')
+    } catch {
+      /* toast */
+    } finally {
+      setListing(null)
+    }
+  }
+
+  const loadButton = (provider: 'openai' | 'gemini') => (
+    <button
+      type="button"
+      onClick={() => void loadModels(provider)}
+      disabled={listing !== null}
+      className="self-start text-[13px] text-ink-2 underline hover:text-ink disabled:opacity-50"
+    >
+      {listing === provider ? 'Загружаем…' : models[provider] ? 'Обновить список моделей' : 'Загрузить список моделей'}
+    </button>
+  )
+
   return (
     <Panel
       title="Языковая модель"
@@ -122,21 +151,23 @@ export function LlmSettingsPanel() {
           <legend className="px-1 text-[13px] font-semibold text-ink">OpenAI</legend>
           <SecretInput label="Ключ OpenAI" value={form.openai_key} onChange={(v) => set('openai_key', v)} placeholder="sk-…" />
           <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Основная модель OpenAI">
-              <Input value={form.openai_model} onChange={(e) => set('openai_model', e.target.value)} spellCheck={false} />
+            <Field label="Основная модель OpenAI" hint={MODEL_HINT.openai}>
+              <ModelSelect provider="openai" value={form.openai_model} models={models.openai} onChange={(m) => set('openai_model', m)} />
             </Field>
             <Field label="Резервная модель OpenAI" hint="Необязательно. Вызывается при ошибке основной.">
               <Input value={form.openai_fallback_model ?? ''} onChange={(e) => set('openai_fallback_model', e.target.value)} spellCheck={false} />
             </Field>
           </div>
+          {loadButton('openai')}
         </fieldset>
 
         <fieldset className="grid gap-4 rounded-[9px] border border-line p-4">
           <legend className="px-1 text-[13px] font-semibold text-ink">Google Gemini</legend>
           <SecretInput label="Ключ Gemini" value={form.gemini_key} onChange={(v) => set('gemini_key', v)} placeholder="AIza…" />
-          <Field label="Модель Gemini" className="md:max-w-[calc(50%-0.5rem)]">
-            <Input value={form.gemini_model} onChange={(e) => set('gemini_model', e.target.value)} spellCheck={false} />
+          <Field label="Модель Gemini" hint={MODEL_HINT.gemini} className="md:max-w-[calc(50%-0.5rem)]">
+            <ModelSelect provider="gemini" value={form.gemini_model} models={models.gemini} onChange={(m) => set('gemini_model', m)} />
           </Field>
+          {loadButton('gemini')}
         </fieldset>
 
         <fieldset className="grid gap-4 rounded-[9px] border border-line p-4">
@@ -148,8 +179,8 @@ export function LlmSettingsPanel() {
             placeholder="sk-ant-…"
           />
           <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Модель Claude" hint={ANTHROPIC_MODEL_HINT}>
-              <Input value={form.anthropic_model} onChange={(e) => set('anthropic_model', e.target.value)} spellCheck={false} />
+            <Field label="Модель Claude" hint={MODEL_HINT.anthropic}>
+              <ModelSelect provider="anthropic" value={form.anthropic_model} models={null} onChange={(m) => set('anthropic_model', m)} />
             </Field>
             <Field label="Глубина размышлений" hint={ANTHROPIC_EFFORT_HINT}>
               <Select

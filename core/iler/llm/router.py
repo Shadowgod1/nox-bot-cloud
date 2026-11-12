@@ -212,6 +212,24 @@ async def complete_with_tools(
     return result
 
 
+async def list_models(settings: LlmSettings) -> list[str]:
+    """Models the owner can pick for the primary provider. Claude is limited to Sonnet/Haiku; OpenAI and
+    Gemini are listed live for the configured key (which also validates it). Raises LlmError."""
+    from iler.settings_models import ANTHROPIC_MODELS
+
+    if settings.provider == "anthropic":
+        return list(ANTHROPIC_MODELS)
+    if config.get_settings().llm_fake:
+        return [_model_for(settings.provider, settings)]
+    provider = _make_provider(settings.provider, settings)
+    try:
+        return await provider.list_models()  # type: ignore[attr-defined]
+    except LlmError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise LlmError(f"{settings.provider}: {type(e).__name__}", retryable=False) from None
+
+
 async def check_key(settings: LlmSettings) -> None:
     """Validate the configured primary provider key/model with a minimal request. Raises LlmError."""
     if config.get_settings().llm_fake:

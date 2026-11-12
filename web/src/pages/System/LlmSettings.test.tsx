@@ -12,7 +12,7 @@ const llm = {
   gemini_key: null,
   gemini_model: 'gemini-2.5-flash',
   anthropic_key: '••••9876',
-  anthropic_model: 'claude-opus-5-5',
+  anthropic_model: 'claude-sonnet-5-5',
   anthropic_effort: 'low',
   emergency_provider: null,
 }
@@ -35,14 +35,13 @@ describe('settings form with masked secret', () => {
     const model = await screen.findByLabelText('Основная модель OpenAI')
     expect(screen.getByText('••••abcd')).toBeInTheDocument()
 
-    await userEvent.clear(model)
-    await userEvent.type(model, 'gpt-4.1')
+    await userEvent.selectOptions(model, 'gpt-5.4-nano')
     await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
 
     await waitFor(() => expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(1))
     const body = lastPutBody(fetchMock)
     expect(body.openai_key).toBe('••••abcd')
-    expect(body.openai_model).toBe('gpt-4.1')
+    expect(body.openai_model).toBe('gpt-5.4-nano')
     expect(body.gemini_key).toBeNull()
   })
 
@@ -83,15 +82,15 @@ describe('Anthropic (Claude) settings', () => {
     })
     render(<LlmSettingsPanel />)
     const model = await screen.findByLabelText('Модель Claude')
-    expect(model).toHaveValue('claude-opus-5-5')
+    expect(model).toHaveValue('claude-sonnet-5-5')
     expect(screen.getByText('••••9876')).toBeInTheDocument()
-    expect(screen.getByText('claude-sonnet-5-5 — дешевле, claude-haiku-5-5 — самый дешёвый')).toBeInTheDocument()
+    // only Sonnet and Haiku are offered for the bot
+    expect([...(model as HTMLSelectElement).options].map((o) => o.value)).toEqual(['claude-sonnet-5-5', 'claude-haiku-5-5'])
 
     await userEvent.selectOptions(screen.getByLabelText('Основной провайдер'), 'Anthropic (Claude)')
     await userEvent.selectOptions(screen.getByLabelText('Аварийный провайдер'), 'OpenAI')
     await userEvent.selectOptions(screen.getByLabelText('Глубина размышлений'), 'Высокая')
-    await userEvent.clear(model)
-    await userEvent.type(model, 'claude-haiku-5-5')
+    await userEvent.selectOptions(model, 'claude-haiku-5-5')
     await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
 
     await waitFor(() => expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(1))
@@ -117,5 +116,38 @@ describe('Anthropic (Claude) settings', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
     await waitFor(() => expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(1))
     expect(lastPutBody(fetchMock).anthropic_key).toBe('sk-ant-new-1')
+  })
+})
+
+describe('model pickers', () => {
+  it('loads the OpenAI model list for the key and saves the chosen model', async () => {
+    const fetchMock = mockApi({
+      'GET /api/settings/llm': llm,
+      'POST /api/settings/llm/models': { ok: true, models: ['gpt-5.5', 'gpt-5.4-mini'] },
+      'PUT /api/settings/llm': (init: RequestInit) => ({ ...llm, ...JSON.parse(String(init.body)) }),
+    })
+    render(<LlmSettingsPanel />)
+    const model = await screen.findByLabelText('Основная модель OpenAI')
+    expect(model).toHaveValue('gpt-4.1-mini') // the stored value stays selectable
+    await userEvent.click(screen.getAllByRole('button', { name: 'Загрузить список моделей' })[0])
+    await waitFor(() => expect(screen.getByRole('option', { name: 'gpt-5.5' })).toBeInTheDocument())
+    const listed = JSON.parse(String((callsTo(fetchMock, 'POST', '/api/settings/llm/models')[0][1] as RequestInit).body))
+    expect(listed).toMatchObject({ provider: 'openai', openai_key: '••••abcd' })
+    await userEvent.selectOptions(model, 'gpt-5.5')
+    await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+    await waitFor(() => expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(1))
+    expect(lastPutBody(fetchMock)).toMatchObject({ openai_model: 'gpt-5.5' })
+  })
+
+  it('allows typing a model that is not in the list', async () => {
+    mockApi({ 'GET /api/settings/llm': llm })
+    render(<LlmSettingsPanel />)
+    const gemini = await screen.findByLabelText('Модель Gemini')
+    await userEvent.selectOptions(gemini, 'Другая модель…')
+    const input = screen.getByLabelText('Модель Gemini')
+    expect(input.tagName).toBe('INPUT')
+    await userEvent.clear(input)
+    await userEvent.type(input, 'gemini-custom')
+    expect(input).toHaveValue('gemini-custom')
   })
 })

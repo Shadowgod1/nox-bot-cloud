@@ -299,3 +299,28 @@ async def test_gemini_sdk_error_wrapped():
     with pytest.raises(LlmError) as ei:
         await p.complete(MSGS, [], "gemini-test")
     assert ei.value.retryable is False
+
+
+def test_openai_chat_model_filter():
+    from iler.llm.openai_provider import chat_model_ids
+
+    ids = ["gpt-5.4-mini", "gpt-5.4-mini-2026-03-17", "gpt-realtime", "gpt-5.4-nano", "text-embedding-3-small",
+           "gpt-image-1", "gpt-4o-mini-tts", "o3", "gpt-5.5"]
+    assert chat_model_ids(ids) == ["gpt-5.5", "gpt-5.4-nano", "gpt-5.4-mini"]
+
+
+def test_gemini_chat_model_filter():
+    from iler.llm.gemini_provider import chat_model_ids
+
+    models = [SimpleNamespace(name="models/gemini-3.8-flash", supported_actions=["generateContent", "countTokens"]),
+              SimpleNamespace(name="models/gemini-embedding-001", supported_actions=["embedContent"]),
+              SimpleNamespace(name="models/gemini-3.8-flash-image", supported_actions=["generateContent"]),
+              SimpleNamespace(name="models/gemini-3.5-flash-lite", supported_actions=["generateContent"]),
+              SimpleNamespace(name="models/imagen-4", supported_actions=["predict"])]
+    assert chat_model_ids(models) == ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
+
+
+async def test_list_models_claude_is_fixed_and_bad_key_raises():
+    assert await router.list_models(LlmSettings(provider="anthropic")) == ["claude-sonnet-5-5", "claude-haiku-5-5"]
+    with pytest.raises(LlmError):
+        await router.list_models(LlmSettings(provider="openai"))  # no key

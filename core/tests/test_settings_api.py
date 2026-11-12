@@ -71,7 +71,7 @@ async def test_settings_llm_anthropic_key_masked_and_kept(owner):
     r = await owner.get("/api/settings/llm")
     body = r.json()
     assert body["anthropic_key"] == "••••9876" and ant not in r.text
-    assert body["anthropic_model"] == "claude-opus-5-5" and body["anthropic_effort"] == "low"
+    assert body["anthropic_model"] == "claude-sonnet-5-5" and body["anthropic_effort"] == "low"
 
     r = await owner.put("/api/settings/llm", json={**body, "anthropic_effort": "high"}, headers=csrf(owner))
     assert r.status_code == 200, r.text
@@ -278,3 +278,39 @@ async def test_template_apply_endpoint_removed(owner):
     assert r.status_code in (404, 405)
 
 
+
+
+async def test_settings_llm_models_lists_for_unsaved_key(owner, app):
+    from iler.api.settings import get_model_lister
+
+    await settings_store.put("llm", LlmSettings(openai_key=SecretStr(KEY)))
+    seen: list[LlmSettings] = []
+
+    async def fake_list(settings: LlmSettings) -> list[str]:
+        seen.append(settings)
+        if settings.gemini_key and settings.gemini_key.get_secret_value() == "bad":
+            raise LlmError("gemini HTTP 400: API key not valid", retryable=False)
+        return ["gpt-5.4-mini", "gpt-5.4-nano"]
+
+    app.dependency_overrides[get_model_lister] = lambda: fake_list
+    try:
+        r = await owner.post("/api/settings/llm/models", headers=csrf(owner))
+        assert r.json() == {"ok": True, "models": ["gpt-5.4-mini", "gpt-5.4-nano"]}
+        body = (await owner.get("/api/settings/llm")).json() | {"provider": "gemini", "gemini_key": "bad"}
+        r = await owner.post("/api/settings/llm/models", json=body, headers=csrf(owner))
+        assert r.json() == {"ok": False, "models": [], "error": "gemini HTTP 400: API key not valid"}
+        assert (await settings_store.get("llm", LlmSettings)).provider == "openai"  # nothing saved
+        assert (await owner.post("/api/settings/llm/models")).status_code == 403  # CSRF
+    finally:
+        app.dependency_overrides.pop(get_model_lister, None)
+
+
+async def test_claude_model_limited_to_sonnet_and_haiku(owner):
+    body = (await owner.get("/api/settings/llm")).json()
+    assert body["anthropic_model"] == "claude-sonnet-5-5"
+    r = await owner.put("/api/settings/llm", json=body | {"anthropic_model": "claude-haiku-5-5"}, headers=csrf(owner))
+    assert r.status_code == 200 and r.json()["anthropic_model"] == "claude-haiku-5-5"
+    r = await owner.put("/api/settings/llm", json=body | {"anthropic_model": "gpt-5.4-mini"}, headers=csrf(owner))
+    assert r.status_code == 422
+    # legacy stored value (before the restriction) reads back as Sonnet
+    assert LlmSettings.model_validate({"anthropic_model": "claude-opus-5-5"}).anthropic_model == "claude-sonnet-5-5"

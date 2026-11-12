@@ -1,6 +1,7 @@
 """OpenAI Chat Completions provider with native function calling."""
 
 import json
+import re
 import time
 
 import httpx
@@ -11,6 +12,17 @@ from iler.tools.base import Tool
 
 TIMEOUT_S = 30.0
 MAX_RETRIES = 2  # the SDK retries 429 / 5xx / connection errors with backoff
+
+
+# chat-capable families only: drop audio/realtime/image/embedding/... and dated snapshots
+_LIST_EXCLUDE = ("audio", "realtime", "transcribe", "tts", "image", "search", "embedding", "instruct",
+                 "moderation", "codex", "computer", "deep-research")
+_SNAPSHOT = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+
+
+def chat_model_ids(ids: list[str]) -> list[str]:
+    keep = {i for i in ids if i.startswith("gpt-") and not any(x in i for x in _LIST_EXCLUDE) and not _SNAPSHOT.search(i)}
+    return sorted(keep, reverse=True)
 
 
 def _redact(text: str, secret: str) -> str:
@@ -63,6 +75,18 @@ class OpenAIProvider:
         self._client = openai.AsyncOpenAI(
             api_key=api_key, timeout=TIMEOUT_S, max_retries=MAX_RETRIES, http_client=http_client, base_url=base_url
         )
+
+    async def list_models(self) -> list[str]:
+        """Chat models available to this key (GET /v1/models); also validates the key without spending tokens."""
+        try:
+            ids = [m.id async for m in self._client.models.list()]
+        except openai.APIStatusError as e:
+            raise LlmError(_redact(f"openai HTTP {e.status_code}: {e.message}", self._key), retryable=False) from None
+        except (openai.APITimeoutError, openai.APIConnectionError) as e:
+            raise LlmError(f"openai connection error: {type(e).__name__}", retryable=True) from None
+        except Exception as e:  # noqa: BLE001 - never leak SDK exceptions
+            raise LlmError(_redact(f"openai error: {type(e).__name__}: {e}", self._key), retryable=True) from None
+        return chat_model_ids(ids)
 
     async def complete(self, messages: list[ChatMessage], tools: list[Tool], model: str) -> LlmResponse:
         kwargs: dict = {"model": model, "messages": to_openai_messages(messages)}
