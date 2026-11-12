@@ -403,10 +403,11 @@ function Test-NeedsSetup {
 function New-AdminShortcut([string]$Path = '/') {
     # Until the owner is created the shortcut opens the setup link (with the one-time token).
     $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
-    $path = Join-Path $desktop $ShortcutName
+    # PowerShell variables are case-insensitive: do not name this $path (it would overwrite $Path).
+    $shortcutFile = Join-Path $desktop $ShortcutName
     $content = "[InternetShortcut]`r`nURL=http://localhost:$Port$Path`r`n"
-    [IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Ok "desktop shortcut: $path"
+    [IO.File]::WriteAllText($shortcutFile, $content, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Ok "desktop shortcut: $shortcutFile"
 }
 
 function Get-LanAddress {
