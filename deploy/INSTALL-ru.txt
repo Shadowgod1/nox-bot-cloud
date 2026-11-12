@@ -1,0 +1,44 @@
+ILER Bot — ручная установка (для техника ILER)
+==============================================
+
+В архиве: compose.yml, папка deploy\ и images.tar (все образы бота, интернет для них не нужен).
+Интернет нужен только для установки Docker Engine и для WhatsApp / языковых моделей.
+
+Windows 11 (или Windows 10 22H2, Windows Server 2022+)
+------------------------------------------------------
+1. Распакуйте архив в папку без кириллицы и пробелов, например C:\ILER.
+2. Откройте PowerShell от имени администратора и выполните:
+
+     powershell -ExecutionPolicy Bypass -File C:\ILER\deploy\windows\install.ps1
+
+   Скрипт включит WSL2, поставит Ubuntu 24.04, Docker Engine и запустит бота.
+   Если Windows попросит перезагрузку — после входа установка продолжится сама.
+   Журнал: C:\ProgramData\ILER\install.log
+3. Задайте ключи ILER и месячный лимит коинов:
+
+     wsl -d Ubuntu-24.04 -u root -- bash /opt/iler/deploy/set-llm-keys.sh
+
+   (ключ вводится скрыто; Enter — пропустить провайдера)
+4. Откройте ссылку первого запуска, которую показал скрипт:
+     http://localhost:8080/setup?token=...
+   и пройдите мастер: владелец → модель → WhatsApp → шаблон бизнеса.
+
+Ubuntu Server 24.04 LTS (также 22.04, Debian 12)
+------------------------------------------------
+1. Скопируйте архив на сервер и распакуйте:  unzip iler-bot-<версия>-manual.zip -d iler
+2. Установите:
+
+     sudo bash iler/deploy/install.sh --offline iler/images.tar
+
+3. Ключи ILER и лимит коинов:
+
+     sudo bash /opt/iler/deploy/set-llm-keys.sh
+
+4. Откройте ссылку первого запуска из вывода установщика (http://<ip-сервера>:8080/setup?token=...).
+
+Полезное
+--------
+- Сменить ключи или лимит позже: та же команда set-llm-keys.sh (на Windows есть ярлык в меню «Пуск»,
+  если ставили через ILER-Setup.exe).
+- Удаление (Linux):  sudo bash /opt/iler/deploy/install.sh --uninstall
+- Данные и секреты: /opt/iler (.env, резервные копии в backups/).

@@ -20,6 +20,9 @@
     Reboot automatically when Windows features require it (otherwise the user is asked).
 .PARAMETER Resume
     Internal: set by the RunOnce entry after a reboot.
+.PARAMETER KeysFile
+    Internal (set by the GUI installer): KEY=VALUE lines with ILER's LLM keys and the monthly coin limit
+    entered by the technician. Moved to an admin-only file under ProgramData until applied, then deleted.
 .PARAMETER ProgressFile
     Internal (set by the GUI installer): the script runs hidden and reports "percent|stage|detail" lines
     to this file; the last line is "done|<url>", "error|<message>" or "reboot|".
@@ -33,7 +36,8 @@ param(
     [string]$Offline = '',
     [switch]$AutoReboot,
     [switch]$Resume,
-    [string]$ProgressFile = ''
+    [string]$ProgressFile = '',
+    [string]$KeysFile = ''
 )
 
 Set-StrictMode -Version 2.0
@@ -50,6 +54,8 @@ $TaskPortProxy = 'ILER Bot - refresh portproxy'
 $FirewallRule = 'ILER Bot admin UI'
 $RunOnceName = 'ILERSetupResume'
 $ShortcutName = 'ILER Bot - админка.url'
+$PendingKeys = Join-Path $DataDir 'pending-keys.env'
+$KeyVars = @('ILER_ANTHROPIC_KEY', 'ILER_OPENAI_KEY', 'ILER_GEMINI_KEY', 'ILER_MONTHLY_COINS')
 # Sources allowed to reach the admin port (RFC1918, loopback, IPv6 ULA / link-local / loopback)
 $PrivateRanges = @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '127.0.0.0/8', 'fc00::/7', 'fe80::/10', '::1')
 
@@ -285,6 +291,39 @@ function Invoke-LinuxInstaller {
     if ($LASTEXITCODE -ne 0) { throw "install.sh failed with exit code $LASTEXITCODE" }
 }
 
+function Save-PendingKeys {
+    # Keep the technician's values in an admin/SYSTEM-only file: they must survive a WSL reboot.
+    if (-not $KeysFile -or -not (Test-Path $KeysFile)) { return }
+    Move-Item -Force -Path $KeysFile -Destination $PendingKeys
+    & icacls.exe $PendingKeys /inheritance:r /grant:r '*S-1-5-32-544:F' '*S-1-5-18:F' | Out-Null
+}
+
+function Set-IlerKeys {
+    # Applies the pending keys with deploy/set-llm-keys.sh --yes; values travel as environment variables
+    # (WSLENV), never on a command line or in the log.
+    if (-not (Test-Path $PendingKeys)) { return }
+    $names = @()
+    foreach ($line in Get-Content -Path $PendingKeys) {
+        if ($line -match '^([A-Z_]+)=(.*)$' -and $KeyVars -contains $Matches[1] -and $Matches[2]) {
+            Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2]
+            $names += "$($Matches[1])/u"
+        }
+    }
+    try {
+        if ($names.Count -gt 0) {
+            Write-Step 'applying ILER keys'
+            $env:WSLENV = ($names -join ':')
+            & wsl.exe -d $Distro -u root -- bash /opt/iler/deploy/set-llm-keys.sh --yes
+            if ($LASTEXITCODE -ne 0) { throw "set-llm-keys.sh failed with exit code $LASTEXITCODE" }
+        }
+    }
+    finally {
+        foreach ($name in $KeyVars) { Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue }
+        Remove-Item -Path Env:WSLENV -ErrorAction SilentlyContinue
+        Remove-Item -Force -Path $PendingKeys -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-WslIp {
     $ip = (Invoke-InDistro -Command "hostname -I | awk '{print `$1}'" -AllowFail).Trim()
     return $ip
@@ -442,6 +481,7 @@ Start-Transcript -Path $LogFile -Append | Out-Null
 if (-not $BundlePath) { $BundlePath = Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }
 if (-not (Test-Path (Join-Path $BundlePath 'compose.yml'))) { Stop-Install "compose.yml not found in bundle folder '$BundlePath'" }
 if ($Offline -and -not (Test-Path $Offline)) { Stop-Install "offline archive not found: $Offline" }
+Save-PendingKeys
 if ((-not $Offline) -and (Test-Path (Join-Path $BundlePath 'images.tar'))) { $Offline = Join-Path $BundlePath 'images.tar' }
 
 try {
@@ -477,6 +517,8 @@ try {
     Copy-BundleToWsl
     Set-Stage 42 'linux'
     Invoke-LinuxInstaller
+    Set-Stage 90 'keys'
+    Set-IlerKeys
     Set-Stage 92 'network'
     Set-Networking -Mirrored $mirrored
     Set-Firewall

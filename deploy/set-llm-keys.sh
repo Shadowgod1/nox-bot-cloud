@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Set ILER's LLM API keys on a client server (run by the ILER technician, never by the client).
+# Set ILER's LLM API keys and the monthly coin limit on a client server (run by the ILER technician,
+# never by the client).
 #
-#   sudo bash /opt/iler/deploy/set-llm-keys.sh            # asks for each key (input hidden)
-#   sudo ILER_ANTHROPIC_KEY=... bash set-llm-keys.sh --yes  # non-interactive (keys from the environment)
+#   sudo bash /opt/iler/deploy/set-llm-keys.sh            # asks for each key (input hidden) and the limit
+#   sudo ILER_ANTHROPIC_KEY=... ILER_MONTHLY_COINS=30000 bash set-llm-keys.sh --yes   # non-interactive
 #
-# Keys are written to <dir>/.env (mode 600) and iler-core is restarted. An empty answer keeps the
-# current key; "-" removes it. The admin UI never shows or edits these keys.
+# Values are written to <dir>/.env (mode 600) and iler-core is restarted. An empty answer keeps the
+# current value; "-" removes a key. The admin UI never shows or edits these values.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,6 +53,21 @@ for pair in "ANTHROPIC:Anthropic (Claude)" "OPENAI:OpenAI" "GEMINI:Google Gemini
   changed=1
 done
 
+current="$(env_get "$ENV_FILE" ILER_MONTHLY_COINS)"
+if [[ "$YES" == "1" ]]; then
+  value="${ILER_MONTHLY_COINS-}"
+else
+  printf 'Месячный лимит коинов — сейчас: %s. Новый (Enter — оставить, 0 — без лимита): ' "${current:-0}"
+  IFS= read -r value </dev/tty || value=""
+fi
+if [[ -n "$value" ]]; then
+  [[ "$value" =~ ^[0-9]{1,9}$ ]] || die "лимит коинов должен быть целым числом"
+  env_set "$ENV_FILE" ILER_MONTHLY_COINS "$value"
+  chmod 600 "$ENV_FILE"
+  ok "лимит коинов: $value"
+  changed=1
+fi
+
 if [[ "$changed" == "1" ]]; then
   log "restarting iler-core"
   docker compose --project-directory "$ILER_DIR_PATH" -f "$ILER_DIR_PATH/compose.yml" --env-file "$ENV_FILE" \
@@ -59,4 +75,9 @@ if [[ "$changed" == "1" ]]; then
   ok "done: providers with a key appear in the admin UI (Система → Языковая модель)"
 else
   ok "nothing changed"
+fi
+
+# opened from the Start menu shortcut: keep the window open until the technician reads the result
+if [[ "$YES" != "1" && -t 0 ]]; then
+  read -rp "Нажмите Enter, чтобы закрыть окно" _ </dev/tty || true
 fi

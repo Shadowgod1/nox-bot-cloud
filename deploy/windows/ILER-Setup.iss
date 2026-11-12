@@ -67,6 +67,18 @@ ru.St_services=Запуск сервисов…
 ru.St_health=Ожидание готовности сервисов…
 ru.St_network=Настройка сети и брандмауэра…
 ru.St_finish=Завершение…
+ru.St_keys=Применение ключей ILER…
+ru.ChangeKeys=Сменить ключи ILER (для техника)
+ru.KeysCaption=Ключи ILER
+ru.KeysDesc=Заполняет техник ILER
+ru.KeysIntro=Ключи доступа ILER к языковым моделям и месячный лимит коинов клиента. Они хранятся только на этом компьютере и не показываются в админке. Пустое поле — без этого провайдера. Позже их можно сменить ярлыком «Сменить ключи ILER» в меню «Пуск».
+ru.KeyAnthropic=Ключ Anthropic (Claude):
+ru.KeyOpenAI=Ключ OpenAI:
+ru.KeyGemini=Ключ Google Gemini:
+ru.KeyCoins=Месячный лимит коинов (0 — без лимита):
+ru.KeyBadChars=Ключ содержит недопустимые символы (пробел или кавычки?). Проверьте, что он вставлен целиком.
+ru.KeyBadCoins=Лимит коинов должен быть целым числом.
+ru.KeyNone=Не задан ни один ключ: бот не сможет отвечать клиентам, пока техник ILER не добавит ключ. Продолжить?
 ru.Starting=Запуск установки…
 ru.DoneHeading=ILER Bot установлен
 ru.DoneText=Бот запущен. Откройте админку, чтобы создать владельца и подключить WhatsApp:%n%n%1%n%nЯрлык «ILER Bot - админка» на рабочем столе открывает эту ссылку.
@@ -88,12 +100,29 @@ en.St_services=Starting services...
 en.St_health=Waiting for services...
 en.St_network=Configuring network and firewall...
 en.St_finish=Finishing...
+en.St_keys=Applying ILER keys...
+en.ChangeKeys=Change ILER keys (technician)
+en.KeysCaption=ILER keys
+en.KeysDesc=Filled in by the ILER technician
+en.KeysIntro=ILER's access keys to the language models and the client's monthly coin limit. They stay on this computer and are never shown in the admin UI. Leave a field empty to skip that provider.
+en.KeyAnthropic=Anthropic (Claude) key:
+en.KeyOpenAI=OpenAI key:
+en.KeyGemini=Google Gemini key:
+en.KeyCoins=Monthly coin limit (0 = no limit):
+en.KeyBadChars=The key contains invalid characters (a space or quotes?). Make sure it was pasted completely.
+en.KeyBadCoins=The coin limit must be a whole number.
+en.KeyNone=No key is set: the bot cannot answer clients until an ILER technician adds one. Continue?
 en.Starting=Starting installation...
 en.DoneHeading=ILER Bot is installed
 en.DoneText=The bot is running. Open the admin UI to create the owner and connect WhatsApp:%n%n%1%n%nThe desktop shortcut opens this link.
 en.FailHeading=Installation did not finish
 en.FailText=Error: %1%n%nFull log: %2%nSend it to support or run the installer again.
 en.RebootText=Windows must restart to enable WSL. Setup continues automatically after you sign in.
+
+[Icons]
+; for the ILER technician: change the LLM keys / monthly coin limit later (runs deploy/set-llm-keys.sh)
+Name: "{autoprograms}\ILER Bot\{cm:ChangeKeys}"; Filename: "{sys}\wsl.exe"; \
+  Parameters: "-d Ubuntu-24.04 -u root -- bash /opt/iler/deploy/set-llm-keys.sh"; Comment: "{cm:ChangeKeys}"
 
 [UninstallRun]
 Filename: "{sys}\wsl.exe"; Parameters: "-d Ubuntu-24.04 -u root -- bash /opt/iler/deploy/install.sh --uninstall --yes"; \
@@ -107,6 +136,7 @@ Type: files; Name: "{commondesktop}\ILER Bot - *.url"
 
 [Code]
 var
+  KeysPage: TInputQueryWizardPage;
   ResultUrl, ErrorText: String;
   NeedReboot, InstallFailed, InstallerRan: Boolean;
 
@@ -134,7 +164,90 @@ begin
   else if Stage = 'health' then Result := CustomMessage('St_health')
   else if Stage = 'network' then Result := CustomMessage('St_network')
   else if Stage = 'finish' then Result := CustomMessage('St_finish')
+  else if Stage = 'keys' then Result := CustomMessage('St_keys')
   else Result := '';
+end;
+
+procedure InitializeWizard;
+begin
+  KeysPage := CreateInputQueryPage(wpWelcome, CustomMessage('KeysCaption'), CustomMessage('KeysDesc'),
+    CustomMessage('KeysIntro'));
+  KeysPage.Add(CustomMessage('KeyAnthropic'), True);
+  KeysPage.Add(CustomMessage('KeyOpenAI'), True);
+  KeysPage.Add(CustomMessage('KeyGemini'), True);
+  KeysPage.Add(CustomMessage('KeyCoins'), False);
+  // unattended installs: ILER-Setup.exe /SILENT /ANTHROPICKEY=... /COINS=30000
+  KeysPage.Values[0] := ExpandConstant('{param:ANTHROPICKEY|}');
+  KeysPage.Values[1] := ExpandConstant('{param:OPENAIKEY|}');
+  KeysPage.Values[2] := ExpandConstant('{param:GEMINIKEY|}');
+  KeysPage.Values[3] := ExpandConstant('{param:COINS|}');
+end;
+
+function ValidKey(const Value: String): Boolean;
+var
+  I: Integer;
+  C: Char;
+begin
+  Result := True;
+  for I := 1 to Length(Value) do
+  begin
+    C := Value[I];
+    if not (((C >= 'A') and (C <= 'Z')) or ((C >= 'a') and (C <= 'z')) or ((C >= '0') and (C <= '9'))
+            or (C = '-') or (C = '_') or (C = '.')) then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+end;
+
+function ValidCoins(const Value: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := Length(Value) <= 9;
+  for I := 1 to Length(Value) do
+    if (Value[I] < '0') or (Value[I] > '9') then Result := False;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  I: Integer;
+begin
+  Result := True;
+  if CurPageID <> KeysPage.ID then Exit;
+  for I := 0 to 2 do
+  begin
+    KeysPage.Values[I] := Trim(KeysPage.Values[I]);
+    if not ValidKey(KeysPage.Values[I]) then
+    begin
+      MsgBox(CustomMessage('KeyBadChars'), mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+  end;
+  KeysPage.Values[3] := Trim(KeysPage.Values[3]);
+  if not ValidCoins(KeysPage.Values[3]) then
+  begin
+    MsgBox(CustomMessage('KeyBadCoins'), mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
+  if (KeysPage.Values[0] = '') and (KeysPage.Values[1] = '') and (KeysPage.Values[2] = '') then
+    Result := MsgBox(CustomMessage('KeyNone'), mbConfirmation, MB_YESNO) = IDYES;
+end;
+
+// KEY=VALUE file for install.ps1 (-KeysFile); it moves it to an admin-only place and deletes it once applied.
+function WriteKeysFile(const FileName: String): Boolean;
+var
+  Lines: String;
+begin
+  Lines := '';
+  if KeysPage.Values[0] <> '' then Lines := Lines + 'ILER_ANTHROPIC_KEY=' + KeysPage.Values[0] + #13#10;
+  if KeysPage.Values[1] <> '' then Lines := Lines + 'ILER_OPENAI_KEY=' + KeysPage.Values[1] + #13#10;
+  if KeysPage.Values[2] <> '' then Lines := Lines + 'ILER_GEMINI_KEY=' + KeysPage.Values[2] + #13#10;
+  if KeysPage.Values[3] <> '' then Lines := Lines + 'ILER_MONTHLY_COINS=' + KeysPage.Values[3] + #13#10;
+  Result := (Lines <> '') and SaveStringToFile(FileName, Lines, False);
 end;
 
 function LastLine(const FileName: String): String;
@@ -159,7 +272,7 @@ procedure RunInstaller;
 var
   Page: TOutputProgressWizardPage;
   ResultCode, P, Pct, Shown, Ticks: Integer;
-  ProgressFile, Params, Line, Kind, Rest, Stage, Text: String;
+  ProgressFile, KeysFile, Params, Line, Kind, Rest, Stage, Text: String;
   Finished: Boolean;
 begin
   InstallerRan := True;
@@ -168,6 +281,8 @@ begin
   Params := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
     ExpandConstant('{app}\deploy\windows\install.ps1') + '" -BundlePath "' + ExpandConstant('{app}') +
     '" -ProgressFile "' + ProgressFile + '"';
+  KeysFile := ExpandConstant('{tmp}\iler-keys.env');
+  if WriteKeysFile(KeysFile) then Params := Params + ' -KeysFile "' + KeysFile + '"';
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '', SW_HIDE, ewNoWait, ResultCode) then
   begin
     InstallFailed := True;
