@@ -52,7 +52,7 @@ Source: "{#BundleRoot}\images.tar"; DestDir: "{app}"; Flags: ignoreversion skipi
 
 [Run]
 ; install.ps1 itself runs hidden from [Code] (RunInstaller) with a progress bar; this only opens the admin UI.
-Filename: "{code:GetResultUrl}"; Description: "{cm:OpenAdmin}"; Flags: postinstall shellexec nowait skipifsilent; Check: InstallSucceeded
+Filename: "{code:GetResultUrl}"; Description: "{cm:OpenAdmin}"; Flags: postinstall shellexec nowait skipifsilent runasoriginaluser; Check: InstallSucceeded
 
 [CustomMessages]
 ru.ProgressCaption=Установка ILER Bot
