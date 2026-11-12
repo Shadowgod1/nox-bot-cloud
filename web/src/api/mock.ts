@@ -255,9 +255,56 @@ on('GET', '/api/dashboard', () => {
       bookings_total: 3,
     },
     errors_24h: { llm: 1, send: 0 },
+    health: {
+      last_bot_reply_at: ago(4),
+      last_client_message_at: ago(5),
+      avg_reply_ms_today: 2300,
+      handovers_today: 1,
+      answered_share_today: 0.93,
+    },
+    coins: mockCoins(),
   }
   return json(body)
 })
+
+/** Month-to-date coin usage: limit 30 000, a realistic weekday/weekend pattern. */
+function mockCoins(): Dashboard['coins'] {
+  const today = new Date(now)
+  const y = today.getFullYear()
+  const m = today.getMonth()
+  const daysInMonth = new Date(y, m + 1, 0).getDate()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const pattern = [980.2, 1210.4, 1342.7, 1105.9, 640.3, 410.8, 1188.1, 1290.6, 1402.2, 1251.4, 1176.5, 720.0]
+  const days = Array.from({ length: today.getDate() }, (_, i) => ({
+    date: `${y}-${pad(m + 1)}-${pad(i + 1)}`,
+    coins: pattern[i % pattern.length],
+  }))
+  const limit = 30_000
+  const spent = Math.round(days.reduce((a, d) => a + d.coins, 0) * 10) / 10
+  const avg = spent / days.length
+  const projected = Math.round(avg * daysInMonth * 10) / 10
+  let runsOut: string | null = null
+  if (projected > limit) {
+    const day = Math.min(daysInMonth, Math.ceil(limit / avg))
+    runsOut = `${y}-${pad(m + 1)}-${pad(day)}`
+  }
+  return {
+    limit,
+    spent,
+    remaining: Math.max(0, limit - spent),
+    percent: Math.round((spent / limit) * 1000) / 10,
+    exhausted: spent >= limit,
+    avg_per_day: Math.round(avg * 10) / 10,
+    projected_month: projected,
+    runs_out_on: runsOut,
+    days_in_month: daysInMonth,
+    days,
+    by_model: [
+      { model: 'claude-sonnet-5-5', coins: Math.round(spent * 0.82 * 10) / 10 },
+      { model: 'claude-haiku-5-5', coins: Math.round(spent * 0.18 * 10) / 10 },
+    ],
+  }
+}
 
 /* ---------- whatsapp ---------- */
 

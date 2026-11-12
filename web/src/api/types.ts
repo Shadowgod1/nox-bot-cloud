@@ -65,6 +65,37 @@ export interface Dashboard {
     /** Outbound messages that ended failed/uncertain in the last 24 h. */
     send: number
   }
+  health: DashboardHealth
+  coins: DashboardCoins
+}
+
+export interface DashboardHealth {
+  last_bot_reply_at: string | null
+  last_client_message_at: string | null
+  /** Mean model latency of today's successful requests, ms. */
+  avg_reply_ms_today: number | null
+  /** Conversations handed to the operator today. */
+  handovers_today: number
+  /** Share (0..1) of today's client conversations the bot answered. */
+  answered_share_today: number | null
+}
+
+/** ILER coins: 1 coin = $0.001 of model cost; the monthly limit is set by ILER. */
+export interface DashboardCoins {
+  /** 0 = no limit configured. */
+  limit: number
+  spent: number
+  remaining: number | null
+  percent: number | null
+  exhausted: boolean
+  avg_per_day: number
+  projected_month: number
+  /** Date (YYYY-MM-DD) the limit is reached at the current pace; null = lasts the month (or no limit). */
+  runs_out_on: string | null
+  days_in_month: number
+  /** Every day from the 1st to today, zeros included. */
+  days: { date: string; coins: number }[]
+  by_model: { model: string; coins: number }[]
 }
 
 export type ConversationStatus = 'active' | 'paused' | 'needs_operator' | 'closed'

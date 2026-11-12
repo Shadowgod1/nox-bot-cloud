@@ -1,0 +1,178 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
+import { Dashboard } from './Dashboard'
+import { formatAgo, formatDayMonth, formatSeconds } from './health'
+import { FakeEventSource, mockApi } from '../../test/utils'
+import { __resetEventsForTests } from '../../hooks/useEvents'
+import type { Dashboard as DashboardData, DashboardCoins } from '../../api/types'
+
+vi.mock('../../hooks/useAuth', () => ({ useAuth: () => ({ isOwner: true }) }))
+
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
+
+function coins(over: Partial<DashboardCoins> = {}): DashboardCoins {
+  return {
+    limit: 30000,
+    spent: 12400.5,
+    remaining: 17599.5,
+    percent: 41.3,
+    exhausted: false,
+    avg_per_day: 1127.3,
+    projected_month: 25000,
+    runs_out_on: null,
+    days_in_month: 30,
+    days: [
+      { date: '2026-11-01', coins: 980.2 },
+      { date: '2026-11-02', coins: 0 },
+      { date: '2026-11-03', coins: 1420.3 },
+    ],
+    by_model: [
+      { model: 'claude-sonnet-5-5', coins: 9000 },
+      { model: 'claude-haiku-5-5', coins: 3400.5 },
+    ],
+    ...over,
+  }
+}
+
+function dashboard(over: Partial<DashboardData> = {}): DashboardData {
+  return {
+    whatsapp: { status: 'open', phone: '77015551234' },
+    bot_enabled: true,
+    today: { conversations: 14, client_messages: 41, bot_replies: 63, bookings_pending: 0, bookings_total: 3 },
+    errors_24h: { llm: 0, send: 0 },
+    health: {
+      last_bot_reply_at: minutesAgo(5),
+      last_client_message_at: minutesAgo(6),
+      avg_reply_ms_today: 2300,
+      handovers_today: 1,
+      answered_share_today: 0.93,
+    },
+    coins: coins(),
+    ...over,
+  }
+}
+
+async function renderWith(d: DashboardData) {
+  mockApi({ 'GET /api/dashboard': d })
+  render(
+    <MemoryRouter>
+      <Dashboard />
+    </MemoryRouter>,
+  )
+  return screen.findByRole('region', { name: /^Бот / })
+}
+
+const forecast = () => screen.getByTestId('coins-forecast')
+
+describe('Dashboard', () => {
+  beforeEach(() => {
+    FakeEventSource.instances = []
+    __resetEventsForTests()
+    vi.stubGlobal('EventSource', FakeEventSource)
+  })
+
+  it('shows green status with health metrics when everything is fine', async () => {
+    const hero = await renderWith(dashboard())
+    expect(hero).toHaveAttribute('data-level', 'ok')
+    expect(within(hero).getByRole('heading', { name: 'Бот работает и отвечает клиентам' })).toBeInTheDocument()
+    expect(within(hero).getByText('Последний ответ бота')).toBeInTheDocument()
+    expect(within(hero).getByText('5 минут назад')).toBeInTheDocument()
+    expect(within(hero).getByText('~2,3 с')).toBeInTheDocument()
+    expect(within(hero).getByText('93% диалогов')).toBeInTheDocument()
+    expect(within(hero).getByText('1 диалог')).toBeInTheDocument()
+  })
+
+  it('forecasts that coins last the month with the projected leftover', async () => {
+    await renderWith(dashboard())
+    expect(forecast()).toHaveAttribute('data-level', 'ok')
+    expect(forecast()).toHaveTextContent(/При текущем расходе \(~1\s127 в день\) коинов хватит до конца месяца, останется ~5\s000/)
+    expect(screen.getByTestId('coins-remaining')).toHaveTextContent(/осталось\s*17\s600\s*из 30\s000/)
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '41')
+    expect(screen.getByText('Claude Sonnet 5.5')).toBeInTheDocument()
+    expect(screen.getByText(/1 коин ≈ \$0\.001 расходов на модель/)).toBeInTheDocument()
+  })
+
+  it('clamps the leftover at zero', async () => {
+    await renderWith(dashboard({ coins: coins({ projected_month: 31000 }) }))
+    expect(forecast()).toHaveTextContent('останется ~0')
+  })
+
+  it('goes amber and names the date when the limit runs out before the month end', async () => {
+    const hero = await renderWith(dashboard({ coins: coins({ runs_out_on: '2026-11-27', projected_month: 33819 }) }))
+    expect(hero).toHaveAttribute('data-level', 'warn')
+    expect(within(hero).getByRole('heading', { name: 'Бот работает, но требует внимания' })).toBeInTheDocument()
+    expect(within(hero).getByText('При текущем расходе коинов хватит только до 27 ноября')).toBeInTheDocument()
+    expect(forecast()).toHaveTextContent(/При текущем расходе \(~1\s127 в день\) коинов хватит до 27 ноября$/)
+    expect(forecast()).not.toHaveAttribute('data-level', 'ok')
+  })
+
+  it('goes amber on errors in the last 24 hours', async () => {
+    const hero = await renderWith(dashboard({ errors_24h: { llm: 2, send: 0 } }))
+    expect(hero).toHaveAttribute('data-level', 'warn')
+    expect(within(hero).getByText('2 ошибки за последние 24 часа')).toBeInTheDocument()
+  })
+
+  it('goes amber at 80% of the limit', async () => {
+    const hero = await renderWith(dashboard({ coins: coins({ spent: 25500, remaining: 4500, percent: 85 }) }))
+    expect(hero).toHaveAttribute('data-level', 'warn')
+    expect(within(hero).getByText('Израсходовано 85% месячного лимита коинов')).toBeInTheDocument()
+  })
+
+  it('goes red when WhatsApp is not connected and offers to connect', async () => {
+    const hero = await renderWith(dashboard({ whatsapp: { status: 'close', phone: null }, errors_24h: { llm: 3, send: 1 } }))
+    expect(hero).toHaveAttribute('data-level', 'danger')
+    expect(within(hero).getByRole('heading', { name: 'Бот не отвечает' })).toBeInTheDocument()
+    expect(within(hero).getByText(/WhatsApp не подключён/)).toBeInTheDocument()
+    expect(within(hero).getByRole('button', { name: 'Подключить WhatsApp' })).toBeInTheDocument()
+  })
+
+  it('goes red when the bot is disabled', async () => {
+    const hero = await renderWith(dashboard({ bot_enabled: false }))
+    expect(hero).toHaveAttribute('data-level', 'danger')
+    expect(within(hero).getByText('Бот выключен — отвечают только операторы')).toBeInTheDocument()
+    expect(within(hero).getByRole('button', { name: 'Включить бота' })).toBeInTheDocument()
+  })
+
+  it('shows the exhausted state in red', async () => {
+    const hero = await renderWith(
+      dashboard({ coins: coins({ spent: 30210, remaining: 0, percent: 100.7, exhausted: true, runs_out_on: '2026-11-10' }) }),
+    )
+    expect(hero).toHaveAttribute('data-level', 'danger')
+    expect(within(hero).getByText('Лимит коинов исчерпан — бот передаёт сообщения оператору')).toBeInTheDocument()
+    expect(forecast()).toHaveAttribute('data-level', 'danger')
+    expect(forecast()).toHaveTextContent('Лимит на этот месяц исчерпан')
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
+    expect(screen.getByTestId('coins-remaining')).toHaveTextContent(/осталось\s*0\s*из 30\s000/)
+  })
+
+  it('shows spend only and "Лимит не задан" when no limit is configured', async () => {
+    const hero = await renderWith(
+      dashboard({ coins: coins({ limit: 0, remaining: null, percent: null, runs_out_on: null, projected_month: 40000 }) }),
+    )
+    expect(hero).toHaveAttribute('data-level', 'ok')
+    expect(screen.getByText('Лимит не задан')).toBeInTheDocument()
+    expect(screen.getByTestId('coins-spent')).toHaveTextContent(/израсходовано\s*12\s401/)
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('coins-forecast')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('coins-remaining')).not.toBeInTheDocument()
+  })
+})
+
+describe('dashboard formatting', () => {
+  it('formats relative time in Russian', () => {
+    const now = Date.parse('2026-11-12T10:00:00Z')
+    expect(formatAgo('2026-11-12T09:59:40Z', now)).toBe('только что')
+    expect(formatAgo('2026-11-12T09:59:00Z', now)).toBe('1 минуту назад')
+    expect(formatAgo('2026-11-12T09:58:00Z', now)).toBe('2 минуты назад')
+    expect(formatAgo('2026-11-12T09:49:00Z', now)).toBe('11 минут назад')
+    expect(formatAgo('2026-11-12T07:00:00Z', now)).toBe('3 часа назад')
+    expect(formatAgo('2026-11-10T09:00:00Z', now)).toBe('2 дня назад')
+  })
+
+  it('formats dates and seconds', () => {
+    expect(formatDayMonth('2026-11-27')).toBe('27 ноября')
+    expect(formatSeconds(2300)).toBe('~2,3 с')
+    expect(formatSeconds(800)).toBe('~0,8 с')
+  })
+})
