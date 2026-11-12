@@ -4,8 +4,18 @@
 # Offline mode only means "images come from the archive": Docker Engine itself is still installed from
 # the internet when it is missing (the Windows installer always runs in offline mode).
 ensure_docker() {
-  local offline="$1" tmp
-  if ! have docker; then
+  local offline="$1" tmp docker_bin
+  # Docker Desktop's WSL integration puts a "docker" CLI into every distro (/mnt/wsl/docker-desktop/...);
+  # ILER needs its own Docker Engine inside the distro, so that CLI does not count.
+  docker_bin=""
+  if have docker; then
+    docker_bin="$(readlink -f "$(command -v docker)" 2>/dev/null || command -v docker)"
+    if [[ "$docker_bin" == /mnt/wsl/docker-desktop* ]]; then
+      log "docker CLI comes from Docker Desktop integration ($docker_bin); installing Docker Engine in this distro"
+      docker_bin=""
+    fi
+  fi
+  if [[ -z "$docker_bin" ]]; then
     log "installing Docker Engine (get.docker.com)"
     have curl || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates >/dev/null; }       || die "Docker is not installed and apt is unreachable; install docker-ce + docker-compose-plugin first."
     tmp="$(mktemp)"

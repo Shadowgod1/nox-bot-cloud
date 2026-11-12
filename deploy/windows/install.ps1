@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     Spec section 8 (Windows). Supported: Windows 10 22H2, Windows 11, Windows Server 2022+.
-    Steps: admin/virtualization checks -> enable WSL + VirtualMachinePlatform (RunOnce resume after
-    reboot) -> install Ubuntu-24.04 without interaction -> systemd on -> copy the bundle into WSL and
+    Steps: admin/virtualization checks -> enable WSL + VirtualMachinePlatform (elevated one-shot logon
+    task resumes after the reboot) -> install Ubuntu-24.04 without interaction -> systemd on -> copy the bundle into WSL and
     run deploy/install.sh -> networking (mirrored on Win11 22H2+, otherwise netsh portproxy refreshed at
     boot) -> firewall rule for the local subnet only -> boot task that keeps the distro running ->
     desktop shortcut to the admin UI.
@@ -19,7 +19,11 @@
 .PARAMETER AutoReboot
     Reboot automatically when Windows features require it (otherwise the user is asked).
 .PARAMETER Resume
-    Internal: set by the RunOnce entry after a reboot.
+    Internal: set by the one-shot logon task ('ILER Bot - resume setup') after a reboot; the window
+    stays open at the end so the setup link or the error can be read.
+.PARAMETER DistroDir
+    Folder for the Ubuntu-24.04 disk (ext4.vhdx: database, images, backups) when the distro is installed
+    by this script; default: WSL's own location in the user profile. An existing distro is not moved.
 .PARAMETER KeysFile
     Internal (set by the GUI installer): KEY=VALUE lines with ILER's LLM keys and the monthly coin limit
     entered by the technician. Moved to an admin-only file under ProgramData until applied, then deleted.
@@ -37,7 +41,8 @@ param(
     [switch]$AutoReboot,
     [switch]$Resume,
     [string]$ProgressFile = '',
-    [string]$KeysFile = ''
+    [string]$KeysFile = '',
+    [string]$DistroDir = ''
 )
 
 Set-StrictMode -Version 2.0
@@ -52,7 +57,11 @@ $LogFile = Join-Path $DataDir 'install.log'
 $TaskStart = 'ILER Bot - start WSL'
 $TaskPortProxy = 'ILER Bot - refresh portproxy'
 $FirewallRule = 'ILER Bot admin UI'
-$RunOnceName = 'ILERSetupResume'
+$TaskResume = 'ILER Bot - resume setup'
+$RunOnceName = 'ILERSetupResume'  # legacy (RunOnce does not elevate); removed if still present
+# visible run after a reboot (no GUI installer reading the progress file): keep the window open
+$Interactive = [bool]($Resume -and -not $ProgressFile)
+$InstallUser = "$($env:USERDOMAIN)\$($env:USERNAME)"
 $ShortcutName = 'ILER Bot - админка.url'
 $PendingKeys = Join-Path $DataDir 'pending-keys.env'
 $KeyVars = @('ILER_ANTHROPIC_KEY', 'ILER_OPENAI_KEY', 'ILER_GEMINI_KEY', 'ILER_MONTHLY_COINS')
@@ -68,18 +77,56 @@ function Write-Warn([string]$Message) { Write-Warning $Message }
 
 function Write-Progress2([string]$Line) {
     # Status for the GUI installer; it only reads the last line. Never fails the install.
+    # Inno's LoadStringsFromFile reads a BOM-less file as ANSI (Russian error text would garble): the
+    # first write creates the file with a UTF-8 BOM, later appends add no second BOM.
     if (-not $ProgressFile) { return }
-    try { [IO.File]::AppendAllText($ProgressFile, "$Line`r`n", (New-Object System.Text.UTF8Encoding($false))) }
+    try {
+        $isNew = (-not (Test-Path -LiteralPath $ProgressFile)) -or ((Get-Item -LiteralPath $ProgressFile).Length -eq 0)
+        [IO.File]::AppendAllText($ProgressFile, "$Line`r`n", (New-Object System.Text.UTF8Encoding($isNew)))
+    }
     catch { Write-Verbose "progress file: $($_.Exception.Message)" }
 }
 function Set-Stage([int]$Percent, [string]$Stage) { Write-Progress2 "$Percent|$Stage|" }
+
+function Wait-Close {
+    # Resume run in a visible window: keep it open so the setup link / error can be read.
+    if (-not $Interactive) { return }
+    try { Read-Host 'Нажмите Enter, чтобы закрыть окно' | Out-Null } catch { Write-Verbose 'no console input' }
+}
 
 function Stop-Install([string]$Message) {
     Write-Progress2 ("error|" + ($Message -replace '[\r\n|]+', ' '))
     Write-Host "ERROR: $Message" -ForegroundColor Red
     Write-Host "Log: $LogFile"
     try { Stop-Transcript | Out-Null } catch { Write-Verbose 'transcript was not running' }
+    Wait-Close
     exit 1
+}
+
+function Set-PrivateAcl {
+    # Folder readable only by Administrators, SYSTEM and the installing user (inheritance removed): the
+    # install log holds the one-time setup token, pending-keys.env the LLM keys, wsl\ the database disk.
+    param([string]$Dir, [switch]$ResetChildren)
+    New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & icacls.exe $Dir /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' "$($InstallUser):(OI)(CI)F" /Q | Out-Null
+        $aclCode = $LASTEXITCODE
+        if ($aclCode -ne 0) {
+            # the user name may not resolve (e.g. run as SYSTEM by a deployment tool): admins + SYSTEM only
+            & icacls.exe $Dir /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' /Q | Out-Null
+            $aclCode = $LASTEXITCODE
+        }
+        if ($ResetChildren -and $aclCode -eq 0 -and (Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue)) {
+            # existing files (log from an earlier run, an older distro disk): inherit the new ACL
+            & icacls.exe (Join-Path $Dir '*') /reset /T /C /Q | Out-Null
+        }
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($aclCode -ne 0) { throw "could not restrict access to $Dir (icacls exit $aclCode)" }
 }
 
 function Invoke-Wsl {
@@ -119,12 +166,32 @@ function Test-Virtualization {
     return [bool]$cpu.VirtualizationFirmwareEnabled
 }
 
+function ConvertTo-QuotedArg([string]$Value) {
+    # "..." for the Windows command line; a trailing backslash is doubled so it does not escape the quote.
+    if ($Value.EndsWith('\')) { $Value = $Value + '\' }
+    return "`"$Value`""
+}
+
 function Get-ResumeCommand {
-    $argsList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Resume',
-        '-Port', "$Port", '-BundlePath', "`"$BundlePath`"")
-    if ($Offline) { $argsList += @('-Offline', "`"$Offline`"") }
+    # Returns @(<exe>, <argument string>) for the resume task.
+    $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $argsList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (ConvertTo-QuotedArg $PSCommandPath), '-Resume',
+        '-Port', "$Port", '-BundlePath', (ConvertTo-QuotedArg $BundlePath))
+    if ($Offline) { $argsList += @('-Offline', (ConvertTo-QuotedArg $Offline)) }
     if ($AutoReboot) { $argsList += '-AutoReboot' }
-    return "powershell.exe $($argsList -join ' ')"
+    if ($DistroDir) { $argsList += @('-DistroDir', (ConvertTo-QuotedArg $DistroDir)) }
+    return @($exe, ($argsList -join ' '))
+}
+
+function Remove-ResumeTask {
+    # one-shot: the resumed run (or any later run) removes the task and the legacy RunOnce value
+    try {
+        if (Get-ScheduledTask -TaskName $TaskResume -ErrorAction SilentlyContinue) {
+            Unregister-ScheduledTask -TaskName $TaskResume -Confirm:$false -ErrorAction Stop
+        }
+        Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -Name $RunOnceName -ErrorAction SilentlyContinue
+    }
+    catch { Write-Warn "could not remove the resume task: $($_.Exception.Message)" }
 }
 
 function Enable-WslFeature {
@@ -144,8 +211,17 @@ function Enable-WslFeature {
 }
 
 function Request-Reboot {
-    # HKLM RunOnce runs elevated at the next administrator logon and continues the install.
-    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -Name $RunOnceName -Value (Get-ResumeCommand)
+    # RunOnce does not elevate, so the resume would fail the admin check: use a one-shot scheduled task
+    # that runs elevated (Highest) and visible (Interactive) at the installing user's next logon.
+    # The resumed run unregisters it first thing.
+    $resume = Get-ResumeCommand
+    $action = New-ScheduledTaskAction -Execute $resume[0] -Argument $resume[1]
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $InstallUser
+    $principal = New-ScheduledTaskPrincipal -UserId $InstallUser -LogonType Interactive -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit (New-TimeSpan -Hours 4)
+    Register-ScheduledTask -TaskName $TaskResume -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Write-Ok "setup resumes after the reboot (task '$TaskResume')"
     Write-Host ''
     Write-Host 'Windows must restart to finish enabling WSL. Setup continues automatically after you sign in again.' -ForegroundColor Yellow
     $answer = 'y'
@@ -173,8 +249,20 @@ function Install-Distro {
         Write-Ok "$Distro already installed"
     }
     else {
-        Write-Step "installing $Distro (no launch)"
-        Invoke-Wsl -Arguments @('--install', '-d', $Distro, '--no-launch') | Out-Null
+        if ($DistroDir) {
+            Write-Step "installing $Distro into $DistroDir (no launch)"
+            New-Item -ItemType Directory -Force -Path $DistroDir | Out-Null
+            Invoke-Wsl -Arguments @('--install', '-d', $Distro, '--no-launch', '--location', $DistroDir) -AllowFail | Out-Null
+            if (-not (Test-DistroInstalled)) {
+                # older WSL without --location: default place in the user profile
+                Write-Warn "WSL cannot install into $DistroDir (update WSL: wsl --update); using the default location"
+                Invoke-Wsl -Arguments @('--install', '-d', $Distro, '--no-launch') | Out-Null
+            }
+        }
+        else {
+            Write-Step "installing $Distro (no launch)"
+            Invoke-Wsl -Arguments @('--install', '-d', $Distro, '--no-launch') | Out-Null
+        }
     }
     # Initialise the distro non-interactively: first try running as root directly (new tar-based
     # distros register on install); fall back to the classic launcher with --root.
@@ -224,6 +312,7 @@ EOF
 function Set-IniValue {
     # Minimal INI writer for .wslconfig: sets key=value inside [section], keeps everything else.
     param([string]$Path, [string]$Section, [string]$Key, [string]$Value)
+    # Returns $true when the file content changed (and was rewritten).
     $lines = @()
     if (Test-Path $Path) { $lines = @(Get-Content -Path $Path) }
     $out = New-Object System.Collections.Generic.List[string]
@@ -245,28 +334,67 @@ function Set-IniValue {
         if (-not $sectionSeen) { $out.Add("[$Section]") }
         $out.Add("$Key=$Value")
     }
+    if ((@($lines) -join "`n") -ceq (@($out) -join "`n")) { return $false }
     Set-Content -Path $Path -Value $out -Encoding ASCII
+    return $true
+}
+
+function Get-IniValue {
+    param([string]$Path, [string]$Section, [string]$Key)
+    if (-not (Test-Path $Path)) { return '' }
+    $inSection = $false
+    foreach ($line in @(Get-Content -Path $Path)) {
+        if ($line -match '^\s*\[(.+)\]\s*$') { $inSection = ($Matches[1].Trim() -eq $Section); continue }
+        if ($inSection -and $line -match "^\s*$([regex]::Escape($Key))\s*=\s*(.*?)\s*$") { return $Matches[1] }
+    }
+    return ''
+}
+
+function ConvertTo-Megabytes([string]$Size) {
+    # .wslconfig sizes: 8GB, 4096MB, 1.5GB ... -> MB; 0 when unparsable
+    if ($Size -notmatch '^\s*(\d+(?:\.\d+)?)\s*([KMGT]?)B?\s*$') { return 0 }
+    $n = [double]$Matches[1]
+    switch ($Matches[2].ToUpper()) {
+        'T' { return [math]::Floor($n * 1024 * 1024) }
+        'G' { return [math]::Floor($n * 1024) }
+        'M' { return [math]::Floor($n) }
+        'K' { return [math]::Floor($n / 1024) }
+        default { return [math]::Floor($n / 1MB) }
+    }
 }
 
 function Set-WslConfig([bool]$Mirrored) {
     # .wslconfig is per user: the distro and the boot task both run as the installing user.
-    $path = Join-Path $env:USERPROFILE '.wslconfig'
+    # Returns $true when the file changed (the WSL VM must then restart to apply it).
+    $iniPath = Join-Path $env:USERPROFILE '.wslconfig'
     $totalMb = [math]::Floor((Get-CimInstance -ClassName Win32_ComputerSystem).TotalPhysicalMemory / 1MB)
     # Default WSL limit is 50% of RAM, too little on a 4 GB box: give WSL 75% (min 3 GB).
     $wslMb = [math]::Max(3072, [math]::Floor($totalMb * 0.75))
     if ($wslMb -gt $totalMb - 512) { $wslMb = $totalMb - 512 }
-    Set-IniValue -Path $path -Section 'wsl2' -Key 'memory' -Value "$($wslMb)MB"
-    Set-IniValue -Path $path -Section 'wsl2' -Key 'vmIdleTimeout' -Value '-1'
-    if ($Mirrored) {
-        Set-IniValue -Path $path -Section 'wsl2' -Key 'networkingMode' -Value 'mirrored'
+    $changed = $false
+    # only raise the limit: a larger value set by the user (e.g. for Docker Desktop) is kept
+    $currentMb = ConvertTo-Megabytes (Get-IniValue -Path $iniPath -Section 'wsl2' -Key 'memory')
+    if ($currentMb -ge $wslMb) {
+        Write-Ok ".wslconfig memory limit kept ($($currentMb)MB >= $($wslMb)MB)"
+        $wslMb = $currentMb
     }
-    Write-Ok ".wslconfig updated (memory $($wslMb)MB, mirrored=$Mirrored)"
+    elseif (Set-IniValue -Path $iniPath -Section 'wsl2' -Key 'memory' -Value "$($wslMb)MB") { $changed = $true }
+    if (Set-IniValue -Path $iniPath -Section 'wsl2' -Key 'vmIdleTimeout' -Value '-1') { $changed = $true }
+    if ($Mirrored) {
+        if (Set-IniValue -Path $iniPath -Section 'wsl2' -Key 'networkingMode' -Value 'mirrored') { $changed = $true }
+    }
+    if ($changed) { Write-Ok ".wslconfig updated (memory $($wslMb)MB, mirrored=$Mirrored)" }
+    else { Write-Ok '.wslconfig already up to date' }
+    return $changed
 }
 
 function Copy-BundleToWsl {
     Write-Step 'copying the bundle into WSL'
     $winPath = (Resolve-Path $BundlePath).Path
     $linuxPath = (Invoke-Wsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'wslpath', '-a', $winPath)).Trim()
+    if (-not $linuxPath.StartsWith('/') -or $linuxPath -match "[\r\n]") { throw "unexpected WSL path for '$winPath': '$linuxPath'" }
+    # embedded in single quotes below: close, escaped quote, reopen
+    $linuxPath = $linuxPath -replace "'", "'\''"
     $cmd = "rm -rf '$WslBundleDir' && mkdir -p '$WslBundleDir' && cp -r '$linuxPath/compose.yml' '$linuxPath/deploy' '$WslBundleDir/' && find '$WslBundleDir' -name '*.sh' -exec sed -i 's/\r`$//' {} + && chmod +x '$WslBundleDir/deploy/install.sh'"
     Invoke-InDistro -Command $cmd | Out-Null
     Write-Ok "bundle copied to $WslBundleDir"
@@ -304,8 +432,13 @@ function Invoke-LinuxInstaller {
 
 function Save-PendingKeys {
     # Keep the technician's values in an admin/SYSTEM-only file: they must survive a WSL reboot.
+    # Written as a new file (not moved: a move keeps the ACL of the temp folder), so it inherits the
+    # restricted ACL of $DataDir; then narrowed to Administrators/SYSTEM.
     if (-not $KeysFile -or -not (Test-Path $KeysFile)) { return }
-    Move-Item -Force -Path $KeysFile -Destination $PendingKeys
+    $keysText = [IO.File]::ReadAllText($KeysFile)
+    Remove-Item -Force -Path $PendingKeys -ErrorAction SilentlyContinue
+    [IO.File]::WriteAllText($PendingKeys, $keysText, (New-Object System.Text.UTF8Encoding($false)))
+    Remove-Item -Force -Path $KeysFile
     & icacls.exe $PendingKeys /inheritance:r /grant:r '*S-1-5-32-544:F' '*S-1-5-18:F' | Out-Null
 }
 
@@ -348,7 +481,9 @@ function Set-PortProxy {
 `$env:WSL_UTF8 = '1'
 for (`$i = 0; `$i -lt 40; `$i++) {
     `$ip = ((& wsl.exe -d $Distro -u root -- hostname -I) -join ' ').Trim().Split(' ')[0]
-    if (`$ip) { break }
+    # only a plain IPv4 address goes into the netsh command line
+    if (`$ip -match '^\d{1,3}(\.\d{1,3}){3}`$') { break }
+    `$ip = ''
     Start-Sleep -Seconds 5
 }
 if (-not `$ip) { exit 1 }
@@ -442,7 +577,8 @@ function Get-SetupToken {
 
 function Test-NeedsSetup {
     try {
-        $state = Invoke-RestMethod -Uri "http://localhost:$Port/api/setup/state" -TimeoutSec 10
+        # 127.0.0.1, not localhost: under WSL mirrored mode "localhost" may resolve to ::1 and hang
+        $state = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/setup/state" -TimeoutSec 10
         return [bool]$state.needs_setup
     }
     catch {
@@ -472,7 +608,7 @@ function Wait-AdminUi {
     $deadline = (Get-Date).AddSeconds(120)
     while ((Get-Date) -lt $deadline) {
         try {
-            $resp = Invoke-WebRequest -Uri "http://localhost:$Port/" -UseBasicParsing -TimeoutSec 5
+            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 5
             if ($resp.StatusCode -eq 200) { return $true }
         }
         catch { Start-Sleep -Seconds 3 }
@@ -480,23 +616,93 @@ function Wait-AdminUi {
     return $false
 }
 
+function Test-PortFree {
+    # The admin port must be free on Windows, or held by our own WSL stack from an earlier run
+    # (wslrelay/wslhost; on Windows 10 the iphlpsvc portproxy inside svchost).
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+    if ($listeners.Count -eq 0) { Write-Ok "port $Port is free"; return }
+    $proxyOwned = $false
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $proxy = (& netsh.exe interface portproxy show v4tov4 | Out-String)
+        $proxyOwned = $proxy -match "(?m)^\s*0\.0\.0\.0\s+$Port\s"
+    }
+    finally { $ErrorActionPreference = $prev }
+    foreach ($conn in $listeners) {
+        $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+        $name = if ($proc) { $proc.ProcessName } else { "PID $($conn.OwningProcess)" }
+        if ($name -in @('wslrelay', 'wslhost')) { continue }
+        if ($name -eq 'svchost' -and $proxyOwned) { continue }
+        if ($name -in @('com.docker.backend', 'com.docker.proxy', 'vpnkit')) {
+            Stop-Install "port $Port is used by Docker Desktop ($name): stop the Docker Desktop container that publishes port $Port (or quit Docker Desktop) and run setup again, or reinstall with another port"
+        }
+        Stop-Install "port $Port is used by $name; free it or reinstall with another port"
+    }
+    Write-Ok "port $Port is held by the existing ILER WSL stack"
+}
+
+function Test-FreeSpace {
+    # The Ubuntu disk (database, images, backups) grows over time.
+    $target = $DistroDir
+    if (-not $target) { $target = $env:SystemDrive + '\' }
+    $drive = ([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($target))).TrimEnd('\')
+    $disk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='$drive'" -ErrorAction SilentlyContinue
+    if (-not $disk -or $null -eq $disk.FreeSpace) { Write-Warn "cannot read free space of drive $drive"; return }
+    $freeGb = [math]::Round($disk.FreeSpace / 1GB, 1)
+    if ($freeGb -lt 20) {
+        if (Test-DistroInstalled) {
+            # re-run: the distro disk already exists and holds most of the data
+            Write-Warn "only $freeGb GB free on $drive; at least 20 GB is recommended"
+        }
+        else {
+            Stop-Install "only $freeGb GB free on drive $drive; at least 20 GB is required (40 GB recommended). Free up space or choose another drive."
+        }
+    }
+    elseif ($freeGb -lt 40) { Write-Warn "only $freeGb GB free on drive $drive; 40 GB or more is recommended" }
+    else { Write-Ok "$freeGb GB free on drive $drive" }
+}
+
+function Test-PublicNetwork {
+    # The firewall rules apply to Private/Domain networks only. Do not change the category ourselves.
+    try {
+        $public = @(Get-NetConnectionProfile -ErrorAction Stop | Where-Object { "$($_.NetworkCategory)" -eq 'Public' })
+    }
+    catch { return }
+    foreach ($netProfile in $public) {
+        Write-Warn ("network '$($netProfile.Name)' ($($netProfile.InterfaceAlias)) is Public: other computers cannot open the admin UI " +
+            "until it is set to Private. As administrator run: Set-NetConnectionProfile -InterfaceIndex $($netProfile.InterfaceIndex) -NetworkCategory Private")
+    }
+}
+
 # ---- main ---------------------------------------------------------------------------------
 
 if (-not (Test-Admin)) {
+    Write-Progress2 'error|install.ps1 must run as Administrator'
     Write-Host 'Run this installer as Administrator.' -ForegroundColor Red
+    Wait-Close
     exit 1
 }
-New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+# Restrict ProgramData\ILER before anything is written there (log with the setup token, pending keys).
+try { Set-PrivateAcl -Dir $DataDir -ResetChildren }
+catch { Stop-Install "$($_.Exception.Message)" }
 Start-Transcript -Path $LogFile -Append | Out-Null
+Set-Stage 3 'check'
+Remove-ResumeTask
 
 if (-not $BundlePath) { $BundlePath = Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }
 if (-not (Test-Path (Join-Path $BundlePath 'compose.yml'))) { Stop-Install "compose.yml not found in bundle folder '$BundlePath'" }
 if ($Offline -and -not (Test-Path $Offline)) { Stop-Install "offline archive not found: $Offline" }
-Save-PendingKeys
 if ((-not $Offline) -and (Test-Path (Join-Path $BundlePath 'images.tar'))) { $Offline = Join-Path $BundlePath 'images.tar' }
 
 try {
-    Set-Stage 3 'check'
+    # wslpath / wsl output is UTF-8 (WSL_UTF8=1): decode it as such (non-Latin bundle paths)
+    try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false }
+    catch { Write-Verbose "console encoding: $($_.Exception.Message)" }
+    Save-PendingKeys
+    # The distro disk folder: inherited entries of an existing ext4.vhdx follow the new folder ACL; its
+    # explicit entries (WSL grants the VM access on attach) are left alone, so no /reset here.
+    if ($DistroDir) { Set-PrivateAcl -Dir $DistroDir }
     $build = Get-OsBuild
     Write-Step "ILER Bot setup (Windows build $build, port $Port, resume=$Resume)"
     if ($build -lt 19045 -and $build -ne 20348) {
@@ -514,14 +720,16 @@ try {
 
     Set-Stage 8 'wsl'
     if (Enable-WslFeature) { Request-Reboot }
-    Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -Name $RunOnceName -ErrorAction SilentlyContinue
+
+    Test-PortFree
+    Test-FreeSpace
 
     Set-Stage 12 'distro'
     Install-Distro
     $mirrored = Test-MirroredSupported
-    Set-WslConfig -Mirrored $mirrored
-    # .wslconfig changes apply only after the whole WSL VM restarts
-    Invoke-Wsl -Arguments @('--shutdown') -AllowFail | Out-Null
+    # .wslconfig changes apply only after the whole WSL VM restarts; shut it down only when something
+    # changed (it also stops Docker Desktop and any other distro the user runs)
+    if (Set-WslConfig -Mirrored $mirrored) { Invoke-Wsl -Arguments @('--shutdown') -AllowFail | Out-Null }
     Set-Stage 30 'systemd'
     Initialize-Distro
     Set-Stage 38 'copy'
@@ -533,6 +741,7 @@ try {
     Set-Stage 92 'network'
     Set-Networking -Mirrored $mirrored
     Set-Firewall
+    Test-PublicNetwork
     Register-BootTask
 
     Set-Stage 96 'finish'
@@ -556,6 +765,7 @@ try {
     }
     Write-Host "Log: $LogFile"
     Write-Progress2 "done|http://localhost:$Port$setupPath"
+    Wait-Close
 }
 catch {
     $msg = "$($_.Exception.Message)".Trim()

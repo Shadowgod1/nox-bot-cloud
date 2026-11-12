@@ -228,17 +228,31 @@ copy_bundle() {
 }
 
 configure_env() {
-  local envfile="$ILER_DIR_PATH/.env" version
+  local envfile="$ILER_DIR_PATH/.env" version current="" fresh=1 use_channel=1
+  if [[ -f "$envfile" ]]; then
+    fresh=0
+    current="$(env_get "$envfile" ILER_VERSION)"
+  fi
   render_env "$ILER_DIR_PATH/deploy/.env.example" "$envfile"
   version="$(env_get "$ILER_DIR_PATH/deploy/channel/stable.env" ILER_VERSION)"
-  [[ -n "$version" ]] && env_set "$envfile" ILER_VERSION "$version"
-  # optional image digests from the channel: pull by tag@digest (empty = by tag)
-  local key digest
-  for key in ILER_CORE_DIGEST ILER_WEB_DIGEST ILER_UPDATER_DIGEST; do
-    digest="$(env_get "$ILER_DIR_PATH/deploy/channel/stable.env" "$key")"
-    [[ -z "$digest" || "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "invalid $key in channel file"
-    env_set "$envfile" "$key" "$digest"
-  done
+  # Re-running an older bundle must not downgrade an installation that the updater already moved
+  # forward: take the channel's version/digests only on a fresh .env or when the bundle is newer.
+  if [[ "$fresh" == "0" && -n "$current" && -n "$version" && "$current" != "$version" ]]; then
+    if [[ "$(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -n1)" == "$current" ]]; then
+      use_channel=0
+      log "keeping installed version $current (bundle has older $version)"
+    fi
+  fi
+  if [[ "$use_channel" == "1" ]]; then
+    [[ -n "$version" ]] && env_set "$envfile" ILER_VERSION "$version"
+    # optional image digests from the channel: pull by tag@digest (empty = by tag)
+    local key digest
+    for key in ILER_CORE_DIGEST ILER_WEB_DIGEST ILER_UPDATER_DIGEST; do
+      digest="$(env_get "$ILER_DIR_PATH/deploy/channel/stable.env" "$key")"
+      [[ -z "$digest" || "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "invalid $key in channel file"
+      env_set "$envfile" "$key" "$digest"
+    done
+  fi
   [[ -n "$ENV_IMPORT" ]] && import_secret_key "$envfile"
   env_set "$envfile" ILER_DIR "$ILER_DIR_PATH"
   if [[ -n "$PORT" ]]; then

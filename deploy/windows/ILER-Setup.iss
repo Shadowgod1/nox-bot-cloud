@@ -15,8 +15,11 @@ AppId={{6F1C3E2A-9B7D-4C1E-A5F2-1D0B7C9E4A11}
 AppName=ILER Bot
 AppVersion={#AppVersion}
 AppPublisher=ILER
-DefaultDirName={commonpf}\ILER Bot
-DisableDirPage=yes
+; everything lives in the chosen folder: the bundle and wsl\ (the Ubuntu disk with the database, images
+; and backups, which grows over time) - pick a drive with space, e.g. D:\ILER
+DefaultDirName={sd}\ILER
+DisableDirPage=no
+UsePreviousAppDir=yes
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
@@ -78,7 +81,10 @@ ru.KeyGemini=Ключ Google Gemini:
 ru.KeyCoins=Месячный лимит коинов (0 — без лимита):
 ru.KeyBadChars=Ключ содержит недопустимые символы (пробел или кавычки?). Проверьте, что он вставлен целиком.
 ru.KeyBadCoins=Лимит коинов должен быть целым числом.
+ru.KeysIntroRe=ILER Bot уже установлен на этом компьютере. Заполните только то, что нужно сменить: пустое поле — оставить как есть (текущие ключи и лимит коинов сохраняются).
 ru.KeyNone=Не задан ни один ключ: бот не сможет отвечать клиентам, пока техник ILER не добавит ключ. Продолжить?
+ru.BadDir=Выберите папку с латинскими буквами, без кириллицы и специальных символов, например D:\ILER.
+ru.NoStart=install.ps1 не запустился (политика выполнения или антивирус?). Журнал: %1
 ru.Starting=Запуск установки…
 ru.DoneHeading=ILER Bot установлен
 ru.DoneText=Бот запущен. Откройте админку, чтобы создать владельца и подключить WhatsApp:%n%n%1%n%nЯрлык «ILER Bot - админка» на рабочем столе открывает эту ссылку.
@@ -111,7 +117,10 @@ en.KeyGemini=Google Gemini key:
 en.KeyCoins=Monthly coin limit (0 = no limit):
 en.KeyBadChars=The key contains invalid characters (a space or quotes?). Make sure it was pasted completely.
 en.KeyBadCoins=The coin limit must be a whole number.
+en.KeysIntroRe=ILER Bot is already installed on this computer. Fill in only what should change: an empty field keeps the current value (the current keys and coin limit stay).
 en.KeyNone=No key is set: the bot cannot answer clients until an ILER technician adds one. Continue?
+en.BadDir=Choose a folder with Latin letters only, without Cyrillic or special characters, e.g. D:\ILER.
+en.NoStart=install.ps1 did not start (execution policy or antivirus?). Log: %1
 en.Starting=Starting installation...
 en.DoneHeading=ILER Bot is installed
 en.DoneText=The bot is running. Open the admin UI to create the owner and connect WhatsApp:%n%n%1%n%nThe desktop shortcut opens this link.
@@ -130,9 +139,19 @@ Filename: "{sys}\wsl.exe"; Parameters: "-d Ubuntu-24.04 -u root -- bash /opt/ile
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""ILER Bot - start WSL"" /F"; Flags: runhidden; RunOnceId: "IlerDelTaskStart"
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""ILER Bot - refresh portproxy"" /F"; Flags: runhidden; RunOnceId: "IlerDelTaskProxy"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""ILER Bot admin UI"""; Flags: runhidden; RunOnceId: "IlerDelFirewall"
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""ILER Bot - resume setup"" /F"; Flags: runhidden; RunOnceId: "IlerDelTaskResume"
+; Windows 10 portproxy fallback (the GUI installer always uses the default port 8080)
+Filename: "{sys}\netsh.exe"; Parameters: "interface portproxy delete v4tov4 listenport=8080 listenaddress=0.0.0.0"; Flags: runhidden; RunOnceId: "IlerDelPortProxy"
+; Hyper-V firewall rule of the WSL mirrored mode
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Get-NetFirewallHyperVRule -Name ILER-Admin -ErrorAction SilentlyContinue | Remove-NetFirewallHyperVRule"""; \
+  Flags: runhidden waituntilterminated; RunOnceId: "IlerDelHyperVRule"
+; the Ubuntu-24.04 distro (client database) is intentionally kept
 
 [UninstallDelete]
 Type: files; Name: "{commondesktop}\ILER Bot - *.url"
+; install log, pending keys, portproxy refresh script
+Type: filesandordirs; Name: "{commonappdata}\ILER"
 
 [Code]
 var
@@ -168,10 +187,21 @@ begin
   else Result := '';
 end;
 
-procedure InitializeWizard;
+// A previous installation exists: empty key fields then mean "keep the current keys".
+function IsReinstall: Boolean;
 begin
+  Result := RegKeyExists(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6F1C3E2A-9B7D-4C1E-A5F2-1D0B7C9E4A11}_is1');
+  if (not Result) and (WizardForm <> nil) and (Trim(WizardForm.DirEdit.Text) <> '') then
+    Result := FileExists(AddBackslash(Trim(WizardForm.DirEdit.Text)) + 'compose.yml');
+end;
+
+procedure InitializeWizard;
+var
+  Intro: String;
+begin
+  if IsReinstall then Intro := CustomMessage('KeysIntroRe') else Intro := CustomMessage('KeysIntro');
   KeysPage := CreateInputQueryPage(wpWelcome, CustomMessage('KeysCaption'), CustomMessage('KeysDesc'),
-    CustomMessage('KeysIntro'));
+    Intro);
   KeysPage.Add(CustomMessage('KeyAnthropic'), True);
   KeysPage.Add(CustomMessage('KeyOpenAI'), True);
   KeysPage.Add(CustomMessage('KeyGemini'), True);
@@ -210,31 +240,75 @@ begin
     if (Value[I] < '0') or (Value[I] > '9') then Result := False;
 end;
 
-function NextButtonClick(CurPageID: Integer): Boolean;
+// install.ps1, wslpath and the WSL disk location break on Cyrillic and special characters.
+function ValidDir(const Value: String): Boolean;
 var
   I: Integer;
+  C: Char;
 begin
-  Result := True;
-  if CurPageID <> KeysPage.ID then Exit;
-  for I := 0 to 2 do
+  Result := Value <> '';
+  for I := 1 to Length(Value) do
   begin
-    KeysPage.Values[I] := Trim(KeysPage.Values[I]);
-    if not ValidKey(KeysPage.Values[I]) then
+    C := Value[I];
+    if not (((C >= 'A') and (C <= 'Z')) or ((C >= 'a') and (C <= 'z')) or ((C >= '0') and (C <= '9'))
+            or (C = ':') or (C = '\') or (C = '.') or (C = '_') or (C = '-') or (C = ' ')) then
     begin
-      MsgBox(CustomMessage('KeyBadChars'), mbError, MB_OK);
       Result := False;
       Exit;
     end;
   end;
-  KeysPage.Values[3] := Trim(KeysPage.Values[3]);
+end;
+
+// Trims the key fields and returns an error text ('' = valid). Used by the wizard and by silent installs.
+function KeysError: String;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to 3 do
+    KeysPage.Values[I] := Trim(KeysPage.Values[I]);
+  for I := 0 to 2 do
+    if not ValidKey(KeysPage.Values[I]) then
+    begin
+      Result := CustomMessage('KeyBadChars');
+      Exit;
+    end;
   if not ValidCoins(KeysPage.Values[3]) then
+    Result := CustomMessage('KeyBadCoins');
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Err: String;
+begin
+  Result := True;
+  if CurPageID = wpSelectDir then
   begin
-    MsgBox(CustomMessage('KeyBadCoins'), mbError, MB_OK);
+    if not ValidDir(WizardDirValue) then
+    begin
+      MsgBox(CustomMessage('BadDir'), mbError, MB_OK);
+      Result := False;
+    end;
+    Exit;
+  end;
+  if CurPageID <> KeysPage.ID then Exit;
+  Err := KeysError;
+  if Err <> '' then
+  begin
+    MsgBox(Err, mbError, MB_OK);
     Result := False;
     Exit;
   end;
-  if (KeysPage.Values[0] = '') and (KeysPage.Values[1] = '') and (KeysPage.Values[2] = '') then
+  // re-install: empty fields keep the current keys, no warning
+  if (KeysPage.Values[0] = '') and (KeysPage.Values[1] = '') and (KeysPage.Values[2] = '') and (not IsReinstall) then
     Result := MsgBox(CustomMessage('KeyNone'), mbConfirmation, MB_YESNO) = IDYES;
+end;
+
+// Silent installs skip NextButtonClick: validate the /ANTHROPICKEY.. /COINS parameters and the folder here.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := KeysError;
+  if (Result = '') and (not ValidDir(WizardDirValue)) then Result := CustomMessage('BadDir');
 end;
 
 // KEY=VALUE file for install.ps1 (-KeysFile); it moves it to an admin-only place and deletes it once applied.
@@ -273,14 +347,14 @@ var
   Page: TOutputProgressWizardPage;
   ResultCode, P, Pct, Shown, Ticks: Integer;
   ProgressFile, KeysFile, Params, Line, Kind, Rest, Stage, Text: String;
-  Finished: Boolean;
+  Finished, GotLine: Boolean;
 begin
   InstallerRan := True;
   ProgressFile := ExpandConstant('{tmp}\progress.txt');
   DeleteFile(ProgressFile);
   Params := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
     ExpandConstant('{app}\deploy\windows\install.ps1') + '" -BundlePath "' + ExpandConstant('{app}') +
-    '" -ProgressFile "' + ProgressFile + '"';
+    '" -ProgressFile "' + ProgressFile + '" -DistroDir "' + ExpandConstant('{app}\wsl') + '"';
   KeysFile := ExpandConstant('{tmp}\iler-keys.env');
   if WriteKeysFile(KeysFile) then Params := Params + ' -KeysFile "' + KeysFile + '"';
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '', SW_HIDE, ewNoWait, ResultCode) then
@@ -294,14 +368,22 @@ begin
   Page.SetProgress(0, 100);
   Page.Show;
   try
-    Pct := 0; Shown := 0; Ticks := 0; Finished := False;
+    Pct := 0; Shown := 0; Ticks := 0; Finished := False; GotLine := False;
     while not Finished do
     begin
       Sleep(500);
       Ticks := Ticks + 1;
       Line := LastLine(ProgressFile);
+      // install.ps1 writes "3|check|" right after it starts; nothing after 120 s: it never ran
+      if (Line = '') and (not GotLine) and (Ticks >= 240) then
+      begin
+        InstallFailed := True;
+        ErrorText := FmtMessage(CustomMessage('NoStart'), [ExpandConstant('{commonappdata}\ILER\install.log')]);
+        Finished := True;
+      end;
       if Line <> '' then
       begin
+        GotLine := True;
         P := Pos('|', Line);
         Kind := Copy(Line, 1, P - 1);
         Rest := Copy(Line, P + 1, Length(Line));
