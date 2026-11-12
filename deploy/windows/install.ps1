@@ -280,15 +280,26 @@ function Invoke-LinuxInstaller {
         $wslArgs += @('--offline', $tarLinux)
     }
     # Stream the output (console + log) and map install.sh steps onto the GUI progress.
-    & wsl.exe @wslArgs 2>&1 | ForEach-Object {
-        $line = "$_"
-        Write-Host $line
-        if ($line -match 'installing Docker Engine') { Set-Stage 45 'docker' }
-        elseif ($line -match 'loading images|pulling images') { Set-Stage 55 'images' }
-        elseif ($line -match '==> starting services') { Set-Stage 80 'services' }
-        elseif ($line -match 'waiting for services') { Set-Stage 85 'health' }
+    # Windows PowerShell 5.1 turns every stderr line of a native command into an ErrorRecord when it is
+    # redirected (2>&1); with ErrorActionPreference=Stop that aborts the install on a harmless warning
+    # (get.docker.com prints "WSL DETECTED" to stderr). Only the exit code decides success here.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & wsl.exe @wslArgs 2>&1 | ForEach-Object {
+            $line = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+            Write-Host $line
+            if ($line -match 'installing Docker Engine') { Set-Stage 45 'docker' }
+            elseif ($line -match 'loading images|pulling images') { Set-Stage 55 'images' }
+            elseif ($line -match '==> starting services') { Set-Stage 80 'services' }
+            elseif ($line -match 'waiting for services') { Set-Stage 85 'health' }
+        }
+        $code = $LASTEXITCODE
     }
-    if ($LASTEXITCODE -ne 0) { throw "install.sh failed with exit code $LASTEXITCODE" }
+    finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($code -ne 0) { throw "install.sh failed with exit code $code (see the lines above in the log)" }
 }
 
 function Save-PendingKeys {
@@ -547,7 +558,9 @@ try {
     Write-Progress2 "done|http://localhost:$Port$setupPath"
 }
 catch {
-    Stop-Install $_.Exception.Message
+    $msg = "$($_.Exception.Message)".Trim()
+    if (-not $msg) { $msg = "$($_.Exception.GetType().Name) at line $($_.InvocationInfo.ScriptLineNumber)" }
+    Stop-Install $msg
 }
 finally {
     try { Stop-Transcript | Out-Null } catch { Write-Verbose 'transcript was not running' }
