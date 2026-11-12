@@ -388,10 +388,16 @@ function Set-WslConfig([bool]$Mirrored) {
     return $changed
 }
 
+function ConvertTo-WslArg([string]$WinPath) {
+    # wsl.exe runs the command through the distro's shell, which eats backslashes in an unquoted
+    # argument (D:\ILER -> D:ILER). wslpath accepts forward slashes, so pass D:/ILER instead.
+    return ($WinPath -replace '\\', '/')
+}
+
 function Copy-BundleToWsl {
     Write-Step 'copying the bundle into WSL'
     $winPath = (Resolve-Path $BundlePath).Path
-    $linuxPath = (Invoke-Wsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'wslpath', '-a', $winPath)).Trim()
+    $linuxPath = (Invoke-Wsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'wslpath', '-a', (ConvertTo-WslArg $winPath))).Trim()
     if (-not $linuxPath.StartsWith('/') -or $linuxPath -match "[\r\n]") { throw "unexpected WSL path for '$winPath': '$linuxPath'" }
     # embedded in single quotes below: close, escaped quote, reopen
     $linuxPath = $linuxPath -replace "'", "'\''"
@@ -404,7 +410,7 @@ function Invoke-LinuxInstaller {
     Write-Step 'running deploy/install.sh inside WSL (Docker Engine, images, services)'
     $wslArgs = @('-d', $Distro, '-u', 'root', '--', 'bash', "$WslBundleDir/deploy/install.sh", '--port', "$Port", '--yes')
     if ($Offline) {
-        $tarLinux = (Invoke-Wsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'wslpath', '-a', (Resolve-Path $Offline).Path)).Trim()
+        $tarLinux = (Invoke-Wsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'wslpath', '-a', (ConvertTo-WslArg (Resolve-Path $Offline).Path))).Trim()
         $wslArgs += @('--offline', $tarLinux)
     }
     # Stream the output (console + log) and map install.sh steps onto the GUI progress.
