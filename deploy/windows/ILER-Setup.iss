@@ -158,6 +158,7 @@ var
   KeysPage: TInputQueryWizardPage;
   ResultUrl, ErrorText: String;
   NeedReboot, InstallFailed, InstallerRan: Boolean;
+  UrlEdit: TNewEdit;
 
 function InstallSucceeded: Boolean;
 begin
@@ -441,5 +442,17 @@ begin
   begin
     WizardForm.FinishedHeadingLabel.Caption := CustomMessage('DoneHeading');
     WizardForm.FinishedLabel.Caption := FmtMessage(CustomMessage('DoneText'), [ResultUrl]);
+    // a label cannot be selected: show the link in a read-only field so it can be copied (Ctrl+C)
+    if UrlEdit = nil then
+    begin
+      UrlEdit := TNewEdit.Create(WizardForm);
+      UrlEdit.Parent := WizardForm.FinishedPage;
+      UrlEdit.ReadOnly := True;
+    end;
+    UrlEdit.Left := WizardForm.FinishedLabel.Left;
+    UrlEdit.Width := WizardForm.FinishedLabel.Width;
+    UrlEdit.Top := WizardForm.FinishedLabel.Top + WizardForm.FinishedLabel.Height + ScaleY(8);
+    UrlEdit.Text := ResultUrl;
+    WizardForm.RunList.Top := UrlEdit.Top + UrlEdit.Height + ScaleY(12);
   end;
 end;
