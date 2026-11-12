@@ -430,7 +430,12 @@ async def test_dashboard_counts_today_in_club_tz(client, pool, monkeypatch):
 
     r = await client.get("/api/dashboard")
     assert r.status_code == 200, r.text
-    assert r.json() == {
+    body = r.json()
+    health, coins = body.pop("health"), body.pop("coins")
+    assert health["answered_share_today"] == 1.0 and health["handovers_today"] == 0
+    assert health["last_bot_reply_at"].startswith("2026-11-10T19:30") and health["avg_reply_ms_today"] == 0
+    assert coins["limit"] == 0 and coins["spent"] == 0 and coins["remaining"] is None
+    assert body == {
         "whatsapp": {"status": "open", "phone": "77001234567"},
         "bot_enabled": True,
         "today": {"conversations": 1, "client_messages": 2, "bot_replies": 1,
@@ -466,3 +471,82 @@ async def test_test_chat_bot_not_configured_409(client, monkeypatch):
                           headers=csrf(client))
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "bot_not_configured"
+
+
+async def test_dashboard_coins_spend_and_forecast(client, pool, monkeypatch):
+    from iler.config import get_settings
+
+    await login(client)
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)  # 2026-11-11 01:00 in Asia/Almaty
+    monkeypatch.setattr(dashboard_api, "_now", lambda: now)
+    monkeypatch.setattr(get_settings(), "monthly_coins", 100)
+    await pool.execute(
+        "INSERT INTO ai_requests(provider, model, input_tokens, output_tokens, created_at) VALUES"
+        " ('anthropic', 'claude-sonnet-5-5', 10000, 1000, $1),"  # 30 coins
+        " ('anthropic', 'claude-haiku-5-5', 100000, 10000, $2),"  # 15 coins
+        " ('anthropic', 'claude-sonnet-5-5', 99999, 9999, $3)",  # previous month: not counted
+        datetime(2026, 11, 2, 10, 0, tzinfo=UTC), now - timedelta(minutes=30), datetime(2026, 10, 31, 18, 0, tzinfo=UTC),
+    )
+    coins = (await client.get("/api/dashboard")).json()["coins"]
+    assert coins["spent"] == 45.0 and coins["remaining"] == 55.0 and coins["percent"] == 45.0
+    assert coins["exhausted"] is False and coins["days_in_month"] == 30
+    assert coins["runs_out_on"] == "2026-11-23"  # ~4.5 coins/day since Nov 1
+    assert len(coins["days"]) == 11 and coins["days"][1] == {"date": "2026-11-02", "coins": 30.0}
+    assert coins["days"][-1] == {"date": "2026-11-11", "coins": 15.0}
+    assert coins["by_model"] == [{"model": "claude-sonnet-5-5", "coins": 30.0}, {"model": "claude-haiku-5-5", "coins": 15.0}]
+
+
+async def test_coin_alerts_once_per_level(pool, monkeypatch):
+    from iler import usage
+    from iler.config import get_settings
+    from iler.engine import sender
+
+    sent = []
+
+    async def fake_notify(text, *, key=None):
+        sent.append((key, text))
+        return []
+
+    monkeypatch.setattr(sender, "notify_admins", fake_notify)
+    monkeypatch.setattr(get_settings(), "monthly_coins", 10)
+    await pool.execute("INSERT INTO ai_requests(provider, model, input_tokens, output_tokens) VALUES"
+                       " ('anthropic', 'claude-sonnet-5-5', 4000, 100)")  # 9 coins = 90%
+    await usage.after_spend()
+    await usage.after_spend()
+    assert len(sent) == 1 and "90%" in sent[0][1]
+    assert not await usage.limit_reached()
+    await pool.execute("INSERT INTO ai_requests(provider, model, input_tokens, output_tokens) VALUES"
+                       " ('anthropic', 'claude-sonnet-5-5', 1000, 0)")  # +2 coins
+    await usage.after_spend()
+    assert len(sent) == 2 and "исчерпан" in sent[1][1]
+    assert await usage.limit_reached()
+    usage.invalidate()
+
+
+async def test_test_chat_refused_when_coins_exhausted(client, monkeypatch):
+    from iler import usage
+
+    await login(client)
+
+    async def reached():
+        return True
+
+    monkeypatch.setattr(usage, "limit_reached", reached)
+    from iler.settings_models import BotSettings
+    from iler import settings_store
+
+    await settings_store.put("bot", BotSettings(prompt="Ты бот."))
+    r = await client.post("/api/test-chat", json={"messages": [{"role": "user", "content": "hi"}]}, headers=csrf(client))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "coins_exhausted"
+
+
+def test_coin_prices_and_overrides(monkeypatch):
+    from iler import usage
+    from iler.config import get_settings
+
+    assert usage.coins_for("claude-haiku-5-5", 1_000_000, 0) == 100.0  # $0.10 = 100 coins
+    assert usage.price_for("some-unknown-model") == usage.FALLBACK_PRICE
+    monkeypatch.setattr(get_settings(), "model_prices", '{"gpt-5.4-mini": [0.4, 1.6]}')
+    assert usage.price_for("gpt-5.4-mini") == (0.4, 1.6)
+    monkeypatch.setattr(get_settings(), "model_prices", "not json")
+    assert usage.price_for("gpt-5.4-mini") == usage.FALLBACK_PRICE

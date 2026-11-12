@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     openai_key: str = ""
     gemini_key: str = ""
     anthropic_key: str = ""
+    # ILER coins (iler.usage): monthly limit set by ILER (0 = no limit) and optional price overrides (JSON)
+    monthly_coins: int = 0
+    model_prices: str = ""
     tz: str = "Asia/Almaty"
     data_dir: str = "/data"
     disable_workers: bool = False

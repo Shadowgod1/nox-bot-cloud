@@ -42,12 +42,15 @@ async def post_test_chat(body: TestChatRequest, _user: User = Depends(current_us
     from iler.engine.turn import run_turn  # lazy: engine is optional at import time
     from iler.engine.prompt import BotNotConfigured
     from iler.llm.base import ChatMessage, LlmError
+    from iler.usage import CoinsExhausted
 
     history = [ChatMessage(role=m.role, content=m.content) for m in body.messages]
     try:
         outcome = await run_turn(None, dry_run=True, history=history)
     except BotNotConfigured as e:
         raise ApiError(409, "bot_not_configured", "Промпт бота пуст: настройте бота по шаблону") from e
+    except CoinsExhausted as e:
+        raise ApiError(409, "coins_exhausted", "Лимит коинов ILER на этот месяц исчерпан") from e
     except LlmError as e:
         raise ApiError(502, "llm_error", str(e)) from e
     return {"reply": "\n\n".join(outcome.reply_parts), "tool_calls": list(outcome.tool_calls)}

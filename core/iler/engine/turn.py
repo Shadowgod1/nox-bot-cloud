@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from iler import settings_store
+from iler import settings_store, usage
 from iler.config import get_settings
 from iler.engine import admission, prompt, sender, store
 from iler.engine.pii import PiiMasker, mask_phone_for_log
@@ -72,6 +72,21 @@ async def _handle_llm_failure(conv, error: LlmError) -> None:
     log.warning("LLM failed for conversation %s (%s): %s", conv["id"], mask_phone_for_log(conv["phone"]), error)
 
 
+async def _handover_no_coins(conv, turn_id: str) -> None:
+    """The monthly coin limit is used up: the client is told an administrator will answer, the
+    conversation waits for the operator and the admins are told (once per conversation per day)."""
+    bot = await settings_store.get("bot", BotSettings)
+    await store.set_status(conv["id"], "needs_operator", pause_minutes=bot.handover_pause_minutes)
+    await sender.send_reply(conv["id"], sender.split_reply(HANDOVER_REPLY), turn_id=turn_id)
+    who = conv["name"] or "клиент"
+    phone = f" +{conv['phone']}" if conv["phone"] else ""
+    await sender.notify_admins(
+        f"Лимит коинов ILER исчерпан: бот не отвечает сам. Сообщение ({who}{phone}) ждёт оператора в админке.",
+        key=f"coins-conv:{conv['id']}:{datetime.now(UTC):%Y-%m-%d}",
+    )
+    log.info("conversation %s handed to the operator: coin limit reached", conv["id"])
+
+
 async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
                    history: list[ChatMessage] | None = None, phone: str = "") -> TurnOutcome:
     """Run one turn.
@@ -121,6 +136,12 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
         client_name = conv["name"]
         phone = conv["phone"]
 
+    if await usage.limit_reached():
+        if dry_run:
+            raise usage.CoinsExhausted()
+        await _handover_no_coins(conv, turn_id)
+        return TurnOutcome(handed_over=True)
+
     masker = PiiMasker()
     messages = prompt.build_messages(bot, chat, now_local, tz_name, client_name)
     messages = [messages[0]] + [ChatMessage(role=m.role, content=masker.mask(m.content)) for m in messages[1:]]
@@ -141,6 +162,7 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
             raise
         await _handle_llm_failure(conv, e)
         return TurnOutcome(handed_over=True)
+    await usage.after_spend()
 
     tool_calls = [{**c, "args": masker.restore_obj(c["args"])} for c in result.tool_calls]
     handed_over = any(c["name"] == HANDOVER_TOOL and not c["error"] for c in tool_calls)

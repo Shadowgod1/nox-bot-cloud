@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from iler import settings_store
+from iler import settings_store, usage
 from iler.auth.deps import User, current_user
 from iler.backup import status as backup_status
 from iler.config import get_settings
@@ -41,12 +41,46 @@ class BackupBrief(BaseModel):
     message: str | None
 
 
+class Health(BaseModel):
+    last_bot_reply_at: str | None  # ISO-8601 time of the latest bot message
+    last_client_message_at: str | None
+    avg_reply_ms_today: int | None  # mean LLM latency of today's successful requests
+    handovers_today: int  # conversations handed to the operator today (tool or LLM failure)
+    answered_share_today: float | None  # share (0..1) of today's client conversations the bot answered
+
+
+class CoinDay(BaseModel):
+    date: str  # YYYY-MM-DD (club time zone)
+    coins: float
+
+
+class CoinModel(BaseModel):
+    model: str
+    coins: float
+
+
+class Coins(BaseModel):
+    limit: int  # 0 = no limit
+    spent: float
+    remaining: float | None
+    percent: float | None
+    exhausted: bool
+    avg_per_day: float
+    projected_month: float
+    runs_out_on: str | None  # YYYY-MM-DD when the limit runs out at the current pace; None = lasts
+    days_in_month: int
+    days: list[CoinDay]
+    by_model: list[CoinModel]
+
+
 class Dashboard(BaseModel):
     whatsapp: WhatsAppBrief
     bot_enabled: bool
     today: TodayStats
     errors_24h: Errors24h
     backup: BackupBrief
+    health: Health
+    coins: Coins
 
 
 def _now() -> datetime:
@@ -81,7 +115,21 @@ async def get_dashboard(_user: User = Depends(current_user)):
              WHERE created_at >= $1 AND created_at < $2) AS bookings_total,
           (SELECT count(*) FROM ai_requests WHERE error IS NOT NULL AND created_at >= $3) AS llm_errors,
           (SELECT count(*) FROM outbound_intents
-             WHERE status IN ('failed', 'uncertain') AND updated_at >= $3) AS send_errors
+             WHERE status IN ('failed', 'uncertain') AND updated_at >= $3) AS send_errors,
+          (SELECT max(created_at) FROM messages WHERE author = 'bot') AS last_bot_at,
+          (SELECT max(created_at) FROM messages WHERE author = 'client') AS last_client_at,
+          (SELECT avg(latency_ms) FROM ai_requests
+             WHERE error IS NULL AND created_at >= $1 AND created_at < $2) AS avg_latency,
+          (SELECT count(DISTINCT ai_requests.conversation_id) FROM tool_calls
+             JOIN ai_requests ON ai_requests.id = tool_calls.ai_request_id
+             WHERE tool_calls.name = 'handover_to_operator' AND tool_calls.error IS NULL
+               AND tool_calls.created_at >= $1 AND tool_calls.created_at < $2) AS handovers,
+          (SELECT count(DISTINCT conversation_id) FROM messages
+             WHERE author = 'client' AND created_at >= $1 AND created_at < $2) AS client_convs,
+          (SELECT count(DISTINCT m.conversation_id) FROM messages m
+             WHERE m.author = 'client' AND m.created_at >= $1 AND m.created_at < $2
+               AND EXISTS (SELECT 1 FROM messages b WHERE b.conversation_id = m.conversation_id
+                           AND b.author = 'bot' AND b.created_at >= $1 AND b.created_at < $2)) AS answered_convs
         """,
         start, end, since,
     )
@@ -99,4 +147,34 @@ async def get_dashboard(_user: User = Depends(current_user)):
         },
         "errors_24h": {"llm": row["llm_errors"], "send": row["send_errors"]},
         "backup": await backup_status.get(),
+        "health": {
+            "last_bot_reply_at": _iso(row["last_bot_at"]),
+            "last_client_message_at": _iso(row["last_client_at"]),
+            "avg_reply_ms_today": int(row["avg_latency"]) if row["avg_latency"] is not None else None,
+            "handovers_today": row["handovers"],
+            "answered_share_today": (round(row["answered_convs"] / row["client_convs"], 3)
+                                     if row["client_convs"] else None),
+        },
+        "coins": await _coins(now),
+    }
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+async def _coins(now: datetime) -> dict:
+    u = await usage.month_usage(now)
+    return {
+        "limit": u.limit,
+        "spent": u.spent,
+        "remaining": round(u.remaining, 2) if u.remaining is not None else None,
+        "percent": u.percent,
+        "exhausted": u.exhausted,
+        "avg_per_day": u.avg_per_day,
+        "projected_month": u.projected,
+        "runs_out_on": u.runs_out_on.isoformat() if u.runs_out_on else None,
+        "days_in_month": u.days_in_month,
+        "days": [{"date": d.isoformat(), "coins": c} for d, c in u.days],
+        "by_model": [{"model": m, "coins": c} for m, c in u.by_model],
     }

@@ -57,6 +57,9 @@ services:
       ILER_OPENAI_KEY: ${ILER_OPENAI_KEY:-}
       ILER_GEMINI_KEY: ${ILER_GEMINI_KEY:-}
       ILER_ANTHROPIC_KEY: ${ILER_ANTHROPIC_KEY:-}
+      # ILER coins: monthly limit (0 = none) and optional model price overrides (JSON)
+      ILER_MONTHLY_COINS: ${ILER_MONTHLY_COINS:-0}
+      ILER_MODEL_PRICES: ${ILER_MODEL_PRICES:-}
       ILER_TZ: ${ILER_TZ:-Asia/Almaty}
       ILER_DATA_DIR: /data
     volumes:

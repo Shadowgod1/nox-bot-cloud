@@ -522,3 +522,20 @@ def test_lid_chat_without_phone_logged_once(caplog):
         assert not admission.is_admin_chat(msg, notify)
         assert not admission.is_admin_chat(msg, notify)
     assert sum("123456789012345@lid" in r.getMessage() for r in caplog.records) == 1
+
+
+async def test_coin_limit_hands_over_without_calling_llm(env, pool, monkeypatch):
+    from iler import usage
+
+    async def reached():
+        return True
+
+    monkeypatch.setattr(usage, "limit_reached", reached)
+    await env.set_notify(admin_phones=[ADMIN_PHONE])
+    env.llm = FakeLLM(script=[])  # must not be called
+    await handler.handle_incoming(make_msg("Привет"))
+    await env.idle()
+    conv = await _conv(pool)
+    assert conv["status"] == "needs_operator"
+    assert env.gw.texts(CLIENT_JID) == ["Передаю ваш вопрос администратору, он скоро ответит."]
+    assert len(env.gw.texts(ADMIN_JID)) == 1 and "Лимит коинов" in env.gw.texts(ADMIN_JID)[0]
