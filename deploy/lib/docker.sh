@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Docker Engine / compose helpers (sourced). Expects ILER_DIR_PATH to be set by install.sh.
 
+# Offline mode only means "images come from the archive": Docker Engine itself is still installed from
+# the internet when it is missing (the Windows installer always runs in offline mode).
 ensure_docker() {
   local offline="$1" tmp
   if ! have docker; then
-    [[ "$offline" == "1" ]] && die "Docker is not installed; offline mode cannot install it. Install docker-ce + docker-compose-plugin first."
     log "installing Docker Engine (get.docker.com)"
-    have curl || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates >/dev/null; }
+    have curl || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates >/dev/null; }       || die "Docker is not installed and apt is unreachable; install docker-ce + docker-compose-plugin first."
     tmp="$(mktemp)"
-    curl -fsSL https://get.docker.com -o "$tmp"
+    curl -fsSL https://get.docker.com -o "$tmp"       || die "Docker is not installed and get.docker.com is unreachable; install docker-ce + docker-compose-plugin first."
     sh "$tmp"
     rm -f "$tmp"
   fi
@@ -16,9 +17,8 @@ ensure_docker() {
     systemctl enable --now docker >/dev/null 2>&1 || warn "could not enable docker.service"
   fi
   if ! docker compose version >/dev/null 2>&1; then
-    [[ "$offline" == "1" ]] && die "docker compose plugin is missing"
     log "installing docker compose plugin"
-    apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-compose-plugin >/dev/null
+    { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-compose-plugin >/dev/null; }       || die "docker compose plugin is missing and could not be installed"
   fi
   docker info >/dev/null 2>&1 || die "Docker daemon is not running"
   ok "docker $(docker version --format '{{.Server.Version}}' 2>/dev/null), $(docker compose version --short 2>/dev/null)"

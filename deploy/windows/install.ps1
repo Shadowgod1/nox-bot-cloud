@@ -20,6 +20,9 @@
     Reboot automatically when Windows features require it (otherwise the user is asked).
 .PARAMETER Resume
     Internal: set by the RunOnce entry after a reboot.
+.PARAMETER ProgressFile
+    Internal (set by the GUI installer): the script runs hidden and reports "percent|stage|detail" lines
+    to this file; the last line is "done|<url>", "error|<message>" or "reboot|".
 
 Windows PowerShell 5.1 compatible. Log: C:\ProgramData\ILER\install.log
 #>
@@ -29,7 +32,8 @@ param(
     [ValidateRange(1, 65535)][int]$Port = 8080,
     [string]$Offline = '',
     [switch]$AutoReboot,
-    [switch]$Resume
+    [switch]$Resume,
+    [string]$ProgressFile = ''
 )
 
 Set-StrictMode -Version 2.0
@@ -56,7 +60,16 @@ function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundCol
 function Write-Ok([string]$Message) { Write-Host " ok $Message" -ForegroundColor Green }
 function Write-Warn([string]$Message) { Write-Warning $Message }
 
+function Write-Progress2([string]$Line) {
+    # Status for the GUI installer; it only reads the last line. Never fails the install.
+    if (-not $ProgressFile) { return }
+    try { [IO.File]::AppendAllText($ProgressFile, "$Line`r`n", (New-Object System.Text.UTF8Encoding($false))) }
+    catch { Write-Verbose "progress file: $($_.Exception.Message)" }
+}
+function Set-Stage([int]$Percent, [string]$Stage) { Write-Progress2 "$Percent|$Stage|" }
+
 function Stop-Install([string]$Message) {
+    Write-Progress2 ("error|" + ($Message -replace '[\r\n|]+', ' '))
     Write-Host "ERROR: $Message" -ForegroundColor Red
     Write-Host "Log: $LogFile"
     try { Stop-Transcript | Out-Null } catch { Write-Verbose 'transcript was not running' }
@@ -130,6 +143,12 @@ function Request-Reboot {
     Write-Host ''
     Write-Host 'Windows must restart to finish enabling WSL. Setup continues automatically after you sign in again.' -ForegroundColor Yellow
     $answer = 'y'
+    if ($ProgressFile) {
+        # the GUI installer offers the restart itself
+        Write-Progress2 'reboot|'
+        try { Stop-Transcript | Out-Null } catch { Write-Verbose 'transcript was not running' }
+        exit 3010
+    }
     if (-not $AutoReboot) { $answer = Read-Host 'Restart now? [Y/n]' }
     try { Stop-Transcript | Out-Null } catch { Write-Verbose 'transcript was not running' }
     if ($answer -eq '' -or $answer -match '^[YyДд]') { Restart-Computer -Force }
@@ -254,8 +273,15 @@ function Invoke-LinuxInstaller {
         $tarLinux = (Invoke-Wsl -Arguments @('-d', $Distro, '-u', 'root', '--', 'wslpath', '-a', (Resolve-Path $Offline).Path)).Trim()
         $wslArgs += @('--offline', $tarLinux)
     }
-    # Stream the output so the user sees progress.
-    & wsl.exe @wslArgs
+    # Stream the output (console + log) and map install.sh steps onto the GUI progress.
+    & wsl.exe @wslArgs 2>&1 | ForEach-Object {
+        $line = "$_"
+        Write-Host $line
+        if ($line -match 'installing Docker Engine') { Set-Stage 45 'docker' }
+        elseif ($line -match 'loading images|pulling images') { Set-Stage 55 'images' }
+        elseif ($line -match '==> starting services') { Set-Stage 80 'services' }
+        elseif ($line -match 'waiting for services') { Set-Stage 85 'health' }
+    }
     if ($LASTEXITCODE -ne 0) { throw "install.sh failed with exit code $LASTEXITCODE" }
 }
 
@@ -418,6 +444,7 @@ if ($Offline -and -not (Test-Path $Offline)) { Stop-Install "offline archive not
 if ((-not $Offline) -and (Test-Path (Join-Path $BundlePath 'images.tar'))) { $Offline = Join-Path $BundlePath 'images.tar' }
 
 try {
+    Set-Stage 3 'check'
     $build = Get-OsBuild
     Write-Step "ILER Bot setup (Windows build $build, port $Port, resume=$Resume)"
     if ($build -lt 19045 -and $build -ne 20348) {
@@ -433,21 +460,28 @@ try {
         Write-Warn 'Windows 10 detected: supported, but Windows 11 is recommended (more reliable WSL networking).'
     }
 
+    Set-Stage 8 'wsl'
     if (Enable-WslFeature) { Request-Reboot }
     Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -Name $RunOnceName -ErrorAction SilentlyContinue
 
+    Set-Stage 12 'distro'
     Install-Distro
     $mirrored = Test-MirroredSupported
     Set-WslConfig -Mirrored $mirrored
     # .wslconfig changes apply only after the whole WSL VM restarts
     Invoke-Wsl -Arguments @('--shutdown') -AllowFail | Out-Null
+    Set-Stage 30 'systemd'
     Initialize-Distro
+    Set-Stage 38 'copy'
     Copy-BundleToWsl
+    Set-Stage 42 'linux'
     Invoke-LinuxInstaller
+    Set-Stage 92 'network'
     Set-Networking -Mirrored $mirrored
     Set-Firewall
     Register-BootTask
 
+    Set-Stage 96 'finish'
     if (-not (Wait-AdminUi)) { Write-Warn "admin UI did not answer on http://localhost:$Port/ yet; give it a minute" }
     $setupPath = ''
     $token = Get-SetupToken
@@ -467,6 +501,7 @@ try {
         if ($lan) { Write-Host "  http://$($lan):$Port   (from other computers in the local network)" }
     }
     Write-Host "Log: $LogFile"
+    Write-Progress2 "done|http://localhost:$Port$setupPath"
 }
 catch {
     Stop-Install $_.Exception.Message
