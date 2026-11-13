@@ -12,3 +12,4 @@ backups/
 .claude/
 .env.e2e
 build/
+_bmad-output/
