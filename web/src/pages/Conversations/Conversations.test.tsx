@@ -3,7 +3,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { Conversations } from './Conversations'
-import { FakeEventSource, callsTo, mockApi } from '../../test/utils'
+import { FakeEventSource, callsTo, jsonResponse, mockApi } from '../../test/utils'
 import { __resetEventsForTests } from '../../hooks/useEvents'
 
 // Shapes as returned by core/iler/api/conversations.py.
@@ -164,5 +164,63 @@ describe('Conversations', () => {
     expect(texts()[0]).toContain('Первое')
     expect(texts()[2]).toContain('Третье')
     expect(String(callsTo(fetchMock, 'GET', '/api/conversations/1/messages')[1][0])).toContain('cursor=20')
+  })
+
+  it('keeps the request_id when a failed send is retried and renews it otherwise', async () => {
+    const results = [502, 200, 200, 200]
+    const fetchMock = mockApi({
+      'GET /api/conversations': { items: [conv(1, 'Данияр', 'Привет')], next_cursor: null },
+      'GET /api/conversations/1/messages': { items: [], next_cursor: null },
+      'POST /api/conversations/1/send': () => {
+        const status = results.shift() ?? 200
+        return status === 200 ? { ok: true } : jsonResponse({ error: { code: 'send_failed', message: 'нет' } }, status)
+      },
+    })
+    renderAt('/conversations/1')
+    const box = await screen.findByLabelText('Ответ клиенту')
+    const submit = screen.getByRole('button', { name: 'Отправить' })
+    const sends = () => callsTo(fetchMock, 'POST', '/api/conversations/1/send')
+    const sent = (i: number) => JSON.parse(String((sends()[i][1] as RequestInit).body)) as { text: string; request_id: string }
+
+    await userEvent.type(box, 'Здравствуйте')
+    await userEvent.click(submit) // fails: the draft stays
+    await waitFor(() => expect(sends()).toHaveLength(1))
+    await waitFor(() => expect(submit).not.toBeDisabled())
+    expect(box).toHaveValue('Здравствуйте')
+    await userEvent.click(submit) // retry of the same text: same id
+    await waitFor(() => expect(box).toHaveValue(''))
+    expect(sent(1).request_id).toBe(sent(0).request_id)
+    expect(sent(0).request_id).toMatch(/^[A-Za-z0-9_-]{8,64}$/)
+
+    await userEvent.type(box, 'Здравствуйте') // after a success the same text is a new message
+    await userEvent.click(submit)
+    await waitFor(() => expect(sends()).toHaveLength(3))
+    await waitFor(() => expect(box).toHaveValue(''))
+    expect(sent(2).request_id).not.toBe(sent(1).request_id)
+    expect(sent(2).request_id).toMatch(/^[A-Za-z0-9_-]{8,64}$/)
+  })
+
+  it('gives a new request_id when the text of a failed send is changed', async () => {
+    const fetchMock = mockApi({
+      'GET /api/conversations': { items: [conv(1, 'Данияр', 'Привет')], next_cursor: null },
+      'GET /api/conversations/1/messages': { items: [], next_cursor: null },
+      'POST /api/conversations/1/send': () => jsonResponse({ error: { code: 'send_failed', message: 'нет' } }, 502),
+    })
+    renderAt('/conversations/1')
+    const box = await screen.findByLabelText('Ответ клиенту')
+    const submit = screen.getByRole('button', { name: 'Отправить' })
+    const sends = () => callsTo(fetchMock, 'POST', '/api/conversations/1/send')
+    const sent = (i: number) => JSON.parse(String((sends()[i][1] as RequestInit).body)) as { text: string; request_id: string }
+
+    await userEvent.type(box, 'Здравствуйте')
+    await userEvent.click(submit)
+    await waitFor(() => expect(sends()).toHaveLength(1))
+    await waitFor(() => expect(submit).not.toBeDisabled())
+    await userEvent.type(box, '!')
+    await userEvent.click(submit)
+    await waitFor(() => expect(sends()).toHaveLength(2))
+    expect(sent(1).text).toBe('Здравствуйте!')
+    expect(sent(1).request_id).not.toBe(sent(0).request_id)
+    expect(sent(1).request_id).toMatch(/^[A-Za-z0-9_-]{8,64}$/)
   })
 })

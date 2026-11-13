@@ -83,7 +83,7 @@ async def test_send_operator_message_pauses_and_publishes(env, pool):
     await env.set_bot(handover_pause_minutes=45)
     cid = await _conv(pool)
     async with events.subscription() as q:
-        await sender.send_operator_message(cid, "Здравствуйте, это администратор", "Оля")
+        await sender.send_operator_message(cid, "Здравствуйте, это администратор", "Оля", request_id="req-0001")
         got = [q.get_nowait() for _ in range(q.qsize())]
     assert env.gw.texts(CLIENT_JID) == ["Здравствуйте, это администратор"]
     conv = await pool.fetchrow("SELECT * FROM conversations WHERE id = $1", cid)
@@ -100,12 +100,12 @@ async def test_send_operator_message_failure_raises(env, pool):
     cid = await _conv(pool)
     env.gw.fail = EvolutionError("down")
     with pytest.raises(sender.SendFailed):
-        await sender.send_operator_message(cid, "Алло", "Оля")
+        await sender.send_operator_message(cid, "Алло", "Оля", request_id="req-0002")
 
 
 async def test_notify_admins_normalizes_local_8_prefix(env, pool):
     await env.set_notify(admin_phones=["8 701 000 00 99", "+7 701 000 00 99"])
-    await sender.notify_admins("Тест")
+    await sender.notify_admins("Тест", key="test")
     assert [j for j, _ in env.gw.sent] == [ADMIN_JID]
 
 
@@ -184,6 +184,26 @@ async def test_retry_dropped_when_bot_disabled(env, pool):
 
 async def test_notify_admins_phone_and_group(env, pool):
     await env.set_notify(admin_phones=["+7 701 000 00 99"], admin_group_jid=ADMIN_GROUP)
-    await sender.notify_admins("Тест уведомления")
+    await sender.notify_admins("Тест уведомления", key="test")
     assert sorted(j for j, _ in env.gw.sent) == sorted([ADMIN_JID, ADMIN_GROUP])
     assert ADMIN_PHONE in ADMIN_JID
+
+
+async def test_operator_message_repeat_with_same_request_id_sends_once(env, pool):
+    cid = await _conv(pool)
+    await sender.send_operator_message(cid, "Здравствуйте", "Оля", request_id="req-same-01")
+    await sender.send_operator_message(cid, "Здравствуйте", "Оля", request_id="req-same-01")
+    assert env.gw.texts(CLIENT_JID) == ["Здравствуйте"]
+    keys = [r["idem_key"] for r in await pool.fetch("SELECT idem_key FROM outbound_intents")]
+    assert keys == [f"op:{cid}:req-same-01"]
+    await sender.send_operator_message(cid, "Здравствуйте", "Оля", request_id="req-other-1")  # a new message
+    assert env.gw.texts(CLIENT_JID) == ["Здравствуйте", "Здравствуйте"]
+
+
+async def test_notify_admins_requires_key(env, pool):
+    with pytest.raises(TypeError):
+        await sender.notify_admins("Тест")  # type: ignore[call-arg]
+    await env.set_notify(admin_phones=[ADMIN_PHONE])
+    await sender.notify_admins("Тест", key="same")
+    await sender.notify_admins("Тест", key="same")
+    assert len(env.gw.texts(ADMIN_JID)) == 1

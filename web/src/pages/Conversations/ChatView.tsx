@@ -30,6 +30,13 @@ function dayKey(iso: string) {
   return new Date(iso).toDateString()
 }
 
+/** Idempotency key of one operator message (core: `^[A-Za-z0-9_-]{8,64}$`). getRandomValues, unlike
+ * randomUUID, also works on plain http in the LAN. */
+export function newRequestId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 const dayFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' })
 
 export function ChatView({ conversationId, conversation, onConversation }: Props) {
@@ -41,6 +48,9 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
   const [error, setError] = useState<string | null>(null)
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
+  // The request id of a send that failed: retrying the same text in the same chat reuses it, so core sends
+  // the message at most once even if the failed attempt actually reached WhatsApp.
+  const pendingSend = useRef<{ conversationId: number; text: string; requestId: string } | null>(null)
   const [acting, setActing] = useState(false)
   const logRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -97,11 +107,15 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
   async function send() {
     const t = text.trim()
     if (!t) return
+    const prev = pendingSend.current
+    const requestId = prev && prev.conversationId === conversationId && prev.text === t ? prev.requestId : newRequestId()
+    pendingSend.current = { conversationId, text: t, requestId }
     setSending(true)
     stickToBottom.current = true
     try {
       // Core answers {ok: true}; the message itself arrives via SSE `message.new`.
-      await api.post<Ok>(`/api/conversations/${conversationId}/send`, { text: t })
+      await api.post<Ok>(`/api/conversations/${conversationId}/send`, { text: t, request_id: requestId })
+      pendingSend.current = null // the next message gets a new id
       setText('')
       // Fallback when the event stream is down: pull the newest page.
       setTimeout(() => {

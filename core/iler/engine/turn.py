@@ -61,14 +61,14 @@ def _tz() -> tuple[ZoneInfo, str]:
         return ZoneInfo("UTC"), "UTC"
 
 
-async def _handle_llm_failure(conv, error: LlmError) -> None:
+async def _handle_llm_failure(conv, error: LlmError, turn_id: str) -> None:
     bot = await settings_store.get("bot", BotSettings)
     await store.set_status(conv["id"], "needs_operator", pause_minutes=bot.handover_pause_minutes)
     who = conv["name"] or "клиент"
     phone = f" +{conv['phone']}" if conv["phone"] else ""
     await sender.notify_admins(
         f"Бот не смог ответить ({who}{phone}): ошибка LLM. Диалог ждёт оператора в админке.",
-        key=f"llmfail:{conv['id']}:{datetime.now(UTC).timestamp():.0f}",
+        key=f"llmfail:{conv['id']}:{turn_id}",  # a retried turn for the same message notifies once
     )
     log.warning("LLM failed for conversation %s (%s): %s", conv["id"], mask_phone_for_log(conv["phone"]), error)
 
@@ -146,12 +146,6 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
         client_name = conv["name"]
         phone = conv["phone"]
 
-    if await usage.limit_reached():
-        if dry_run:
-            raise usage.CoinsExhausted()
-        await _handover_no_coins(conv, turn_id)
-        return TurnOutcome(handed_over=True)
-
     masker = PiiMasker()
     messages = prompt.build_messages(bot, chat, now_local, tz_name, client_name)
     messages = [messages[0]] + [ChatMessage(role=m.role, content=masker.mask(m.content)) for m in messages[1:]]
@@ -166,13 +160,18 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
     )
 
     try:
+        # the router enforces the coin limit and refreshes the coin accounting (AD-3)
         result = await router.complete_with_tools(messages, tools, ctx, all_settings.llm)
+    except usage.CoinsExhausted:
+        if dry_run:
+            raise
+        await _handover_no_coins(conv, turn_id)
+        return TurnOutcome(handed_over=True)
     except LlmError as e:
         if dry_run:
             raise
-        await _handle_llm_failure(conv, e)
+        await _handle_llm_failure(conv, e, turn_id)
         return TurnOutcome(handed_over=True)
-    await usage.after_spend()
 
     tool_calls = [{**c, "args": masker.restore_obj(c["args"])} for c in result.tool_calls]
     handed_over = any(c["name"] == HANDOVER_TOOL and not c["error"] for c in tool_calls)

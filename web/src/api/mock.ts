@@ -375,16 +375,22 @@ on('GET', '/api/conversations/:id/messages', (m, _b, url) => {
   const page = rows.slice(0, limit)
   if (c.unread) {
     c.unread = 0
-    publish('conversation.updated', convOut(c))
+    publish('conversation.updated', { conversation: convRow(c) }) // like core: engine/store publishes
   }
   return json({ items: page, next_cursor: rows.length > limit ? String(page[page.length - 1].id) : null })
 })
+// like core: the admin-generated request_id is the idempotency key, a repeat does not send again
+const operatorRequests = new Set<string>()
 on('POST', '/api/conversations/:id/send', (m, b) => {
   const id = Number(m[1])
-  const c = s.conversations.find((x) => x.id === id)
-  if (!c) return fail(404, 'not_found', 'Conversation not found')
   const text = String(b.text ?? '')
   if (!text.trim()) return fail(422, 'validation_error', 'body.text: Value error, text must not be blank')
+  const requestId = String(b.request_id ?? '')
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(requestId)) return fail(422, 'validation_error', 'body.request_id: invalid')
+  const c = s.conversations.find((x) => x.id === id)
+  if (!c) return fail(404, 'not_found', 'Conversation not found')
+  if (operatorRequests.has(`${id}:${requestId}`)) return json({ ok: true })
+  operatorRequests.add(`${id}:${requestId}`)
   const msg = addMessage(id, 'operator', text)
   Object.assign(c, { last_message_at: msg.created_at, status: 'paused', paused_until: new Date(Date.now() + s.bot.handover_pause_minutes * 60_000).toISOString() })
   publish('conversation.updated', { conversation: convRow(c) })
@@ -394,7 +400,7 @@ const setStatus = (status: 'paused' | 'active'): Handler => (m) => {
   const c = s.conversations.find((x) => x.id === Number(m[1]))
   if (!c) return fail(404, 'not_found', 'Conversation not found')
   Object.assign(c, { status, paused_until: null })
-  publish('conversation.updated', convOut(c))
+  publish('conversation.updated', { conversation: convRow(c) }) // like core: engine/store publishes
   return json(convOut(c))
 }
 on('POST', '/api/conversations/:id/takeover', setStatus('paused'))

@@ -352,3 +352,48 @@ def test_public_error_hides_provider_auth_errors():
     assert public_error("gemini HTTP 400: invalid argument") == "gemini HTTP 400: invalid argument"
     assert public_error("openai HTTP 500: server error") == "openai HTTP 500: server error"
     assert public_error("openai connection error: ConnectError") == "openai connection error: ConnectError"
+
+
+# --- coin limit is enforced by the router (AD-3) ---------------------------------------------------
+
+async def test_router_refuses_when_coin_limit_reached(pool, use_fakes, monkeypatch):
+    from iler import usage
+
+    async def reached():
+        return True
+
+    spent = []
+
+    async def after_spend():
+        spent.append(1)
+
+    monkeypatch.setattr(usage, "limit_reached", reached)
+    monkeypatch.setattr(usage, "after_spend", after_spend)
+    fake = FakeLLM([LlmResponse(text="must not be used")])
+    use_fakes(openai=fake)
+    with pytest.raises(usage.CoinsExhausted):
+        await router.complete_with_tools(MSGS, [], _ctx(), LlmSettings())
+    assert fake.calls == []
+    assert spent == []
+    assert await pool.fetchval("SELECT count(*) FROM ai_requests") == 0
+
+
+async def test_router_refreshes_coins_after_success_and_failure(pool, use_fakes, monkeypatch):
+    from iler import usage
+
+    async def not_reached():
+        return False
+
+    spent = []
+
+    async def after_spend():
+        spent.append(1)
+
+    monkeypatch.setattr(usage, "limit_reached", not_reached)
+    monkeypatch.setattr(usage, "after_spend", after_spend)
+    use_fakes(openai=FakeLLM([LlmResponse(text="ok"), LlmError("down")]))
+    await router.complete_with_tools(MSGS, [], _ctx(), LlmSettings())
+    assert spent == [1]
+    with pytest.raises(LlmError):
+        await router.complete_with_tools(MSGS, [], _ctx(), LlmSettings())
+    assert spent == [1, 1]

@@ -9,7 +9,8 @@ export function normalizeMessageEvent(data: DataOf<'message.new'>): Message {
 
 /**
  * `conversation.updated` comes in two shapes: the engine publishes `{conversation: row}` (no
- * `last_message`), the API (takeover / release / unread reset) publishes the flat Conversation.
+ * `last_message`); older cores published the flat Conversation from the API (takeover / release /
+ * unread reset), which is still accepted.
  * The result is a patch: `last_message` is present only when the server sent it.
  */
 export function normalizeConversationEvent(

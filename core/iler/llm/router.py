@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from iler import config
+from iler import config, usage
 from iler.llm.base import ChatMessage, LlmError, LlmProvider, LlmResponse
 from iler.llm.fake import FakeLLM
 from iler.settings_models import LlmSettings
@@ -202,8 +202,23 @@ async def complete_with_tools(
 ) -> TurnResult:
     """Run the LLM with native tools for up to MAX_TOOL_ITERATIONS tool rounds.
 
+    The coin limit is enforced here, so every reply turn (the tool loop) is bounded by it (AD-3); the
+    connection checks ``check_key`` / ``list_models`` are deliberately outside the limit. Raises
+    ``usage.CoinsExhausted`` without touching any provider when the monthly limit is used up, and refreshes
+    the coin accounting (``usage.after_spend``) after the turn, whether it succeeded or failed.
     Raises ``LlmError(retryable=False)`` when every provider in the chain failed.
     """
+    if await usage.limit_reached():
+        raise usage.CoinsExhausted()
+    try:
+        return await _complete_with_tools(messages, tools, ctx, settings)
+    finally:
+        await usage.after_spend()
+
+
+async def _complete_with_tools(
+    messages: list[ChatMessage], tools: list[Tool], ctx: ToolContext, settings: LlmSettings
+) -> TurnResult:
     if config.get_settings().llm_fake:
         tools = []
     session = _Session(settings, ctx.conversation_id)

@@ -382,8 +382,8 @@ export type ConversationRow = Omit<Conversation, 'last_message'> & { created_at?
 /**
  * SSE payloads (GET /api/events):
  * - message.new: `{conversation_id, message}` (engine/store.py);
- * - conversation.updated: either `{conversation: row}` (engine) or the flat Conversation (API takeover /
- *   release / unread reset);
+ * - conversation.updated: `{conversation: row}` (engine/store.py publishes every change); the flat
+ *   Conversation shape is still accepted for compatibility with older cores;
  * - booking.updated: `{booking}`;
  * - whatsapp.status: WhatsAppStatus.
  */

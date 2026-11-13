@@ -70,7 +70,7 @@ ROUTES = [
 
 @pytest.mark.parametrize("method,path", ROUTES)
 async def test_requires_auth(client, method, path):
-    r = await client.request(method, path, json={"text": "x"} if method == "POST" else None)
+    r = await client.request(method, path, json={"text": "x", "request_id": "req-0001"} if method == "POST" else None)
     assert r.status_code == 401
     assert r.json()["error"]["code"] == "unauthorized"
 
@@ -92,9 +92,9 @@ async def test_operator_send_marks_author_operator_and_pauses(client, pool, monk
     conv = await make_conv(pool, "77010000001", "Client")
     calls = []
 
-    async def send_operator_message(conversation_id: int, text: str, user_name: str) -> None:
+    async def send_operator_message(conversation_id: int, text: str, user_name: str, *, request_id: str) -> None:
         # Mimics the engine contract: store the operator message and pause for handover minutes.
-        calls.append((conversation_id, text, user_name))
+        calls.append((conversation_id, text, user_name, request_id))
         await add_msg(pool, conversation_id, text, author="operator")
         await pool.execute(
             "UPDATE conversations SET status='paused', paused_until = now() + interval '60 minutes' WHERE id=$1",
@@ -102,9 +102,10 @@ async def test_operator_send_marks_author_operator_and_pauses(client, pool, monk
         )
 
     fake_engine_module(monkeypatch, "sender", send_operator_message=send_operator_message)
-    r = await client.post(f"/api/conversations/{conv}/send", json={"text": "Здравствуйте!"}, headers=csrf(client))
+    r = await client.post(f"/api/conversations/{conv}/send", json={"text": "Здравствуйте!", "request_id": "req-0001"},
+                          headers=csrf(client))
     assert r.status_code == 200, r.text
-    assert calls == [(conv, "Здравствуйте!", "Owner")]
+    assert calls == [(conv, "Здравствуйте!", "Owner", "req-0001")]
 
     msgs = (await client.get(f"/api/conversations/{conv}/messages")).json()["items"]
     assert msgs[0]["author"] == "operator" and msgs[0]["direction"] == "out"
@@ -122,9 +123,16 @@ async def test_send_validation_and_not_found(client, pool, monkeypatch):
 
     fake_engine_module(monkeypatch, "sender", send_operator_message=boom)
     for bad in ["", "   ", "x" * 4001]:
-        r = await client.post(f"/api/conversations/{conv}/send", json={"text": bad}, headers=csrf(client))
+        r = await client.post(f"/api/conversations/{conv}/send", json={"text": bad, "request_id": "req-0001"},
+                              headers=csrf(client))
         assert r.status_code == 422, bad
-    r = await client.post("/api/conversations/999/send", json={"text": "hi"}, headers=csrf(client))
+    # request_id is the idempotency key of the send: required and limited to a safe alphabet
+    for body in [{"text": "hi"}, {"text": "hi", "request_id": "short"}, {"text": "hi", "request_id": "bad id!x"},
+                 {"text": "hi", "request_id": "x" * 65}]:
+        r = await client.post(f"/api/conversations/{conv}/send", json=body, headers=csrf(client))
+        assert r.status_code == 422, body
+    r = await client.post("/api/conversations/999/send", json={"text": "hi", "request_id": "req-0001"},
+                          headers=csrf(client))
     assert r.status_code == 404
 
 
@@ -137,15 +145,17 @@ async def test_takeover_release(client, pool):
         r = await client.post(f"/api/conversations/{conv}/takeover", headers=csrf(client))
         assert r.status_code == 200, r.text
         assert r.json()["status"] == "paused" and r.json()["paused_until"] is None
-        ev = q.get_nowait()
-        assert ev["type"] == "conversation.updated" and ev["data"]["id"] == conv
-        assert ev["data"]["status"] == "paused"
+        ev = q.get_nowait()  # published by engine/store, not by the API
+        assert ev["type"] == "conversation.updated" and ev["data"]["conversation"]["id"] == conv
+        assert ev["data"]["conversation"]["status"] == "paused"
+        assert q.empty()
 
         r = await client.post(f"/api/conversations/{conv}/release", headers=csrf(client))
         assert r.status_code == 200
         assert r.json()["status"] == "active" and r.json()["paused_until"] is None
         ev = q.get_nowait()
-        assert ev["type"] == "conversation.updated" and ev["data"]["status"] == "active"
+        assert ev["type"] == "conversation.updated" and ev["data"]["conversation"]["status"] == "active"
+        assert q.empty()
 
     row = await pool.fetchrow("SELECT status, paused_until FROM conversations WHERE id=$1", conv)
     assert row["status"] == "active" and row["paused_until"] is None
@@ -221,7 +231,7 @@ async def test_messages_pagination_newest_first_and_resets_unread(client, pool):
     mids = [await add_msg(pool, conv, f"m{i}") for i in range(5)]
     async with events.subscription() as q:
         page1 = (await client.get(f"/api/conversations/{conv}/messages", params={"limit": 2})).json()
-        assert q.get_nowait()["data"]["unread"] == 0
+        assert q.get_nowait()["data"]["conversation"]["unread"] == 0  # published by engine/store
     assert [m["id"] for m in page1["items"]] == [mids[4], mids[3]]
     page2 = (await client.get(f"/api/conversations/{conv}/messages",
                               params={"limit": 2, "cursor": page1["next_cursor"]})).json()
@@ -698,3 +708,32 @@ def test_coin_prices_and_overrides(monkeypatch):
     assert usage.price_for("gpt-5.4-mini") == (0.4, 1.6)
     monkeypatch.setattr(get_settings(), "model_prices", "not json")
     assert usage.price_for("gpt-5.4-mini") == usage.FALLBACK_PRICE
+
+
+# --- writes go through the engine (AD-5) ----------------------------------------------------------
+
+async def test_reading_unread_conversation_resets_once_via_store(client, pool):
+    await login(client)
+    conv = await make_conv(pool, "77010000001", unread=3)
+    await add_msg(pool, conv, "Привет")
+    async with events.subscription() as q:
+        r = await client.get(f"/api/conversations/{conv}/messages")
+        assert r.status_code == 200
+        got = [q.get_nowait() for _ in range(q.qsize())]
+        assert len(got) == 1 and got[0]["type"] == "conversation.updated"
+        assert got[0]["data"]["conversation"]["id"] == conv and got[0]["data"]["conversation"]["unread"] == 0
+        r = await client.get(f"/api/conversations/{conv}/messages")  # nothing to reset: no event
+        assert r.status_code == 200 and q.empty()
+    assert await pool.fetchval("SELECT unread FROM conversations WHERE id = $1", conv) == 0
+
+
+def test_api_has_no_direct_conversation_writes():
+    import re
+    from pathlib import Path
+
+    import iler.api
+
+    write = re.compile(r"(?i)\b(update|insert\s+into|delete\s+from)\s+(public\.)?conversations\b")
+    api_dir = Path(iler.api.__file__).parent
+    offenders = [p.name for p in api_dir.rglob("*.py") if write.search(p.read_text(encoding="utf-8"))]
+    assert offenders == []

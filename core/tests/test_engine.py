@@ -561,3 +561,31 @@ async def test_coin_limit_handover_reply_once_per_day(env, pool, monkeypatch):
     await env.idle()
     assert env.gw.texts(CLIENT_JID) == ["Передаю ваш вопрос администратору, он скоро ответит."]
     assert (await _conv(pool))["status"] == "needs_operator"
+
+
+async def test_llm_failure_retry_of_same_turn_notifies_admins_once(env, pool):
+    await env.set_notify(admin_phones=[ADMIN_PHONE])
+    conv_id = await pool.fetchval(
+        "INSERT INTO conversations(chat_jid, phone, name) VALUES ($1, '77010000001', 'Айдар') RETURNING id",
+        CLIENT_JID,
+    )
+    conv = await pool.fetchrow("SELECT * FROM conversations WHERE id = $1", conv_id)
+    await turn._handle_llm_failure(conv, LlmError("down", retryable=False), "42")
+    await turn._handle_llm_failure(conv, LlmError("down", retryable=False), "42")
+    assert len(env.gw.texts(ADMIN_JID)) == 1
+    await turn._handle_llm_failure(conv, LlmError("down", retryable=False), "43")  # another turn
+    assert len(env.gw.texts(ADMIN_JID)) == 2
+
+
+async def test_coin_limit_dry_run_raises(env, pool, monkeypatch):
+    from iler import usage
+
+    async def reached():
+        return True
+
+    monkeypatch.setattr(usage, "limit_reached", reached)
+    await env.set_bot(prompt="Ты бот.")
+    env.llm = FakeLLM(script=[])  # must not be called
+    with pytest.raises(usage.CoinsExhausted):
+        await turn.run_turn(None, dry_run=True, history=[ChatMessage(role="user", content="hi")])
+    assert env.llm.calls == []

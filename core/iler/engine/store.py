@@ -107,6 +107,18 @@ async def set_status(conversation_id: int, status: str, *, pause_minutes: int | 
     return row
 
 
+async def mark_read(conversation_id: int):
+    """Reset `unread` (the operator opened the chat); publishes conversation.updated only when it changed.
+    Returns the updated row, or None when there was nothing to reset or the conversation does not exist."""
+    row = await get_pool().fetchrow(
+        f"UPDATE conversations SET unread = 0 WHERE id = $1 AND unread <> 0 RETURNING {CONV_COLS}",
+        conversation_id,
+    )
+    if row is not None:
+        publish_conversation(row)
+    return row
+
+
 def publish_conversation(row) -> None:
     events.publish("conversation.updated", {"conversation": conv_dict(row)})
 
