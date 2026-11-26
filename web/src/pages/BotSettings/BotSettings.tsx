@@ -5,7 +5,7 @@ import { WEEKDAYS, type AfterHoursMode, type BotSettings, type DayHours, type Te
 import { useLoad } from '../../hooks/useLoad'
 import { PageBody } from '../../components/Layout'
 import { PromptEditor } from '../../components/PromptEditor'
-import { OVERWRITE_CONFIRM, TemplateFields, TemplatePicker, missingRequired, renderTemplate, valuesFor } from '../../components/TemplateBuilder'
+import { OVERWRITE_CONFIRM, TemplateFields, TemplatePicker, missingRequired, renderTemplate, valuesFor, withDefaults } from '../../components/TemplateBuilder'
 import { Badge, Button, ErrorState, Field, Input, PageHeader, Panel, Select, Spinner, Switch, Textarea, cx } from '../../components/ui'
 import { toast } from '../../components/toast'
 import { ru } from '../../i18n/ru'
@@ -134,6 +134,8 @@ export function BotSettingsPage() {
                 onChange={(id) => {
                   setChoice(id)
                   setShowErrors(false)
+                  const next = templates.data?.find((t) => t.id === id)
+                  if (next) set('template_values', withDefaults(next, form.template_values))
                 }}
               />
               <TemplateFields
@@ -184,7 +186,7 @@ export function BotSettingsPage() {
         <Collapsible
           id="behavior"
           title="Поведение"
-          description="Имя, приветствие, часы работы, паузы и ответы по заявкам."
+          description="Имя, приветствие, часы работы, голосовые и фото, паузы и ответы по заявкам."
         >
           <div className="flex flex-col divide-y divide-line">
             <div className="grid gap-5 pb-6">
@@ -244,6 +246,32 @@ export function BotSettingsPage() {
                     <Textarea rows={2} value={form.after_hours_message} onChange={(e) => set('after_hours_message', e.target.value)} placeholder="Мы откроемся в 10:00 и сразу ответим." />
                   </Field>
                 )}
+              </div>
+            </SubSection>
+
+            <SubSection
+              title="Голосовые и фото"
+              description="Бот не слышит голосовые и не видит фото. Вместо догадок он ответит так, как вы настроите. Клиенту, который пишет по-казахски, стандартный текст уйдёт на казахском."
+            >
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="Голосовое без текста">
+                  <Select value={form.voice_mode} onChange={(e) => set('voice_mode', e.target.value as BotSettings['voice_mode'])}>
+                    <option value="ask_text">Попросить написать текстом</option>
+                    <option value="handover">Передать администратору</option>
+                  </Select>
+                </Field>
+                <Field label="Ответ на голосовое" hint={form.voice_mode === 'handover' ? 'Пусто или стандартный текст — «Передам ваше голосовое администратору».' : undefined}>
+                  <Textarea rows={2} maxLength={500} value={form.voice_message} onChange={(e) => set('voice_message', e.target.value)} />
+                </Field>
+                <Field label="Фото или видео">
+                  <Select value={form.photo_mode} onChange={(e) => set('photo_mode', e.target.value as BotSettings['photo_mode'])}>
+                    <option value="handover">Ответить и передать администратору</option>
+                    <option value="reply">Только ответить</option>
+                  </Select>
+                </Field>
+                <Field label="Ответ на фото">
+                  <Textarea rows={2} maxLength={500} value={form.photo_message} onChange={(e) => set('photo_message', e.target.value)} />
+                </Field>
               </div>
             </SubSection>
 

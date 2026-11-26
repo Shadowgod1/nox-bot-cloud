@@ -28,4 +28,10 @@ export const BOT: BotSettings = {
   booking_request_timeout_min: 15,
   booking_timeout_message: 'later',
   no_coins_message: 'Спасибо за сообщение! Сейчас подключится менеджер и ответит вам.',
+  services: [],
+  staff: [],
+  voice_mode: 'ask_text',
+  voice_message: 'Пока не могу прослушать голосовое, напишите, пожалуйста, текстом 🙏',
+  photo_mode: 'handover',
+  photo_message: 'Спасибо! Передам фото мастеру, он подскажет.',
 }

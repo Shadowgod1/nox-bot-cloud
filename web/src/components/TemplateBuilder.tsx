@@ -23,6 +23,13 @@ export function valuesFor(template: TemplateMeta, values: Record<string, string>
   return out
 }
 
+/** Prefill: fields the owner has not touched yet (no key at all) get the template's typical text. */
+export function withDefaults(template: TemplateMeta, values: Record<string, string>): Record<string, string> {
+  const out = { ...values }
+  for (const f of template.fields) if (out[f.key] === undefined && f.default) out[f.key] = f.default
+  return out
+}
+
 export function missingRequired(template: TemplateMeta, values: Record<string, string>): string[] {
   return template.fields.filter((f) => f.required && !(values[f.key] ?? '').trim()).map((f) => f.key)
 }
@@ -102,7 +109,10 @@ function FieldControl({ field, value, onChange, ...a11y }: ControlProps) {
     required: field.required,
     onChange: (e: { target: { value: string } }) => onChange(e.target.value),
   }
-  if (field.type === 'textarea') return <Textarea rows={Math.min(6, Math.max(3, field.placeholder.split('\n').length + 1))} {...common} />
+  if (field.type === 'textarea') {
+    const lines = Math.max(field.placeholder.split('\n').length, (field.default ?? '').split('\n').length)
+    return <Textarea rows={Math.min(6, Math.max(3, lines + 1))} {...common} />
+  }
   if (field.type === 'phone') return <Input type="tel" inputMode="tel" autoComplete="off" className="tabular" {...common} />
   return <Input {...common} />
 }

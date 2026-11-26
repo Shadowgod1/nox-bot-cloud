@@ -229,6 +229,66 @@ export interface BotSettings {
   booking_timeout_message: string
   /** Sent once per conversation when the coins run out and the conversation goes to the operator. */
   no_coins_message: string
+  /** Price list ("Услуги и мастера"); the bot quotes prices only from here. */
+  services: ServiceItem[]
+  /** Masters / doctors with their working days. */
+  staff: StaffMember[]
+  /** Voice message without text: ask to write in text, or hand over to the operator. */
+  voice_mode: 'ask_text' | 'handover'
+  voice_message: string
+  /** Photo / video: thank and hand over (default), or only reply. */
+  photo_mode: 'handover' | 'reply'
+  photo_message: string
+}
+
+export interface ServiceItem {
+  name: string
+  /** As the owner writes it: "5 000 ₸", "от 5 000 ₸"; "от … ₸" or "" = not filled yet. */
+  price: string
+  duration_min: number | null
+}
+
+export interface StaffDay {
+  works: boolean
+  open: string
+  close: string
+}
+
+export type StaffMember = {
+  name: string
+  role: string
+  /** ServiceItem names. */
+  services: string[]
+  no_online_booking: boolean
+  note: string
+} & Record<Weekday, StaffDay>
+
+/** POST /api/knowledge/import-prices: parsed rows, nothing saved. */
+export interface PriceImportResult {
+  source: 'text' | 'csv' | 'xlsx' | 'image'
+  rows: ServiceItem[]
+  warnings: string[]
+  /** Photo: coins spent on recognition. */
+  coins: number | null
+}
+
+/** GET /api/knowledge/import-prices: whether a photo can be recognised on this install. */
+export interface PriceImportSupport {
+  photo: boolean
+  provider: string | null
+}
+
+/** GET /api/dashboard/roi?days=7|30. */
+export interface RoiStats {
+  days: 7 | 30
+  since: string
+  bot_conversations: number
+  bookings: number
+  after_hours_conversations: number
+  handovers: number
+  coins: number
+  hours_source: 'settings' | 'default'
+  has_activity: boolean
 }
 
 export type LlmProvider = 'openai' | 'gemini' | 'anthropic'
@@ -307,6 +367,8 @@ export interface TemplateField {
   required: boolean
   placeholder: string
   hint: string
+  /** Prefilled text (typical FAQ, tone, booking rules) the owner edits; "" = empty. */
+  default?: string
 }
 
 /** GET /api/templates item. defaults: optional BotSettings presets (e.g. name, greeting). */
@@ -329,9 +391,13 @@ export interface TemplateRenderResult {
   missing: string[]
 }
 
+export type TestMedia = 'audio' | 'image'
+
 export interface ChatTurn {
   role: 'user' | 'assistant'
   content: string
+  /** Simulated attachment of a client message (test chat). */
+  media?: TestMedia
 }
 
 export interface ToolCallInfo {
@@ -344,6 +410,10 @@ export interface ToolCallInfo {
 export interface TestChatResponse {
   reply: string
   tool_calls: ToolCallInfo[]
+  /** In WhatsApp the conversation would go to the operator. */
+  handed_over?: boolean
+  /** LLM spend of this reply; null = no model call (fixed voice / photo reply). */
+  usage?: { coins: number; input_tokens: number; output_tokens: number } | null
 }
 
 /** GET /api/system/version. `current` / `available` are null when the updater is unreachable. */

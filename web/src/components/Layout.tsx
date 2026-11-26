@@ -2,6 +2,7 @@ import { NavLink, Outlet } from 'react-router'
 import {
   CalendarCheck,
   FlaskConical,
+  ListChecks,
   LayoutDashboard,
   LogOut,
   MessagesSquare,
@@ -32,6 +33,7 @@ const NAV: NavItem[] = [
   { to: '/conversations', label: ru.nav.conversations, icon: MessagesSquare },
   { to: '/bookings', label: ru.nav.bookings, icon: CalendarCheck },
   { to: '/bot', label: ru.nav.bot, icon: SlidersHorizontal },
+  { to: '/knowledge', label: ru.nav.knowledge, icon: ListChecks },
   { to: '/test-chat', label: ru.nav.testChat, icon: FlaskConical },
   { to: '/integrations', label: ru.nav.integrations, icon: PlugZap },
   { to: '/system', label: ru.nav.system, icon: Settings2 },

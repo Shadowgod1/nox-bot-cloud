@@ -9,6 +9,7 @@ import { useLoad } from '../../hooks/useLoad'
 import { AuthFrame } from '../Login/Login'
 import { WhatsAppConnect } from '../../components/WhatsAppConnect'
 import { BotSetupStep } from './BotSetupStep'
+import { TestBotStep } from './TestBotStep'
 import { StepHeader } from './StepHeader'
 import { Button, CheckLine, type CheckView, ErrorState, Field, Input, Select, Spinner, cx } from '../../components/ui'
 import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_EFFORT_HINT, ANTHROPIC_EFFORTS } from '../System/anthropic'
@@ -29,7 +30,7 @@ const PROVIDER_DESC: Record<LlmProvider, string> = {
   gemini: 'Модели Gemini от Google',
 }
 
-const STEPS = ['Владелец', 'Языковая модель', 'WhatsApp', 'Настройка бота', 'Готово'] as const
+const STEPS = ['Владелец', 'Языковая модель', 'WhatsApp', 'Настройка бота', 'Проверьте бота', 'Готово'] as const
 const TOKEN_KEY = 'iler_setup_token'
 const TOKEN_HELP = 'Откройте ссылку из установщика (она содержит одноразовый токен).'
 
@@ -98,7 +99,8 @@ export function Setup() {
             }}
           />
         )}
-        {step === 4 && (
+        {step === 4 && <TestBotStep ready={botReady} onDone={next} />}
+        {step === 5 && (
           <div className="flex flex-col items-start gap-4">
             {botReady ? <CheckCircle2 className="size-8 text-ok" aria-hidden /> : <CircleAlert className="size-8 text-warn" aria-hidden />}
             <div>
