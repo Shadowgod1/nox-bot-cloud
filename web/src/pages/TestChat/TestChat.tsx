@@ -22,6 +22,20 @@ const SUGGESTIONS: Record<string, string[]> = {
 const DEFAULT_SUGGESTIONS = SUGGESTIONS.beauty_salon
 const MEDIA_LABEL: Record<TestMedia, string> = { audio: 'Голосовое сообщение', image: 'Фото' }
 
+/** A test-chat entry as core expects it. Bot replies echo their tool calls (without results), so the client
+ * card of the test dialogue knows about a booking or a fact from an earlier reply; a failed call is marked. */
+export function toTurn({ role, content, media, tool_calls }: Entry): ChatTurn {
+  const turn: ChatTurn = media ? { role, content, media } : { role, content }
+  if (role === 'assistant' && tool_calls?.length) {
+    turn.tool_calls = tool_calls.slice(0, 8).map((c) => ({
+      name: c.name,
+      args: c.args,
+      error: c.error ?? (typeof c.result === 'string' && c.result.startsWith('error') ? c.result : null),
+    }))
+  }
+  return turn
+}
+
 export function formatCoins(n: number): string {
   const v = n < 10 ? Math.round(n * 100) / 100 : Math.round(n * 10) / 10
   return v.toLocaleString('ru-RU')
@@ -58,7 +72,7 @@ export function TestChat({ embedded = false }: { embedded?: boolean }) {
     try {
       const res = await api.post<TestChatResponse>(
         '/api/test-chat',
-        { messages: history.map(({ role, content, media: m }) => (m ? { role, content, media: m } : { role, content })) },
+        { messages: history.map(toTurn) },
         { silent: true },
       )
       setEntries((e) => [

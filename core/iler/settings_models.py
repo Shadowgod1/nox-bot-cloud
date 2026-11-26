@@ -111,7 +111,10 @@ class BotSettings(BaseModel):
     buffer_delay_seconds: int = Field(8, ge=3, le=120)
     # how long the bot stays silent in a chat after a person (operator in the panel or on the phone) replied
     handover_pause_minutes: int = Field(720, ge=1, le=4320)
-    memory_messages: int = Field(20, ge=2, le=100)
+    # raw messages of the dialogue sent to the model (a client burst and the parts of a split reply count one
+    # by one). 14, not 20: the client card carries the bookings, the name and lasting facts, so older
+    # messages are rarely needed; a saved value is kept as is
+    memory_messages: int = Field(14, ge=2, le=100)
     booking_confirm_template: str = "Ваша бронь подтверждена ✅ {details}"
     booking_reject_template: str = "К сожалению, не получилось забронировать: {reason}"
     booking_request_timeout_min: int = Field(15, ge=1, le=240)

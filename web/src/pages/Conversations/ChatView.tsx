@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
-import { ArrowLeft, Bot, Hand, Send } from 'lucide-react'
+import { ArrowLeft, Bot, Hand, Send, UserRound } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Conversation, Message, Ok, Page } from '../../api/types'
 import { useEvent } from '../../hooks/useEvents'
 import { Button, EmptyState, ErrorState, Spinner, cx } from '../../components/ui'
 import { formatDateTime, formatTime, ru } from '../../i18n/ru'
 import { StatusBadge } from './StatusBadge'
+import { ClientPanel } from './ClientPanel'
 import { normalizeMessageEvent } from './normalize'
 
 interface Props {
@@ -52,6 +53,7 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
   // the message at most once even if the failed attempt actually reached WhatsApp.
   const pendingSend = useRef<{ conversationId: number; text: string; requestId: string } | null>(null)
   const [acting, setActing] = useState(false)
+  const [showClient, setShowClient] = useState(false)
   const logRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
 
@@ -155,7 +157,7 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
             {conversation ? conversation.name || conversation.phone : `Диалог #${conversationId}`}
           </h2>
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[13px] text-ink-2">
-            {conversation?.name && <span className="tabular">{conversation.phone}</span>}
+            {conversation?.name && <span className="tabular max-w-full truncate">{conversation.phone}</span>}
             {conversation && (
               <span className="max-sm:hidden">
                 <StatusBadge conversation={conversation} />
@@ -163,6 +165,17 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
             )}
           </div>
         </div>
+        <Button
+          variant={showClient ? 'primary' : 'ghost'}
+          onClick={() => setShowClient((v) => !v)}
+          aria-pressed={showClient}
+          aria-label="Что бот знает о клиенте"
+          title="Что бот знает о клиенте"
+          className="max-sm:px-2"
+          icon={<UserRound className="size-4" aria-hidden />}
+        >
+          <span className="max-sm:hidden">Клиент</span>
+        </Button>
         {botActive ? (
           <Button onClick={() => act('takeover')} loading={acting} icon={<Hand className="size-4" aria-hidden />}>
             Перехватить
@@ -180,72 +193,77 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
         )}
       </header>
 
-      <div ref={logRef} role="log" aria-live="polite" aria-label="Сообщения" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        {loading && messages.length === 0 ? (
-          <Spinner />
-        ) : error && messages.length === 0 ? (
-          <ErrorState message={error} onRetry={load} />
-        ) : messages.length === 0 ? (
-          <EmptyState title="Сообщений нет">В этом диалоге ещё нет сообщений.</EmptyState>
-        ) : (
-          <div className="mx-auto flex max-w-[760px] flex-col gap-1.5">
-            {cursor != null && (
-              <div className="mb-2 flex justify-center">
-                <Button size="sm" variant="ghost" loading={loadingOlder} onClick={loadOlder}>
-                  Показать более ранние
-                </Button>
+      <div className="relative flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div ref={logRef} role="log" aria-live="polite" aria-label="Сообщения" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            {loading && messages.length === 0 ? (
+              <Spinner />
+            ) : error && messages.length === 0 ? (
+              <ErrorState message={error} onRetry={load} />
+            ) : messages.length === 0 ? (
+              <EmptyState title="Сообщений нет">В этом диалоге ещё нет сообщений.</EmptyState>
+            ) : (
+              <div className="mx-auto flex max-w-[760px] flex-col gap-1.5">
+                {cursor != null && (
+                  <div className="mb-2 flex justify-center">
+                    <Button size="sm" variant="ghost" loading={loadingOlder} onClick={loadOlder}>
+                      Показать более ранние
+                    </Button>
+                  </div>
+                )}
+                {messages.map((m, i) => {
+                  const prev = messages[i - 1]
+                  const newDay = !prev || dayKey(prev.created_at) !== dayKey(m.created_at)
+                  const sameAuthor = prev && !newDay && prev.author === m.author
+                  return (
+                    <div key={m.id} className="contents">
+                      {newDay && (
+                        <div className="my-3 text-center text-[12px] text-ink-3" role="separator">
+                          {dayFmt.format(new Date(m.created_at))}
+                        </div>
+                      )}
+                      <MessageBubble m={m} showAuthor={!sameAuthor} />
+                    </div>
+                  )
+                })}
               </div>
             )}
-            {messages.map((m, i) => {
-              const prev = messages[i - 1]
-              const newDay = !prev || dayKey(prev.created_at) !== dayKey(m.created_at)
-              const sameAuthor = prev && !newDay && prev.author === m.author
-              return (
-                <div key={m.id} className="contents">
-                  {newDay && (
-                    <div className="my-3 text-center text-[12px] text-ink-3" role="separator">
-                      {dayFmt.format(new Date(m.created_at))}
-                    </div>
-                  )}
-                  <MessageBubble m={m} showAuthor={!sameAuthor} />
-                </div>
-              )
-            })}
           </div>
-        )}
-      </div>
 
-      <form
-        className="border-t border-line bg-surface px-5 py-3"
-        onSubmit={(e) => {
-          e.preventDefault()
-          void send()
-        }}
-      >
-        <div className="mx-auto flex max-w-[760px] items-end gap-2">
-          <label htmlFor="composer" className="sr-only">
-            Ответ клиенту
-          </label>
-          <textarea
-            id="composer"
-            rows={2}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault()
-                void send()
-              }
+          <form
+            className="border-t border-line bg-surface px-5 py-3"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void send()
             }}
-            placeholder={botActive ? 'Ответ от оператора. Бот встанет на паузу.' : 'Ответ клиенту'}
-            className="field-control max-h-40 min-h-[42px] resize-none leading-snug"
-          />
-          <Button type="submit" variant="primary" loading={sending} disabled={!text.trim()} icon={<Send className="size-4" aria-hidden />}>
-            Отправить
-          </Button>
+          >
+            <div className="mx-auto flex max-w-[760px] items-end gap-2">
+              <label htmlFor="composer" className="sr-only">
+                Ответ клиенту
+              </label>
+              <textarea
+                id="composer"
+                rows={2}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault()
+                    void send()
+                  }
+                }}
+                placeholder={botActive ? 'Ответ от оператора. Бот встанет на паузу.' : 'Ответ клиенту'}
+                className="field-control max-h-40 min-h-[42px] resize-none leading-snug"
+              />
+              <Button type="submit" variant="primary" loading={sending} disabled={!text.trim()} icon={<Send className="size-4" aria-hidden />}>
+                Отправить
+              </Button>
+            </div>
+            <p className="mx-auto mt-1.5 max-w-[760px] text-[12px] text-ink-3">Ctrl + Enter — отправить</p>
+          </form>
         </div>
-        <p className="mx-auto mt-1.5 max-w-[760px] text-[12px] text-ink-3">Ctrl + Enter — отправить</p>
-      </form>
+        {showClient && <ClientPanel conversationId={conversationId} onClose={() => setShowClient(false)} />}
+      </div>
     </>
   )
 }

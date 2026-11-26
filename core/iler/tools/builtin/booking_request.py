@@ -1,10 +1,13 @@
 """LLM tool `create_booking_request` (spec 5.3): a pending request for the admin to confirm."""
 
+import logging
+
 from iler.settings_models import AllSettings
 from iler.tools import registry
 from iler.tools.base import ToolContext, ToolResult
 
 REQUIRED = ("date", "time", "duration_hours", "seats")
+log = logging.getLogger("iler.tools.booking")
 
 
 class CreateBookingRequest:
@@ -46,6 +49,14 @@ class CreateBookingRequest:
             b, created = await service.create_checked(ctx.conversation_id, payload)
         except service.BookingLimit as e:
             return ToolResult(f"error: {e}")
+        if payload.get("name"):  # the client card remembers the name the client gave
+            from iler.engine import client_memory
+
+            try:
+                await client_memory.set_name(client_memory.contact_for(ctx.phone, ctx.extra.get("jid")),
+                                             payload["name"])
+            except Exception:  # noqa: BLE001 - the card is a convenience; the request is already filed
+                log.warning("could not store the client name for conversation %s", ctx.conversation_id)
         return ToolResult({
             "status": "pending",
             "request_id": b.id,
