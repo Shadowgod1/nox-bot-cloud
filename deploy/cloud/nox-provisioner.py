@@ -19,7 +19,8 @@ the portal's internal API on 127.0.0.1 with a shared token, and for each job:
 LLM access of a new instance, in this order:
   1. a per-client Anthropic key (llm_key_sealed) -> set-llm-keys.sh, the bot talks to Anthropic directly;
   2. the portal's LLM gateway (gateway_key_sealed, the usual case) -> ILER_LLM_GATEWAY_URL (NOX_GATEWAY_URL)
-     and ILER_LLM_GATEWAY_KEY in <dir>/.env (mode 600), the provider keys ILER_*_KEY are emptied and
+     and ILER_LLM_GATEWAY_KEY (+ ILER_TOPUP_URL from NOX_TOPUP_URL) in <dir>/.env (mode 600), the
+     provider keys ILER_*_KEY are emptied and
      ILER_MONTHLY_COINS is 0 (the portal meters coins), then iler-core is restarted;
   3. neither (a job queued before the gateway existed) -> NOX_DEFAULT_ANTHROPIC_KEY via set-llm-keys.sh.
 
@@ -87,6 +88,7 @@ class Config:
     key_file: str = "/etc/nox-portal/provisioner-key.pem"
     default_key: str = ""
     gateway_url: str = "https://bot.noxsw.kz"
+    topup_url: str = "https://bot.noxsw.kz/cabinet"
     iler_client: str = "/opt/iler/bundle/deploy/cloud/iler-client.sh"
     clients_dir: str = "/opt/iler/clients"
     domain: str = "noxsw.kz"
@@ -110,6 +112,7 @@ class Config:
             key_file=e.get("NOX_PROVISIONER_KEY_FILE", cls.key_file),
             default_key=e.get("NOX_DEFAULT_ANTHROPIC_KEY", ""),
             gateway_url=(e.get("NOX_GATEWAY_URL") or cls.gateway_url).rstrip("/"),
+            topup_url=e.get("NOX_TOPUP_URL") or cls.topup_url,
             iler_client=e.get("NOX_ILER_CLIENT", cls.iler_client),
             clients_dir=e.get("NOX_CLIENTS_DIR", cls.clients_dir).rstrip("/"),
             domain=e.get("NOX_DOMAIN", cls.domain),
@@ -512,6 +515,8 @@ class Provisioner:
             raise ProvisionError(f"{env_file} not found")
         env_set(env_file, "ILER_LLM_GATEWAY_URL", self.cfg.gateway_url)
         env_set(env_file, "ILER_LLM_GATEWAY_KEY", key)
+        if self.cfg.topup_url and re.fullmatch(r"https://[^\s'\"]+", self.cfg.topup_url):
+            env_set(env_file, "ILER_TOPUP_URL", self.cfg.topup_url)  # "Пополнить" in the bot admin
         for name in PROVIDER_KEYS:
             if env_get(env_file, name):
                 env_set(env_file, name, "")

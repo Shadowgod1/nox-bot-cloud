@@ -283,7 +283,8 @@ NOX_MODEL_PRICES={"gpt-5.4-mini": [0.25, 2.0], "gemini-3.8-flash": [0.3, 2.5]}
 
 - **Облако.** При «Отметить оплату» или «Одобрить» портал выпускает ключ и передаёт его провизионеру в
   зашифрованном виде. Провизионер вписывает в `.env` бота (права 600) `ILER_LLM_GATEWAY_URL` (из
-  `NOX_GATEWAY_URL`) и `ILER_LLM_GATEWAY_KEY`, очищает `ILER_ANTHROPIC_KEY` / `ILER_OPENAI_KEY` /
+  `NOX_GATEWAY_URL`), `ILER_LLM_GATEWAY_KEY` и `ILER_TOPUP_URL` (кнопка «Пополнить» в админке бота, из
+  `NOX_TOPUP_URL`), очищает `ILER_ANTHROPIC_KEY` / `ILER_OPENAI_KEY` /
   `ILER_GEMINI_KEY`, ставит `ILER_MONTHLY_COINS=0` (коины считает портал) и перезапускает `iler-core`.
 - **Свой ключ Anthropic клиента** (поле при одобрении) по-прежнему работает и имеет приоритет. Тогда шлюз
   не используется: виртуальный ключ не выпускается, переменные шлюза не пишутся, коины портал не считает.
@@ -308,6 +309,7 @@ NOX_MODEL_PRICES={"gpt-5.4-mini": [0.25, 2.0], "gemini-3.8-flash": [0.3, 2.5]}
    ```
    ILER_LLM_GATEWAY_URL=https://bot.noxsw.kz
    ILER_LLM_GATEWAY_KEY=nox_vk_…
+   ILER_TOPUP_URL=https://bot.noxsw.kz/cabinet
    ```
 
    ```sh

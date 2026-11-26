@@ -481,6 +481,7 @@ def test_create_in_gateway_mode_writes_gateway_vars_only(env):
     text = env_file.read_text()
     assert f"ILER_LLM_GATEWAY_KEY={GW_KEY}\n" in text
     assert "ILER_LLM_GATEWAY_URL=https://bot.example.kz\n" in text
+    assert "ILER_TOPUP_URL=https://bot.noxsw.kz/cabinet\n" in text
     assert "ILER_MONTHLY_COINS=0\n" in text and "sk-ant" not in text
     if os.name != "nt":
         assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
