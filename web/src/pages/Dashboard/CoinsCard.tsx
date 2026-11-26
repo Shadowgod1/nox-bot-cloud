@@ -52,7 +52,7 @@ export function CoinsCard({ coins }: { coins: DashboardCoins }) {
           </div>
         ) : undefined
       }
-      bodyClassName="p-0"
+      bodyClassName="p-0 @container"
     >
       <div className="px-5 pt-4 pb-5">
         {gateway && coins.stale && (
@@ -126,7 +126,7 @@ export function CoinsCard({ coins }: { coins: DashboardCoins }) {
         )}
       </div>
 
-      <div className="grid border-t border-line md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] md:divide-x md:divide-line">
+      <div className="grid border-t border-line @2xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] @2xl:divide-x @2xl:divide-line">
         <DailyChart coins={coins} />
         <ByModel coins={coins} />
       </div>
@@ -205,7 +205,7 @@ function ByModel({ coins }: { coins: DashboardCoins }) {
   const total = items.reduce((a, m) => a + m.coins, 0)
 
   return (
-    <div className="border-t border-line px-5 py-4 md:border-t-0">
+    <div className="border-t border-line px-5 py-4 @2xl:border-t-0">
       <h3 className="mb-3 flex items-center gap-1.5 text-[13px] font-medium text-ink">
         <TrendingUp className="size-3.5 text-ink-3" aria-hidden />
         По моделям

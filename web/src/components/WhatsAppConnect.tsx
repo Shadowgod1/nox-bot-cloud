@@ -111,7 +111,7 @@ export function WhatsAppConnect({ onConnected, intro = true }: { onConnected?: (
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="@container flex flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Segmented<Method>
           label="Способ подключения"
@@ -134,7 +134,7 @@ export function WhatsAppConnect({ onConnected, intro = true }: { onConnected?: (
       {status.last_error && <p className="text-[13px] text-danger">Последняя ошибка: {status.last_error}</p>}
 
       {method === 'qr' ? (
-        <div className="grid gap-5 sm:grid-cols-[220px_1fr] sm:items-start">
+        <div className="grid gap-5 @md:grid-cols-[220px_1fr] @md:items-start">
           <div className="grid aspect-square w-[220px] place-items-center rounded-[10px] border border-line bg-white p-3">
             {qr ? (
               <img src={qr} alt="QR-код для подключения WhatsApp" className="size-full object-contain [image-rendering:pixelated]" />
@@ -231,13 +231,13 @@ const SAFETY: { icon: typeof Smartphone; title: string; text: string }[] = [
 /** The screen before the first QR: honest answers to "what happens to my number". */
 export function NumberSafety({ onQr, onCode, busy }: { onQr: () => void; onCode: () => void; busy?: boolean }) {
   return (
-    <section aria-labelledby="wa-safety-title" className="flex flex-col gap-4">
+    <section aria-labelledby="wa-safety-title" className="@container flex flex-col gap-4">
       <h2 id="wa-safety-title" className="text-[15px] font-semibold text-ink">
         Что будет с вашим номером
       </h2>
-      <ul className="grid gap-3 sm:grid-cols-2">
+      <ul className="grid gap-3 @lg:grid-cols-2">
         {SAFETY.map(({ icon: Icon, title, text }, i) => (
-          <li key={title} className={cx('flex gap-3 rounded-[10px] border border-line bg-surface p-3.5', i === SAFETY.length - 1 && 'sm:col-span-2')}>
+          <li key={title} className={cx('flex gap-3 rounded-[10px] border border-line bg-surface p-3.5', i === SAFETY.length - 1 && '@lg:col-span-2')}>
             <span className="grid size-8 shrink-0 place-items-center rounded-full bg-accent-soft text-accent" aria-hidden>
               <Icon className="size-4" />
             </span>
