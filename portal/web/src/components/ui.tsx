@@ -131,6 +131,8 @@ export function Alert({ tone = 'danger', children }: { tone?: 'danger' | 'ok' | 
 const STATUS_TONE: Record<Status, string> = {
   new: 'bg-sunken text-ink-2',
   verified: 'bg-accent-soft text-accent-ink',
+  awaiting_invoice: 'bg-warn-soft text-warn',
+  payment_pending: 'bg-warn-soft text-warn',
   awaiting_payment: 'bg-warn-soft text-warn',
   approved: 'bg-accent-soft text-accent-ink',
   provisioning: 'bg-warn-soft text-warn',

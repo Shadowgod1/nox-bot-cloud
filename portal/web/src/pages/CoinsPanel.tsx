@@ -1,32 +1,52 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
-import { Coins, PlusCircle } from 'lucide-react'
-import { api, coins, formatDay, INVOICE_KIND, money, type Invoice, type InvoiceListItem, type UsageOut } from '../api'
+import { Coins, CreditCard, FileText, PlusCircle } from 'lucide-react'
+import {
+  api, coins, formatDay, goToCheckout, INVOICE_KIND, loadPublicConfig, money,
+  type InvoiceListItem, type PublicConfig, type TopupOut, type UsageOut,
+} from '../api'
 import { Alert, Button, Card } from '../components/ui'
+import { PayOnlineButton } from './PayOnline'
 
-/** Cabinet: coin balance of the period, spend by day and model, "Пополнить" (top-up invoice), invoices. */
+/** Cabinet: coin balance of the period, spend by day and model, "Пополнить" (online or through a manager), invoices. */
 export function CoinsPanel() {
   const navigate = useNavigate()
   const [usage, setUsage] = useState<UsageOut | null>(null)
   const [invoices, setInvoices] = useState<InvoiceListItem[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [choosing, setChoosing] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [config, setConfig] = useState<PublicConfig | null>(null)
 
   useEffect(() => {
     api.get<UsageOut>('/api/me/usage').then(setUsage).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'))
     api.get<InvoiceListItem[]>('/api/me/invoices').then(setInvoices).catch(() => undefined)
+    loadPublicConfig()
+      .then(setConfig)
+      .catch(() => undefined)
   }, [])
 
-  async function topup() {
-    setBusy(true)
+  async function topup(method: 'online' | 'invoice') {
+    setBusy(method)
     setError(null)
+    setNotice(null)
     try {
-      const inv = await api.post<Invoice>('/api/me/topup')
-      navigate(`/invoice/${encodeURIComponent(inv.number)}`)
+      const r = await api.post<TopupOut>('/api/me/topup', { method })
+      if (r.kind === 'online' && r.redirect_url) {
+        goToCheckout(r.redirect_url)
+        return
+      }
+      if (r.kind === 'invoice' && r.invoice_number) {
+        navigate(`/invoice/${encodeURIComponent(r.invoice_number)}`)
+        return
+      }
+      setChoosing(false)
+      setNotice('Запрос отправлен. Менеджер выставит счёт на пакет коинов — он появится здесь и придёт на почту.')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось выставить счёт')
-      setBusy(false)
+      setError(err instanceof Error ? err.message : 'Не удалось отправить запрос')
     }
+    setBusy(null)
   }
 
   const b = usage?.balance
@@ -39,10 +59,28 @@ export function CoinsPanel() {
       <div className="flex flex-wrap items-center gap-3">
         <Coins className="size-6 text-accent" aria-hidden />
         <h2 className="text-[17px] font-extrabold text-ink">Коины</h2>
-        <Button className="ml-auto" variant="primary" icon={<PlusCircle className="size-4" aria-hidden />} loading={busy} onClick={topup}>
+        <Button className="ml-auto" variant="primary" icon={<PlusCircle className="size-4" aria-hidden />} onClick={() => setChoosing((v) => !v)}>
           Пополнить
         </Button>
       </div>
+      {choosing && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-nx border border-line bg-sunken p-3" role="group" aria-label="Способ пополнения">
+          <span className="w-full text-[13px] text-ink-2">Пакет 10 000 коинов, не сгорает в конце месяца.</span>
+          {config?.online_payments && (
+            <Button size="sm" variant="primary" icon={<CreditCard className="size-4" aria-hidden />} loading={busy === 'online'} onClick={() => void topup('online')}>
+              Оплатить онлайн
+            </Button>
+          )}
+          <Button size="sm" icon={<FileText className="size-4" aria-hidden />} loading={busy === 'invoice'} onClick={() => void topup('invoice')}>
+            Счёт через менеджера
+          </Button>
+        </div>
+      )}
+      {notice && (
+        <div className="mt-3">
+          <Alert tone="ok">{notice}</Alert>
+        </div>
+      )}
       {error && (
         <div className="mt-3">
           <Alert>{error}</Alert>
@@ -126,6 +164,11 @@ export function CoinsPanel() {
                 <span className="text-ink-2">{INVOICE_KIND[inv.kind]}</span>
                 <span className="tabular-nums text-ink">{money(inv.amount_kzt)}</span>
                 <span className={inv.paid ? 'text-ok' : 'text-warn'}>{inv.paid ? 'оплачен' : 'ждёт оплаты'}</span>
+                {!inv.paid && inv.kind !== 'subscription' && (
+                  <span className="ml-auto">
+                    <PayOnlineButton number={inv.number} size="sm" />
+                  </span>
+                )}
               </li>
             ))}
           </ul>

@@ -74,6 +74,8 @@ export const api = {
 export type Status =
   | 'new'
   | 'verified'
+  | 'awaiting_invoice'
+  | 'payment_pending'
   | 'awaiting_payment'
   | 'approved'
   | 'provisioning'
@@ -101,6 +103,44 @@ export interface ClientMe {
   created_at: string
   llm_enabled?: boolean
   local_install?: boolean
+  /** invoice | online | free | null */
+  pay_method?: string | null
+  /** checkout page of a pending online payment (subscription / upgrade) */
+  payment_url?: string | null
+  free_until?: string | null
+  /** unpaid | trial_ended | null */
+  suspend_reason?: string | null
+  upgrade_tariff?: string | null
+}
+
+export interface PublicConfig {
+  instance_domain: string
+  online_payments: boolean
+  online_methods: string[]
+  free_days?: number
+}
+
+export interface CheckoutOut {
+  redirect_url: string | null
+  qr_payload: string | null
+}
+
+export interface TopupOut {
+  kind: 'request' | 'invoice' | 'online'
+  invoice_number: string | null
+  redirect_url: string | null
+}
+
+export interface OnlinePaymentOut {
+  id: number
+  purpose: string
+  amount_kzt: number
+  provider: string
+  provider_payment_id: string | null
+  status: string
+  invoice_no: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface StaffMe {
@@ -161,6 +201,15 @@ export interface ApplicationDetail extends ApplicationListItem {
   invoice_amount: number | null
   invoice_issued_at: string | null
   local_install?: boolean
+  pay_method?: string | null
+  invoice_note?: string
+  free_until?: string | null
+  suspend_reason?: string | null
+  upgrade_tariff?: string | null
+  period_end?: string | null
+  renewal_due?: boolean
+  topup_requested_at?: string | null
+  online_payments?: OnlinePaymentOut[]
   llm?: LlmBalance | null
   keys?: KeyOut[]
   invoices?: InvoiceListItem[]
@@ -176,11 +225,14 @@ export interface StaffConfig {
   custom_key_supported: boolean
   topup?: Tariff | null
   gateway_url?: string
+  online_payments?: boolean
 }
 
 export const STATUS_LABELS: Record<Status, string> = {
   new: 'Новая',
   verified: 'Подтверждена',
+  awaiting_invoice: 'Ждёт счёта',
+  payment_pending: 'Оплата онлайн',
   awaiting_payment: 'Ждёт оплаты',
   approved: 'Одобрена',
   provisioning: 'Создаётся',
@@ -209,7 +261,11 @@ export interface Tariff {
   price_kzt: number
   coins: number
   description: string
+  /** Free: false when every test place is taken */
+  available?: boolean
 }
+
+export const FREE_CODE = 'free'
 
 export interface PaymentOut {
   id: number
@@ -236,10 +292,13 @@ export interface Invoice {
   bot_host: string
   seller: { name: string; bin: string; address: string; bank: string; iik: string; bik: string; kbe: string; phone: string }
   paid: boolean
-  kind?: 'subscription' | 'renewal' | 'topup'
+  kind?: InvoiceKind
   period_start?: string | null
   period_end?: string | null
+  comment?: string
 }
+
+export type InvoiceKind = 'subscription' | 'renewal' | 'topup' | 'upgrade'
 
 export interface LlmBalance {
   coins_left: number
@@ -261,7 +320,7 @@ export interface UsageOut {
 export interface InvoiceListItem {
   id: number | null
   number: string
-  kind: 'subscription' | 'renewal' | 'topup'
+  kind: InvoiceKind
   tariff: string | null
   amount_kzt: number
   coins: number | null
@@ -290,6 +349,36 @@ export const INVOICE_KIND: Record<InvoiceListItem['kind'], string> = {
   subscription: 'Подключение',
   renewal: 'Продление',
   topup: 'Пакет коинов',
+  upgrade: 'Переход на тариф',
+}
+
+let publicConfig: Promise<PublicConfig> | null = null
+
+/** /api/public-config, fetched once per page load (a failure is not cached). */
+export function loadPublicConfig(): Promise<PublicConfig> {
+  if (!publicConfig) {
+    publicConfig = api.get<PublicConfig>('/api/public-config').catch((err) => {
+      publicConfig = null
+      throw err
+    })
+  }
+  return publicConfig
+}
+
+export function resetPublicConfig() {
+  publicConfig = null
+}
+
+/** Full-page navigation (an object so tests can replace it). */
+export const browser = {
+  go(url: string) {
+    window.location.assign(url)
+  },
+}
+
+/** Go to a provider checkout page (or the mock checkout of the SPA). */
+export function goToCheckout(url: string) {
+  browser.go(url)
 }
 
 export function coins(n: number): string {

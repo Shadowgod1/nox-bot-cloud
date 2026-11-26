@@ -3,6 +3,7 @@ import { Shell } from './components/Shell'
 import { Cabinet } from './pages/Cabinet'
 import { InvoicePage } from './pages/InvoicePage'
 import { Login } from './pages/Login'
+import { MockCheckout } from './pages/MockCheckout'
 import { Register } from './pages/Register'
 import { Reset } from './pages/Reset'
 import { Verify } from './pages/Verify'
@@ -34,6 +35,7 @@ export function App() {
       <Route path="/reset" element={<Reset />} />
       <Route path="/invoice" element={<InvoicePage />} />
       <Route path="/invoice/:number" element={<InvoicePage />} />
+      <Route path="/pay/mock/:id" element={<MockCheckout />} />
       <Route path="/staff/login" element={<StaffLogin />} />
       <Route path="/staff" element={<Applications />} />
       <Route path="/staff/applications/:id" element={<ApplicationView />} />

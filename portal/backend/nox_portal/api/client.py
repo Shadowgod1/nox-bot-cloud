@@ -70,7 +70,7 @@ async def _send_code(to: str, name: str, purpose: str, code: str) -> None:
 async def get_public_config():
     provider = payments.get_provider()
     return {"instance_domain": get_settings().instance_domain, "online_payments": provider is not None,
-            "online_methods": sorted(provider.supports) if provider else []}
+            "online_methods": sorted(provider.supports) if provider else [], "free_days": get_settings().free_days}
 
 
 @router.get("/api/slug-check", response_model=SlugCheck)

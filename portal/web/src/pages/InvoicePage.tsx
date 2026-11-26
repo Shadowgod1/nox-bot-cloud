@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { ArrowLeft, Printer } from 'lucide-react'
 import { api, ApiError, money, type Invoice } from '../api'
 import { Alert, Button } from '../components/ui'
+import { PayOnlineButton } from './PayOnline'
 
 /**
  * Printable invoice (A4). "Печать / PDF" uses the browser's print dialog, where "Save as PDF" makes the file.
@@ -42,8 +43,13 @@ export function InvoicePage() {
         <Link to={back} className="inline-flex items-center gap-1 text-[13.5px] font-semibold text-ink-2 hover:text-accent">
           <ArrowLeft className="size-4" aria-hidden /> Назад
         </Link>
+        {inv && !id && !inv.paid && (
+          <span className="ml-auto">
+            <PayOnlineButton number={inv.number} />
+          </span>
+        )}
         {inv && (
-          <Button className="ml-auto" variant="primary" icon={<Printer className="size-4" aria-hidden />} onClick={() => window.print()}>
+          <Button className={id || inv.paid ? 'ml-auto' : ''} variant="primary" icon={<Printer className="size-4" aria-hidden />} onClick={() => window.print()}>
             Печать / PDF
           </Button>
         )}
@@ -109,7 +115,12 @@ export function InvoicePage() {
               <tr>
                 <td className="border border-[#d9dde2] px-3 py-2">1</td>
                 <td className="border border-[#d9dde2] px-3 py-2">
-                  {inv.kind === 'topup' ? (
+                  {inv.kind === 'upgrade' ? (
+                    <>
+                      Переход с тестового тарифа: абонентское обслуживание WhatsApp-ассистента Nox Bot, тариф «{inv.tariff.name}» (
+                      {inv.tariff.coins.toLocaleString('ru-RU')} коинов), 1 месяц. Адрес: {inv.bot_host}
+                    </>
+                  ) : inv.kind === 'topup' ? (
                     <>
                       Пакет коинов для WhatsApp-ассистента Nox Bot: {inv.tariff.coins.toLocaleString('ru-RU')} коинов (не сгорают в
                       конце месяца). Адрес: {inv.bot_host}
@@ -137,12 +148,20 @@ export function InvoicePage() {
             </tfoot>
           </table>
 
+          {inv.comment && (
+            <p className="mt-5">
+              <span className="text-[#565e67]">Комментарий: </span>
+              {inv.comment}
+            </p>
+          )}
           <p className="mt-5 text-[#565e67]">
             Оплатите счёт в течение {inv.due_days} рабочих дней. В назначении платежа укажите: «Оплата по счёту № {inv.number}».
             {inv.kind === 'topup'
               ? 'Коины будут начислены на баланс сразу после поступления оплаты.'
               : inv.kind === 'renewal'
                 ? 'После поступления оплаты начнётся следующий месяц обслуживания с новым пакетом коинов.'
+                : inv.kind === 'upgrade'
+                  ? 'После поступления оплаты бот продолжит работу на новом тарифе, настройки сохранятся.'
                 : 'После поступления оплаты бот будет создан, а на e-mail придёт ссылка на панель управления.'}
           </p>
           <footer className="mt-10 flex justify-between border-t border-[#d9dde2] pt-4 text-[#667079]">

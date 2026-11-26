@@ -6,11 +6,14 @@ import { Shell } from '../../components/Shell'
 import { Alert, Card, cx, Input, StatusBadge } from '../../components/ui'
 import { useStaff } from './useStaff'
 
-const FILTERS: (Status | 'all')[] = ['all', 'verified', 'awaiting_payment', 'new', 'approved', 'provisioning', 'active', 'failed', 'rejected', 'suspended']
+const FILTERS: (Status | 'all')[] = [
+  'all', 'verified', 'awaiting_invoice', 'payment_pending', 'awaiting_payment', 'new', 'approved', 'provisioning', 'active',
+  'failed', 'rejected', 'suspended',
+]
 
 export function Applications() {
   const { staff, logout } = useStaff()
-  const [filter, setFilter] = useState<Status | 'all'>('awaiting_payment')
+  const [filter, setFilter] = useState<Status | 'all'>('all')
   const [q, setQ] = useState('')
   const [rows, setRows] = useState<ApplicationListItem[] | null>(null)
   const [counts, setCounts] = useState<Record<string, number>>({})

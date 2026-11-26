@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ApplicationDetail } from '../api'
+import { browser, resetPublicConfig, type ApplicationDetail } from '../api'
 import { bodyOf, json, mockFetch, renderAt } from '../test/utils'
 import { CoinsPanel } from './CoinsPanel'
 import { GatewayPanel, InvoicesPanel } from './staff/GatewayPanel'
@@ -43,19 +43,51 @@ describe('CoinsPanel (cabinet)', () => {
     expect(screen.getByText('№ NOX-2026-00001')).toHaveAttribute('href', '/invoice')
   })
 
-  it('"Пополнить" issues a top-up invoice and opens it', async () => {
+  it('"Пополнить" through a manager sends a request', async () => {
+    resetPublicConfig()
     const fetch = mockFetch({
       'GET /api/me/usage': () => json(USAGE),
       'GET /api/me/invoices': () => json([]),
-      'POST /api/me/topup': () => json({ number: 'NOX-2026-00009', kind: 'topup' }),
+      'GET /api/public-config': () => json({ instance_domain: 'example.kz', online_payments: false, online_methods: [] }),
+      'POST /api/me/topup': () => json({ kind: 'request', invoice_number: null, redirect_url: null }),
     })
     document.cookie = 'nox_csrf=tok'
+    const user = userEvent.setup()
     renderAt('/', <CoinsPanel />)
     await screen.findByTestId('coins-left')
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Пополнить' }))
-    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/invoice/NOX-2026-00009'))
+    await user.click(screen.getByRole('button', { name: 'Пополнить' }))
+    expect(screen.queryByRole('button', { name: 'Оплатить онлайн' })).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Счёт через менеджера' }))
+    expect(await screen.findByText(/Менеджер выставит счёт на пакет коинов/)).toBeInTheDocument()
+    expect(bodyOf(fetch, 'POST /api/me/topup')).toEqual({ method: 'invoice' })
     const call = fetch.mock.calls.find(([u]) => String(u) === '/api/me/topup')
     expect(new Headers((call?.[1] as RequestInit).headers).get('X-Nox-CSRF')).toBe('tok')
+  })
+
+  it('"Пополнить" shows an open invoice, or goes to the online checkout', async () => {
+    resetPublicConfig()
+    let answer: unknown = { kind: 'invoice', invoice_number: 'NOX-2026-00009', redirect_url: null }
+    const fetch = mockFetch({
+      'GET /api/me/usage': () => json(USAGE),
+      'GET /api/me/invoices': () => json([]),
+      'GET /api/public-config': () => json({ instance_domain: 'example.kz', online_payments: true, online_methods: ['card'] }),
+      'POST /api/me/topup': () => json(answer),
+    })
+    const go = vi.spyOn(browser, 'go').mockImplementation(() => undefined)
+    const user = userEvent.setup()
+    const { unmount } = renderAt('/', <CoinsPanel />)
+    await screen.findByTestId('coins-left')
+    await user.click(screen.getByRole('button', { name: 'Пополнить' }))
+    await user.click(screen.getByRole('button', { name: 'Счёт через менеджера' }))
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/invoice/NOX-2026-00009'))
+    unmount()
+    answer = { kind: 'online', invoice_number: null, redirect_url: '/pay/mock/t1' }
+    renderAt('/', <CoinsPanel />)
+    await screen.findByTestId('coins-left')
+    await user.click(screen.getByRole('button', { name: 'Пополнить' }))
+    await user.click(await screen.findByRole('button', { name: 'Оплатить онлайн' }))
+    await waitFor(() => expect(go).toHaveBeenCalledWith('/pay/mock/t1'))
+    expect(fetch.mock.calls.filter(([u]) => String(u) === '/api/me/topup')).toHaveLength(2)
   })
 })
 

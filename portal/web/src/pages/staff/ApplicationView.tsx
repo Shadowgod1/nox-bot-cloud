@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router'
 import { ArrowLeft } from 'lucide-react'
-import { api, formatDate, money, type ApplicationDetail, type AuditOut, type StaffConfig } from '../../api'
+import { api, formatDate, formatDay, FREE_CODE, money, type ApplicationDetail, type AuditOut, type StaffConfig } from '../../api'
 import { Shell } from '../../components/Shell'
 import { Alert, Button, Card, Field, Input, StatusBadge } from '../../components/ui'
 import { ApproveForm } from './ApproveForm'
 import { GatewayPanel, InvoicesPanel } from './GatewayPanel'
+import { IssueInvoiceForm } from './IssueInvoiceForm'
 import { useStaff } from './useStaff'
 
 const JOB_KIND: Record<string, string> = {
@@ -16,6 +17,11 @@ const JOB_KIND: Record<string, string> = {
   rekey: 'Новый ключ шлюза',
 }
 const JOB_STATUS: Record<string, string> = { pending: 'в очереди', claimed: 'выполняется', done: 'готово', failed: 'ошибка' }
+const PAY_METHOD: Record<string, string> = { invoice: 'по счёту через менеджера', online: 'онлайн', free: 'бесплатный тест' }
+const ONLINE_STATUS: Record<string, string> = { pending: 'ожидает', succeeded: 'оплачен', failed: 'отказ', refunded: 'возврат' }
+const SUSPEND_REASON: Record<string, string> = { unpaid: 'неоплата продления', trial_ended: 'закончился тест' }
+// a new application can still get an invoice / be approved in these statuses
+const PAYABLE = ['verified', 'awaiting_invoice', 'payment_pending', 'awaiting_payment']
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -92,6 +98,15 @@ export function ApplicationView() {
   }
 
   const openJob = app?.jobs.find((j) => j.status === 'pending' || j.status === 'claimed')
+  const paidTariffs = (config?.tariffs ?? []).filter((t) => t.code !== FREE_CODE)
+  const tariffOf = (code: string | null | undefined) => config?.tariffs.find((t) => t.code === code)
+  const isFree = app?.tariff === FREE_CODE
+  const [topupOpen, setTopupOpen] = useState(false)
+  const issued = (what: string) => (number: string) => {
+    setNotice(`${what}: счёт № ${number} выставлен и отправлен клиенту`)
+    setTopupOpen(false)
+    void load()
+  }
 
   return (
     <Shell subtitle="Заявка" home="/staff" user={staff?.email} onLogout={logout} wide>
@@ -127,6 +142,10 @@ export function ApplicationView() {
                   ['Подана', formatDate(app.created_at)],
                   ['E-mail подтверждён', formatDate(app.email_verified_at)],
                   ['IP при регистрации', app.register_ip ?? '—'],
+                  ['Тариф', tariffOf(app.tariff)?.name ?? app.tariff ?? '—'],
+                  ['Способ оплаты', app.pay_method ? PAY_METHOD[app.pay_method] ?? app.pay_method : '—'],
+                  ...(isFree ? [['Тест до', formatDay(app.free_until)]] : []),
+                  ...(app.suspend_reason ? [['Причина приостановки', SUSPEND_REASON[app.suspend_reason] ?? app.suspend_reason]] : []),
                 ].map(([k, v]) => (
                   <div key={String(k)}>
                     <dt className="text-[12.5px] font-semibold text-ink-3">{k}</dt>
@@ -166,7 +185,34 @@ export function ApplicationView() {
                   </Link>
                 </p>
               ) : (
-                <p className="text-[13.5px] text-ink-3">Счёт не выставлен: клиент ещё не выбрал тариф</p>
+                <p className="text-[13.5px] text-ink-3">
+                  {app.status === 'awaiting_invoice'
+                    ? 'Клиент выбрал оплату по счёту — выставите счёт (справа).'
+                    : app.status === 'payment_pending'
+                      ? 'Клиент оплачивает онлайн; счёт не нужен, но его можно выставить.'
+                      : isFree
+                        ? 'Бесплатный тест: счёт не выставляется.'
+                        : 'Счёт не выставлен: клиент ещё не выбрал тариф.'}
+                </p>
+              )}
+              {app.invoice_note && <p className="mt-1 text-[13px] text-ink-3">Комментарий в счёте: {app.invoice_note}</p>}
+              {(app.online_payments ?? []).length > 0 && (
+                <div className="mt-3">
+                  <h3 className="text-[13px] font-bold text-ink">Онлайн-оплаты</h3>
+                  <ul className="mt-1 flex flex-col divide-y divide-line text-[13px]" aria-label="Онлайн-оплаты">
+                    {(app.online_payments ?? []).map((o) => (
+                      <li key={o.id} className="flex flex-wrap gap-x-3 py-1.5">
+                        <span className="text-ink-3 tabular-nums">{formatDate(o.created_at)}</span>
+                        <span className="tabular-nums">{money(o.amount_kzt)}</span>
+                        <span className="text-ink-2">{o.provider}</span>
+                        <span className={o.status === 'succeeded' ? 'text-ok' : o.status === 'pending' ? 'text-warn' : 'text-danger'}>
+                          {ONLINE_STATUS[o.status] ?? o.status}
+                        </span>
+                        {o.invoice_no && <span className="text-ink-3">счёт {o.invoice_no}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
               {app.payments.length > 0 && (
                 <ul className="mt-3 flex flex-col divide-y divide-line text-[13.5px]">
@@ -175,6 +221,7 @@ export function ApplicationView() {
                       <span className="text-ink-3 tabular-nums">{formatDate(p.created_at)}</span>
                       <span className={p.amount_kzt < 0 ? 'font-semibold text-danger' : 'font-semibold text-ok'}>{money(p.amount_kzt)}</span>
                       {p.invoice_no && <span className="text-ink-2">счёт {p.invoice_no}</span>}
+                      {p.method !== 'invoice' && <span className="text-ink-2">{p.method}</span>}
                       {p.reference && <span className="text-ink-2">{p.reference}</span>}
                       <span className="text-ink-3">{p.staff_email}</span>
                     </li>
@@ -240,17 +287,98 @@ export function ApplicationView() {
                 />
               </Section>
             )}
-            {['verified', 'rejected'].includes(app.status) && config && (
-              <Section title={app.status === 'verified' ? 'Одобрить без оплаты' : 'Одобрить'}>
-                {app.status === 'verified' && (
-                  <p className="mb-3 text-[13px] text-ink-3">
-                    Клиент ещё не выбрал тариф. Одобрение без счёта — для пробного периода и партнёров; фиксируется в журнале.
-                  </p>
+            {PAYABLE.includes(app.status) && !isFree && config && paidTariffs.length > 0 && (
+              <Section title={app.status === 'awaiting_payment' ? 'Выставить счёт заново' : 'Выставить счёт'}>
+                {app.status === 'awaiting_invoice' && (
+                  <p className="mb-3 text-[13px] text-ink-2">Клиент ждёт счёт: выберите сумму и отправьте — счёт уйдёт на {app.email}.</p>
                 )}
-                <ApproveForm applicationId={app.id} defaultSlug={app.slug} config={config} onDone={() => { setNotice('Заявка одобрена, бот ставится в очередь на создание'); void load() }} />
+                {app.status === 'awaiting_payment' && (
+                  <p className="mb-3 text-[13px] text-ink-3">Номер счёта сохранится, сумма и тариф обновятся.</p>
+                )}
+                <IssueInvoiceForm
+                  key={`${app.status}-${app.tariff}`}
+                  applicationId={app.id}
+                  kind="subscription"
+                  tariffs={paidTariffs}
+                  defaultTariff={app.tariff}
+                  submitLabel="Выставить счёт"
+                  onDone={issued('Подключение')}
+                />
               </Section>
             )}
-            {['verified', 'awaiting_payment', 'approved', 'failed'].includes(app.status) && (
+            {isFree && ['approved', 'provisioning', 'active', 'suspended'].includes(app.status) && config && paidTariffs.length > 0 && (
+              <Section title="Переход на платный тариф">
+                <p className="mb-3 text-[13px] text-ink-2">
+                  {app.upgrade_tariff
+                    ? `Клиент просит счёт на тариф «${tariffOf(app.upgrade_tariff)?.name ?? app.upgrade_tariff}».`
+                    : 'Счёт на переход с теста: после оплаты бот продолжит работу на платном тарифе.'}
+                </p>
+                <IssueInvoiceForm
+                  key={`upgrade-${app.upgrade_tariff}`}
+                  applicationId={app.id}
+                  kind="upgrade"
+                  tariffs={paidTariffs}
+                  defaultTariff={app.upgrade_tariff}
+                  submitLabel="Выставить счёт"
+                  onDone={issued('Переход на тариф')}
+                />
+              </Section>
+            )}
+            {app.renewal_due && config && (
+              <Section title="Пора выставить счёт на продление">
+                <p className="mb-3 text-[13px] text-ink-2">Оплаченный месяц заканчивается {formatDay(app.period_end)}.</p>
+                <IssueInvoiceForm
+                  applicationId={app.id}
+                  kind="renewal"
+                  tariffs={[]}
+                  defaultAmount={tariffOf(app.tariff)?.price_kzt ?? null}
+                  submitLabel="Выставить счёт"
+                  onDone={issued('Продление')}
+                />
+              </Section>
+            )}
+            {app.llm && config && !['removed', 'rejected'].includes(app.status) && (
+              <Section title="Пополнение">
+                {app.topup_requested_at && (
+                  <div className="mb-3">
+                    <Alert tone="warn">Клиент запросил пополнение {formatDate(app.topup_requested_at)}</Alert>
+                  </div>
+                )}
+                {topupOpen || app.topup_requested_at ? (
+                  <IssueInvoiceForm
+                    applicationId={app.id}
+                    kind="topup"
+                    tariffs={[]}
+                    defaultAmount={config.topup?.price_kzt ?? null}
+                    defaultCoins={config.topup?.coins ?? null}
+                    submitLabel="Выставить счёт на пополнение"
+                    onDone={issued('Пополнение')}
+                  />
+                ) : (
+                  <Button onClick={() => setTopupOpen(true)}>Выставить счёт на пополнение</Button>
+                )}
+              </Section>
+            )}
+            {['verified', 'awaiting_invoice', 'payment_pending', 'rejected'].includes(app.status) && config && (
+              <Section title={app.status === 'rejected' ? 'Одобрить' : 'Одобрить без оплаты'}>
+                {app.status !== 'rejected' && (
+                  <p className="mb-3 text-[13px] text-ink-3">
+                    Для партнёров и оплаты вне портала; фиксируется в журнале. Коины по умолчанию — из тарифа клиента.
+                  </p>
+                )}
+                <ApproveForm
+                  applicationId={app.id}
+                  defaultSlug={app.slug}
+                  config={config}
+                  tariffCoins={tariffOf(app.tariff)?.coins ?? null}
+                  onDone={() => {
+                    setNotice('Заявка одобрена, бот ставится в очередь на создание')
+                    void load()
+                  }}
+                />
+              </Section>
+            )}
+            {[...PAYABLE, 'approved', 'failed'].includes(app.status) && (
               <Section title="Отклонить">
                 <Field label="Причина (уйдёт клиенту письмом)">
                   <textarea
