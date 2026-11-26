@@ -198,6 +198,30 @@ describe('Cabinet of an active Free bot', () => {
     expect(screen.queryByRole('link', { name: /WhatsApp/ })).toBeNull()
     expect(screen.queryByTestId('trial-info')).toBeNull()
   })
+
+  it('owner created from the account: panel login with the cabinet e-mail, no one-time link', async () => {
+    const fetch = mockFetch(routes({ ...ME, email: 'o+test@example.kz', setup_link_available: false, owner_preset: true }))
+    renderAt('/cabinet', <Cabinet />)
+    const open = await screen.findByRole('link', { name: /Открыть панель бота/ })
+    // the panel pre-fills the e-mail from ?email= (no auto-login)
+    expect(open).toHaveAttribute('href', 'https://salon.example.kz/login?email=o%2Btest%40example.kz')
+    const login = screen.getByTestId('panel-login')
+    expect(login).toHaveTextContent('Вход — тем же e-mail и паролем, что в кабинете')
+    expect(login).toHaveTextContent('Пароль от панели меняется в самой панели')
+    expect(screen.queryByText(/Ссылка создаёт ваш логин и пароль в панели/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Показать ссылку для первого входа' })).toBeNull()
+    expect(screen.getByTestId('panel-password-help')).toBeInTheDocument()
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/api/me/setup-link'))).toBe(false)
+  })
+
+  it('older bot (no owner from the account): plain panel address and the one-time link as before', async () => {
+    mockFetch(routes({ ...ME, owner_preset: false }))
+    renderAt('/cabinet', <Cabinet />)
+    const open = await screen.findByRole('link', { name: /Открыть панель бота/ })
+    expect(open).toHaveAttribute('href', 'https://salon.example.kz')
+    expect(screen.getByRole('button', { name: 'Показать ссылку для первого входа' })).toBeInTheDocument()
+    expect(screen.queryByTestId('panel-login')).toBeNull()
+  })
 })
 
 describe('staff: setup help in the application card', () => {
