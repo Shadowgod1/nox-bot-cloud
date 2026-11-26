@@ -23,7 +23,7 @@ staff_only = [Depends(current_staff)]
 # auth first (401 for anonymous), then CSRF (403); FastAPI caches current_staff per request
 staff_mutation = [Depends(current_staff), Depends(csrf_protect)]
 
-COIN_PRESETS = [30000, 100000, 300000]
+COIN_PRESETS = [30000, 60000, 120000]
 _LIST_COLS = "id, company, contact_name, email, phone, slug, status, coins_limit, tariff, created_at, updated_at"
 
 

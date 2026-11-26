@@ -194,5 +194,5 @@ async def test_staff_config(client, pool):
     await staff_login(client, pool)
     cfg = (await client.get("/api/staff/config")).json()
     assert len(cfg.pop("tariffs")) == 3
-    assert cfg == {"coin_presets": [30000, 100000, 300000], "instance_domain": "example.kz",
+    assert cfg == {"coin_presets": [30000, 60000, 120000], "instance_domain": "example.kz",
                    "custom_key_supported": True}

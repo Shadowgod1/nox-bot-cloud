@@ -38,7 +38,7 @@ async def test_choose_tariff_issues_invoice_and_mails_it(other, pool):
     assert me["invoice_no"].startswith("NOX-") and me["invoice_no"].endswith("-00001")
     letters = {m.to: m for m in mailer.OUTBOX}
     assert "Счёт NOX-" in letters[REG["email"]].subject
-    assert "39 000 ₸" in letters[REG["email"]].text and "/invoice" in letters[REG["email"]].text
+    assert "100 000 ₸" in letters[REG["email"]].text and "/invoice" in letters[REG["email"]].text
     assert "Выставлен счёт" in letters["staff@example.kz"].subject
 
     inv = (await other.get("/api/me/invoice")).json()
@@ -69,25 +69,25 @@ async def test_tariff_rules(client, other, pool):
 async def test_mark_paid_records_payment_and_queues_bot(client, other, internal, pool):
     aid = await _awaiting(client, other, pool)
     r = await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client),
-                          json={"amount_kzt": 39000, "reference": "п/п 123", "anthropic_key": KEY})
+                          json={"amount_kzt": 100000, "reference": "п/п 123", "anthropic_key": KEY})
     assert r.status_code == 200, r.text
     pay = await pool.fetchrow("SELECT * FROM payments")
-    assert (pay["amount_kzt"], pay["tariff"], pay["reference"], pay["method"]) == (39000, "business", "п/п 123", "invoice")
+    assert (pay["amount_kzt"], pay["tariff"], pay["reference"], pay["method"]) == (100000, "business", "п/п 123", "invoice")
     assert pay["invoice_no"] == await pool.fetchval("SELECT invoice_no FROM accounts")
     assert await pool.fetchval("SELECT status FROM accounts") == "approved"
     assert await pool.fetchval("SELECT coins_limit FROM accounts") == tariffs.get("business").coins
     job = (await internal.post("/internal/jobs/claim")).json()
-    assert job["coins"] == 100000 and unseal(job["llm_key_sealed"]) == KEY
+    assert job["coins"] == 60000 and unseal(job["llm_key_sealed"]) == KEY
     detail = (await client.get(f"/api/staff/applications/{aid}")).json()
-    assert detail["payments"][0]["amount_kzt"] == 39000 and detail["payments"][0]["staff_email"] == "ops@example.kz"
-    assert detail["tariff"] == "business" and detail["invoice_amount"] == 39000
+    assert detail["payments"][0]["amount_kzt"] == 100000 and detail["payments"][0]["staff_email"] == "ops@example.kz"
+    assert detail["tariff"] == "business" and detail["invoice_amount"] == 100000
     actions = [a["action"] for a in detail["audit"]]
     assert "staff.mark_paid" in actions and "staff.approve" in actions
     assert (await other.get("/api/me/invoice")).json()["paid"] is True
     staff_inv = (await client.get(f"/api/staff/applications/{aid}/invoice")).json()
     assert staff_inv["paid"] is True
     # paid twice is refused (wrong status)
-    r = await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client), json={"amount_kzt": 39000})
+    r = await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client), json={"amount_kzt": 100000})
     assert r.status_code == 409
     assert await pool.fetchval("SELECT count(*) FROM payments") == 1
 
@@ -117,7 +117,7 @@ async def test_failed_slug_change_rolls_back_payment(client, other, pool, app):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="https://bot.example.kz") as third:
         await register_verified(third, email="c@example.kz", slug="taken")
     r = await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client),
-                          json={"amount_kzt": 39000, "slug": "taken"})
+                          json={"amount_kzt": 100000, "slug": "taken"})
     assert r.status_code == 409
     assert await pool.fetchval("SELECT count(*) FROM payments") == 0
     assert await pool.fetchval("SELECT status FROM accounts WHERE id = $1", aid) == "awaiting_payment"
@@ -125,7 +125,7 @@ async def test_failed_slug_change_rolls_back_payment(client, other, pool, app):
 
 async def test_payments_ledger_is_append_only(client, other, pool):
     aid = await _awaiting(client, other, pool)
-    await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client), json={"amount_kzt": 39000})
+    await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client), json={"amount_kzt": 100000})
     with pytest.raises(asyncpg.RaiseError, match="append-only"):
         await pool.execute("UPDATE payments SET amount_kzt = 1")
     with pytest.raises(asyncpg.RaiseError, match="append-only"):

@@ -1,6 +1,6 @@
 """Tariffs: the only place where names, monthly prices (KZT) and monthly coin limits live.
 
-Prices below are launch placeholders agreed to be confirmed by Nox service before going live; changing them
+Cloud prices and coin limits from the sales price list v5 (2026-11); changing them
 affects only invoices issued afterwards (an issued invoice keeps its amount in accounts.invoice_amount).
 """
 
@@ -17,9 +17,9 @@ class Tariff:
 
 
 TARIFFS: tuple[Tariff, ...] = (
-    Tariff("start", "Старт", 15000, 30000, "Небольшой поток обращений: салон, кабинет, мастерская"),
-    Tariff("business", "Бизнес", 39000, 100000, "Постоянный поток клиентов, несколько услуг и сотрудников"),
-    Tariff("pro", "Про", 99000, 300000, "Сеть филиалов или высокий поток сообщений"),
+    Tariff("start", "Старт", 70000, 30000, "~25–30 диалогов в день: цены, график, адрес, запись"),
+    Tariff("business", "Бизнес", 100000, 60000, "~50–55 диалогов в день: салон, клиника, сервис с записью"),
+    Tariff("pro", "Про", 160000, 120000, "~100–110 диалогов в день: сеть филиалов, большой поток"),
 )
 
 BY_CODE = {t.code: t for t in TARIFFS}
