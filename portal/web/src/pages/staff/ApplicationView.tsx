@@ -5,9 +5,16 @@ import { api, formatDate, money, type ApplicationDetail, type AuditOut, type Sta
 import { Shell } from '../../components/Shell'
 import { Alert, Button, Card, Field, Input, StatusBadge } from '../../components/ui'
 import { ApproveForm } from './ApproveForm'
+import { GatewayPanel, InvoicesPanel } from './GatewayPanel'
 import { useStaff } from './useStaff'
 
-const JOB_KIND: Record<string, string> = { create: 'Создание', suspend: 'Приостановка', resume: 'Возобновление', remove: 'Удаление' }
+const JOB_KIND: Record<string, string> = {
+  create: 'Создание',
+  suspend: 'Приостановка',
+  resume: 'Возобновление',
+  remove: 'Удаление',
+  rekey: 'Новый ключ шлюза',
+}
 const JOB_STATUS: Record<string, string> = { pending: 'в очереди', claimed: 'выполняется', done: 'готово', failed: 'ошибка' }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -176,6 +183,12 @@ export function ApplicationView() {
               )}
             </Section>
 
+            {((app.invoices ?? []).some((i) => i.kind !== 'subscription') || app.llm) && (
+              <Section title="Продление и пополнение">
+                <InvoicesPanel app={app} onChanged={() => void load()} />
+              </Section>
+            )}
+
             <Section title="Задания провизионера">
               {app.jobs.length === 0 ? (
                 <p className="text-[13.5px] text-ink-3">Заданий нет</p>
@@ -205,6 +218,11 @@ export function ApplicationView() {
 
           <div className="flex flex-col gap-5">
             {openJob && <Alert tone="info">Выполняется: {JOB_KIND[openJob.kind] ?? openJob.kind}. Страница обновляется сама.</Alert>}
+            {(app.llm || (app.keys ?? []).length > 0 || ['active', 'suspended'].includes(app.status)) && (
+              <Section title={app.local_install ? 'LLM-шлюз (локальная установка)' : 'LLM-шлюз'}>
+                <GatewayPanel app={app} gatewayUrl={config?.gateway_url} onChanged={() => void load()} />
+              </Section>
+            )}
             {app.status === 'awaiting_payment' && config && (
               <Section title="Отметить оплату">
                 <ApproveForm
