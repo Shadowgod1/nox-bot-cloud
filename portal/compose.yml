@@ -1,0 +1,72 @@
+# Nox client portal (bot.noxsw.kz). Installed by deploy/cloud/portal-install.sh into /opt/nox-portal;
+# runbook: deploy/cloud/PORTAL.md.
+#
+#   docker compose -p nox-portal --project-directory /opt/nox-portal --env-file /opt/nox-portal/.env up -d
+#
+# - web: the only public entry, 127.0.0.1:${NOX_HTTP_PORT} <- Cloudflare Tunnel (bot.noxsw.kz)
+# - api: no docker socket, no root, read-only filesystem; its internal API for the host provisioner is
+#        published on 127.0.0.1:${NOX_INTERNAL_PORT} only and is never proxied by web
+# - db:  Postgres, reachable only on the compose network
+name: nox-portal
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: portal
+      POSTGRES_USER: portal
+      POSTGRES_PASSWORD: ${NOX_DB_PASSWORD:?NOX_DB_PASSWORD is not set (see .env.example)}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks: [portal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portal -d portal"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: ./backend
+    image: nox-portal-api:${NOX_PORTAL_VERSION:-local}
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      NOX_DATABASE_URL: postgresql://portal:${NOX_DB_PASSWORD}@db:5432/portal
+      NOX_PROVISIONER_PUBKEY_FILE: /run/nox/provisioner-pub.pem
+    volumes:
+      # public half of the provisioner key pair (portal-install.sh); the private half stays root-only
+      - ./provisioner-pub.pem:/run/nox/provisioner-pub.pem:ro
+    ports:
+      - "127.0.0.1:${NOX_INTERNAL_PORT:-8099}:8001"
+    networks: [portal]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+    image: nox-portal-web:${NOX_PORTAL_VERSION:-local}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${NOX_HTTP_PORT:-8100}:8080"
+    networks: [portal]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+networks:
+  portal: {}
+
+volumes:
+  pg_data: {}
