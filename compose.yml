@@ -66,6 +66,16 @@ services:
       ILER_OPENAI_KEY: ${ILER_OPENAI_KEY:-}
       ILER_GEMINI_KEY: ${ILER_GEMINI_KEY:-}
       ILER_ANTHROPIC_KEY: ${ILER_ANTHROPIC_KEY:-}
+      # optional per-provider API base URLs (empty = the provider's public API; ignored in gateway mode)
+      ILER_OPENAI_BASE_URL: ${ILER_OPENAI_BASE_URL:-}
+      ILER_GEMINI_BASE_URL: ${ILER_GEMINI_BASE_URL:-}
+      ILER_ANTHROPIC_BASE_URL: ${ILER_ANTHROPIC_BASE_URL:-}
+      # LLM gateway mode: all providers via <url>/llm/<provider> with the virtual key instead of the keys
+      # above; the gateway keeps the coin balance (empty URL = off)
+      ILER_LLM_GATEWAY_URL: ${ILER_LLM_GATEWAY_URL:-}
+      ILER_LLM_GATEWAY_KEY: ${ILER_LLM_GATEWAY_KEY:-}
+      # "Пополнить" link on the dashboard coins card (empty = no link)
+      ILER_TOPUP_URL: ${ILER_TOPUP_URL:-}
       # ILER coins: monthly limit (0 = none) and optional model price overrides (JSON)
       ILER_MONTHLY_COINS: ${ILER_MONTHLY_COINS:-0}
       ILER_MODEL_PRICES: ${ILER_MODEL_PRICES:-}
