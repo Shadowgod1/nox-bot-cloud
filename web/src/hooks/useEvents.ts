@@ -12,7 +12,7 @@ type EventType = ServerEvent['type']
 type DataOf<K extends EventType> = Extract<ServerEvent, { type: K }>['data']
 type Handler = (data: unknown) => void
 
-const EVENT_TYPES: EventType[] = ['message.new', 'conversation.updated', 'booking.updated', 'whatsapp.status']
+const EVENT_TYPES: EventType[] = ['message.new', 'conversation.updated', 'booking.updated', 'whatsapp.status', 'bot.status']
 
 const subscribers = new Map<EventType, Set<Handler>>()
 let source: EventSource | null = null

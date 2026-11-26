@@ -28,4 +28,9 @@ export const BOT: BotSettings = {
   booking_request_timeout_min: 15,
   booking_timeout_message: 'later',
   no_coins_message: 'Спасибо за сообщение! Сейчас подключится менеджер и ответит вам.',
+  // reply rules
+  new_contacts_only: false,
+  exclude_phones: [],
+  work_hours_mode: 'reply',
+  timezone: 'Asia/Almaty',
 }
