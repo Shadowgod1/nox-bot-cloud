@@ -267,9 +267,17 @@ def _require_smtp_password_on_target_change(incoming: dict, stored: NotifySettin
                            "Enter the SMTP password again after changing the server, port or login")
 
 
+def _notify_out(n: NotifySettings) -> dict:
+    """Masked settings; the Telegram bot token is write-only: only "set" (a bare mask) or null."""
+    out = masked(n)
+    if out.get("telegram_bot_token"):
+        out["telegram_bot_token"] = MASK
+    return out
+
+
 @router.get("/api/settings/notify", response_model=NotifyPublic)
 async def get_settings_notify(_: User = Depends(require_owner)):
-    return masked(await settings_store.get("notify", NotifySettings))
+    return _notify_out(await settings_store.get("notify", NotifySettings))
 
 
 @router.put("/api/settings/notify", response_model=NotifyPublic, dependencies=[Depends(csrf_protect)])
@@ -280,4 +288,142 @@ async def put_settings_notify(body: NotifyPublic, user: User = Depends(require_o
     new = _validated(NotifySettings, incoming, stored)
     await settings_store.put("notify", new)
     await audit(user.id, "settings.notify_updated", {})
-    return masked(new)
+    return _notify_out(new)
+
+
+# --- reply rules ----------------------------------------------------------------------------------
+
+class BotPauseRequest(BaseModel):
+    paused: bool
+
+
+class BotPauseState(BaseModel):
+    enabled: bool
+
+
+@router.get("/api/settings/bot/pause", response_model=BotPauseState)
+async def get_bot_pause(_: User = Depends(current_user)):
+    return {"enabled": (await settings_store.get("bot", BotSettings)).enabled}
+
+
+@router.post("/api/settings/bot/pause", response_model=BotPauseState, dependencies=[Depends(csrf_protect)])
+async def post_bot_pause(body: BotPauseRequest, user: User = Depends(current_user)):
+    """The header switch "Бот на паузе": changes only `enabled`, so it cannot overwrite other settings."""
+    bot = await settings_store.get("bot", BotSettings)
+    bot.enabled = not body.paused
+    await settings_store.put("bot", bot)
+    await audit(user.id, "settings.bot_paused" if body.paused else "settings.bot_resumed", {})
+    from iler import events
+
+    events.publish("bot.status", {"enabled": bot.enabled})
+    return {"enabled": bot.enabled}
+
+
+class KnownContacts(BaseModel):
+    count: int
+
+
+@router.get("/api/settings/bot/known-contacts", response_model=KnownContacts)
+async def get_known_contacts(_: User = Depends(current_user)):
+    """How many chats the bot treats as "wrote before the bot was linked" (reply rule "only new contacts")."""
+    from iler import reply_rules
+
+    return {"count": await reply_rules.known_count()}
+
+
+# --- lead notifications ---------------------------------------------------------------------------
+
+class TelegramChatsRequest(BaseModel):
+    # a newly typed token (not saved yet); empty or masked = the stored one
+    token: str | None = None
+
+
+class TelegramChat(BaseModel):
+    id: str
+    title: str
+
+
+class TelegramChatsResult(BaseModel):
+    ok: bool
+    chats: list[TelegramChat] = []
+    error: str | None = None
+
+
+@router.post("/api/settings/notify/telegram/chats", response_model=TelegramChatsResult,
+             response_model_exclude_none=True, dependencies=[Depends(csrf_protect)])
+async def post_telegram_chats(body: TelegramChatsRequest, _: User = Depends(require_owner)):
+    """Chats that wrote /start to the owner's Telegram bot, to pick where notifications go."""
+    from iler import notify
+
+    token = (body.token or "").strip()
+    if not token or token.startswith(MASK):
+        stored = (await settings_store.get("notify", NotifySettings)).telegram_bot_token
+        token = stored.get_secret_value() if stored else ""
+    if not token:
+        return TelegramChatsResult(ok=False, error="укажите токен бота")
+    try:
+        chats = await notify.telegram_chats(token)
+    except notify.TelegramError as e:
+        return TelegramChatsResult(ok=False, error=str(e))
+    return TelegramChatsResult(ok=True, chats=chats)
+
+
+class ChannelResult(BaseModel):
+    ok: bool
+    sent: int = 0
+    error: str | None = None
+
+
+class NotifyTestResult(BaseModel):
+    whatsapp: ChannelResult | None = None
+    telegram: ChannelResult | None = None
+
+
+TEST_TEXT = (
+    "Проверка уведомлений {brand} Bot.\n"
+    "Сюда будут приходить заявки клиентов, например:\n"
+    "Новая заявка #15\n"
+    "Имя: «Айгерим»\n"
+    "Телефон: +7 701 123 45 67\n"
+    "Услуга: «Маникюр с покрытием»\n"
+    "Когда: завтра в 15:00\n"
+    "{link}"
+)
+
+
+@router.post("/api/settings/notify/test", response_model=NotifyTestResult, dependencies=[Depends(csrf_protect)])
+async def post_notify_test(user: User = Depends(require_owner)):
+    """Send a sample notification to the saved admin numbers (from the connected WhatsApp number, to those
+    numbers only) and Telegram chats. Channels that are not set up are left out of the answer."""
+    import uuid
+
+    from iler import notify
+    from iler.config import brand_name
+    from iler.engine import sender
+
+    stored = await settings_store.get("notify", NotifySettings)
+    base = stored.admin_url
+    text = TEST_TEXT.format(brand=brand_name(), link=f"Диалог: {base}/conversations" if base else "").strip()
+    result = NotifyTestResult()
+    run = uuid.uuid4().hex[:12]  # every click is a new test message
+
+    targets = sender.admin_targets(stored)
+    if targets:
+        statuses = [await sender.send_to_jid(f"admin:test:{run}:{jid}", jid, text) for jid in targets]
+        sent = sum(s in ("sent", "uncertain") for s in statuses)
+        result.whatsapp = ChannelResult(
+            ok=sent == len(targets), sent=sent,
+            error=None if sent == len(targets) else "WhatsApp не отправил сообщение — проверьте, что номер подключён",
+        )
+    if notify.telegram_configured(stored):
+        token = stored.telegram_bot_token.get_secret_value()
+        sent, error = 0, None
+        for chat_id in stored.telegram_chat_ids:
+            try:
+                await notify.telegram_send(token, chat_id, text)
+                sent += 1
+            except notify.TelegramError as e:
+                error = str(e)
+        result.telegram = ChannelResult(ok=error is None, sent=sent, error=error)
+    await audit(user.id, "settings.notify_tested", {})
+    return result
