@@ -5,7 +5,7 @@ import logging
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from nox_portal import billing, codes, letters, mailer, ratelimit, security, slugs, tariffs
+from nox_portal import billing, codes, letters, mailer, ratelimit, security, slugs, tariffs, wallet
 from nox_portal.config import get_settings
 from nox_portal.db import get_pool
 from nox_portal.deps import (
@@ -14,15 +14,16 @@ from nox_portal.deps import (
 )
 from nox_portal.errors import ApiError
 from nox_portal.schemas import (
-    ClientMe, Credentials, EmailOnly, Invoice, Ok, Register, ResetConfirm, SetupLink, SlugCheck, TariffChoice,
-    TariffOut, Verify,
+    ClientMe, Credentials, EmailOnly, Invoice, InvoiceListItem, LlmBalance, Ok, Register, ResetConfirm, SetupLink,
+    SlugCheck, TariffChoice, TariffOut, UsageDay, UsageModel, UsageOut, Verify,
 )
 
 log = logging.getLogger("nox_portal.client")
 router = APIRouter(tags=["client"])
 
 _ACCOUNT_COLS = ("id, email, password_hash, company, contact_name, phone, slug, status, admin_url, reject_reason,"
-                 " setup_link_enc, tariff, invoice_no, invoice_amount, invoice_issued_at, created_at")
+                 " setup_link_enc, tariff, invoice_no, invoice_amount, invoice_issued_at, created_at, period_start,"
+                 " local_install")
 # unverified registrations hold their slug for a day, then disappear
 UNVERIFIED_TTL = "24 hours"
 INVALID_CREDENTIALS = ApiError(401, "invalid_credentials", "Неверный e-mail или пароль")
@@ -35,6 +36,7 @@ def client_me(row: asyncpg.Record) -> ClientMe:
         admin_url=row["admin_url"], reject_reason=row["reject_reason"],
         setup_link_available=bool(row["setup_link_enc"]), tariff=row["tariff"], invoice_no=row["invoice_no"],
         invoice_amount=row["invoice_amount"], created_at=row["created_at"],
+        llm_enabled=row["period_start"] is not None, local_install=row["local_install"],
     )
 
 
@@ -280,3 +282,79 @@ async def get_invoice(client: Principal = Depends(current_client)):
     pool = get_pool()
     row = await pool.fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1", client.id)
     return billing.invoice_from_row(row, await billing.is_paid(pool, client.id, row["invoice_no"]))
+
+
+# ---- LLM gateway: balance, usage, top-up, invoices --------------------------------------------
+
+
+async def _llm_balance(conn, account_id: int) -> LlmBalance:
+    from nox_portal.api.staff import llm_balance
+
+    return await llm_balance(conn, account_id)
+
+
+@router.get("/api/me/usage", response_model=UsageOut)
+async def get_usage(client: Principal = Depends(current_client)):
+    """Balance and spend of the current period, by day (portal time zone) and by model."""
+    pool = get_pool()
+    acc = await pool.fetchrow("SELECT period_start, counted_since FROM accounts WHERE id = $1", client.id)
+    if acc["period_start"] is None:
+        raise ApiError(404, "llm_disabled", "Бот не подключён к балансу коинов Nox")
+    by_day = await pool.fetch(
+        "SELECT to_char((created_at AT TIME ZONE $3)::date, 'YYYY-MM-DD') AS day, sum(coins) AS coins"
+        " FROM llm_usage WHERE account_id = $1 AND created_at >= $2 GROUP BY 1 ORDER BY 1",
+        client.id, acc["counted_since"], get_settings().tz,
+    )
+    by_model = await pool.fetch(
+        "SELECT provider, model, count(*) AS requests, sum(input_tokens + cache_write_tokens + cache_read_tokens)"
+        " AS input_tokens, sum(output_tokens) AS output_tokens, sum(coins) AS coins FROM llm_usage"
+        " WHERE account_id = $1 AND created_at >= $2 GROUP BY 1, 2 ORDER BY coins DESC",
+        client.id, acc["counted_since"],
+    )
+    return UsageOut(
+        balance=await _llm_balance(pool, client.id),
+        by_day=[UsageDay(day=r["day"], coins=float(r["coins"])) for r in by_day],
+        by_model=[UsageModel(provider=r["provider"], model=r["model"], requests=r["requests"],
+                             input_tokens=r["input_tokens"], output_tokens=r["output_tokens"], coins=float(r["coins"]))
+                  for r in by_model],
+    )
+
+
+@router.post("/api/me/topup", response_model=Invoice, dependencies=[Depends(current_client), Depends(csrf_protect)])
+async def post_topup(request: Request, client: Principal = Depends(current_client)):
+    """Invoice for a coin pack (an unpaid one from the last 30 days is shown again instead of a new one)."""
+    pool = get_pool()
+    async with pool.acquire() as conn, conn.transaction():
+        acc = await conn.fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1 FOR UPDATE", client.id)
+        if acc["period_start"] is None or acc["status"] in ("removed", "rejected"):
+            raise ApiError(409, "llm_disabled", "Пополнение доступно после подключения бота")
+        inv, created = await billing.topup_invoice(conn, client.id)
+        if created:
+            await audit(conn, "client.topup_invoice", account_id=client.id, ip=ratelimit.client_ip(request),
+                        details={"invoice": inv["number"], "amount": inv["amount_kzt"], "coins": inv["coins"]})
+    if created:
+        amount = tariffs.money(inv["amount_kzt"])
+        await mailer.send_quiet(acc["email"], *letters.topup_invoice(acc["contact_name"], inv["number"], amount,
+                                                                     inv["coins"]))
+        for to in mailer.staff_recipients():
+            await mailer.send_quiet(to, *letters.staff_invoice_issued(acc["company"], inv["number"], "Пакет коинов",
+                                                                      amount))
+    return billing.invoice_from_record(acc, inv)
+
+
+@router.get("/api/me/invoices", response_model=list[InvoiceListItem])
+async def get_invoices(client: Principal = Depends(current_client)):
+    return await billing.invoices_of(get_pool(), client.id)
+
+
+@router.get("/api/me/invoices/{number}", response_model=Invoice)
+async def get_invoice_by_number(number: str, client: Principal = Depends(current_client)):
+    pool = get_pool()
+    acc = await pool.fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1", client.id)
+    if number == acc["invoice_no"]:
+        return billing.invoice_from_row(acc, await billing.is_paid(pool, client.id, acc["invoice_no"]))
+    inv = await pool.fetchrow(f"SELECT {billing.INVOICE_COLS} FROM invoices WHERE account_id = $1 AND number = $2",
+                              client.id, number)
+    if inv is None:
+        raise ApiError(404, "not_found", "Счёт не найден")
+    return billing.invoice_from_record(acc, inv)

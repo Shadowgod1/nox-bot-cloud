@@ -80,6 +80,12 @@ PROV_ENV="$ETC_DIR/provisioner.env"
 if [[ ! -f "$PROV_ENV" ]]; then
   (umask 077 && cp "$SCRIPT_DIR/provisioner.env.example" "$PROV_ENV")
   log "created $PROV_ENV"
+else
+  # keys introduced by a newer release (NOX_GATEWAY_URL, ...) are appended, existing values stay
+  while IFS= read -r line; do
+    [[ "$line" =~ ^([A-Z0-9_]+)= ]] || continue
+    grep -q "^${BASH_REMATCH[1]}=" "$PROV_ENV" || { printf '%s\n' "$line" >>"$PROV_ENV"; log "added provisioner setting ${BASH_REMATCH[1]}"; }
+  done <"$SCRIPT_DIR/provisioner.env.example"
 fi
 token="$(env_get "$PROV_ENV" NOX_PROVISIONER_TOKEN)"
 if [[ -z "$token" || "$token" == "__GENERATE__" ]]; then
@@ -124,6 +130,9 @@ if [[ "$(env_get "$ENV_FILE" NOX_EMAIL_MODE)" == "smtp" ]]; then
 elif [[ "$(env_get "$ENV_FILE" NOX_EMAIL_MODE)" == "log" ]]; then
   warn "NOX_EMAIL_MODE=log: codes and setup links are printed to the log. Development only!"
 fi
+if [[ -z "$(env_get "$ENV_FILE" NOX_UPSTREAM_ANTHROPIC_KEY)$(env_get "$ENV_FILE" NOX_UPSTREAM_OPENAI_KEY)$(env_get "$ENV_FILE" NOX_UPSTREAM_GEMINI_KEY)" ]]; then
+  warn "LLM gateway has no provider key: fill in NOX_UPSTREAM_*_KEY in $ENV_FILE (see PORTAL.md), then re-run this script"
+fi
 
 # ---- 4. containers --------------------------------------------------------------------------
 
@@ -165,7 +174,7 @@ if [[ "$INSTALL_SYSTEMD" == "1" ]]; then
       systemctl enable --now nox-provisioner.timer >/dev/null
       ok "nox-provisioner.timer enabled (every 30 s)"
     else
-      warn "fill in CF_* and NOX_DEFAULT_ANTHROPIC_KEY in $PROV_ENV, then: systemctl enable --now nox-provisioner.timer"
+      warn "fill in CF_* in $PROV_ENV, then: systemctl enable --now nox-provisioner.timer"
     fi
   else
     warn "systemd is not running: units copied to $SYSTEMD_DIR but not enabled"
@@ -176,7 +185,7 @@ echo
 ok "Nox portal installed in $PORTAL_DIR"
 echo "Next (details in $PORTAL_DIR/PORTAL.md):"
 echo "  1. SMTP: NOX_SMTP_* in $ENV_FILE, then re-run this script"
-echo "  2. Provisioner: CF_* and NOX_DEFAULT_ANTHROPIC_KEY in $PROV_ENV; check with"
+echo "  2. Provisioner: CF_* (and NOX_GATEWAY_URL if not https://bot.noxsw.kz) in $PROV_ENV; check with"
 echo "     sudo bash -c 'set -a; . $PROV_ENV; python3 $PORTAL_DIR/bin/nox-provisioner.py check'"
 echo "  3. Tunnel route: bot.noxsw.kz -> HTTP 127.0.0.1:$(env_get "$ENV_FILE" NOX_HTTP_PORT)"
 echo "  4. Staff account: cd $PORTAL_DIR && docker compose exec api python manage.py create-staff --email <e-mail>"

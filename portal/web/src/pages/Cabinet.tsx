@@ -4,6 +4,7 @@ import { CheckCircle2, Clock, Copy, ExternalLink, FileText, Hourglass, KeyRound,
 import { api, ApiError, formatDate, money, type ClientMe } from '../api'
 import { Shell } from '../components/Shell'
 import { Alert, Button, Card, StatusBadge } from '../components/ui'
+import { CoinsPanel } from './CoinsPanel'
 import { TariffPicker } from './TariffPicker'
 
 function StateBlock({ icon, title, children }: { icon: ReactNode; title: string; children?: ReactNode }) {
@@ -219,6 +220,7 @@ export function Cabinet() {
           <Card className="p-6">
             <StatusView me={me} reload={load} setMe={setMe} />
           </Card>
+          {me.llm_enabled && !['removed', 'rejected'].includes(me.status) && <CoinsPanel />}
           <Card className="p-6">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-[15px] font-bold text-ink">Заявка</h2>

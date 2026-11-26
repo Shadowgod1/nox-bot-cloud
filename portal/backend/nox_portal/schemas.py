@@ -135,6 +135,9 @@ class ClientMe(BaseModel):
     invoice_no: str | None
     invoice_amount: int | None
     created_at: datetime
+    # the bot uses the Nox LLM gateway: balance, usage and top-ups are shown in the cabinet
+    llm_enabled: bool = False
+    local_install: bool = False
 
 
 class SetupLink(BaseModel):
@@ -178,6 +181,7 @@ class JobOut(BaseModel):
     slug: str
     coins: int | None
     has_custom_key: bool
+    has_gateway_key: bool = False
     error: str | None
     created_at: datetime
     claimed_at: datetime | None
@@ -220,6 +224,10 @@ class ApplicationDetail(ApplicationListItem):
     invoice_no: str | None
     invoice_amount: int | None
     invoice_issued_at: datetime | None
+    local_install: bool = False
+    llm: "LlmBalance | None" = None
+    keys: list["KeyOut"] = []
+    invoices: list["InvoiceListItem"] = []
     payments: list["PaymentOut"]
     jobs: list[JobOut]
     audit: list[AuditOut]
@@ -261,6 +269,10 @@ class Invoice(BaseModel):
     bot_host: str
     seller: Seller
     paid: bool
+    # subscription: the first invoice; renewal: next month; topup: coin pack
+    kind: Literal["subscription", "renewal", "topup"] = "subscription"
+    period_start: datetime | None = None
+    period_end: datetime | None = None
 
 
 class PaymentOut(BaseModel):
@@ -280,6 +292,93 @@ class StaffConfig(BaseModel):
     coin_presets: list[int]
     instance_domain: str
     custom_key_supported: bool
+    topup: TariffOut | None = None
+    gateway_url: str = ""
+
+
+# ---- LLM gateway: balance, usage, keys, invoices ----------------------------------------------
+
+
+class LlmBalance(BaseModel):
+    coins_left: int
+    monthly_limit: int
+    monthly_coins: float
+    topup_coins: float
+    spent: float
+    period_start: datetime | None
+    period_end: datetime | None
+    status: Literal["active", "suspended", "revoked"]
+
+
+class UsageDay(BaseModel):
+    day: str
+    coins: float
+
+
+class UsageModel(BaseModel):
+    provider: str
+    model: str
+    requests: int
+    input_tokens: int
+    output_tokens: int
+    coins: float
+
+
+class UsageOut(BaseModel):
+    balance: LlmBalance
+    by_day: list[UsageDay]
+    by_model: list[UsageModel]
+
+
+class KeyOut(BaseModel):
+    id: int
+    prefix: str
+    status: str
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+
+
+class InvoiceListItem(BaseModel):
+    id: int | None
+    number: str
+    kind: Literal["subscription", "renewal", "topup"]
+    tariff: str | None
+    amount_kzt: int
+    coins: int | None
+    issued_at: datetime | None
+    period_start: datetime | None
+    paid: bool
+
+
+class MarkInvoicePaid(BaseModel):
+    amount_kzt: int = Field(gt=0, le=1_000_000_000)
+    reference: str = Field("", max_length=200)
+    note: str = Field("", max_length=1000)
+
+
+class KeyIssued(BaseModel):
+    ok: bool = True
+    prefix: str
+    # the full key, only for local installs (shown once); cloud keys travel sealed to the provisioner
+    key: str | None = None
+    job_id: int | None = None
+
+
+class LocalAccount(BaseModel):
+    company: Text200
+    contact_name: Text200
+    email: Email
+    phone: Annotated[str, Field(max_length=32), AfterValidator(_phone)]
+    slug: Slug
+    tariff: str = Field(max_length=32)
+    coins: int | None = Field(None, ge=0, le=999_999_999)
+
+
+class LocalAccountCreated(BaseModel):
+    account_id: int
+    prefix: str
+    key: str
 
 
 # ---- internal (provisioner) -----------------------------------------------------------------
@@ -293,6 +392,9 @@ class ClaimedJob(BaseModel):
     public_url: str
     # base64 RSA-OAEP ciphertext for the provisioner's private key, or None (use the default key)
     llm_key_sealed: str | None
+    # the account's LLM gateway virtual key (nox_vk_...), sealed the same way; create / rekey jobs.
+    # A per-client llm_key_sealed takes precedence (the instance then talks to Anthropic directly).
+    gateway_key_sealed: str | None = None
 
 
 class JobResult(BaseModel):

@@ -40,7 +40,10 @@ export function Applications() {
     <Shell subtitle="Заявки" home="/staff" user={staff?.email} onLogout={logout} wide>
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-[22px] font-extrabold tracking-tight text-ink">Заявки</h1>
-        <Link to="/staff/audit" className="ml-auto text-[13.5px] font-semibold text-accent hover:text-accent-hover">
+        <Link to="/staff/local" className="ml-auto text-[13.5px] font-semibold text-accent hover:text-accent-hover">
+          Локальная установка
+        </Link>
+        <Link to="/staff/audit" className="text-[13.5px] font-semibold text-accent hover:text-accent-hover">
           Журнал действий
         </Link>
       </div>

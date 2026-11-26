@@ -99,6 +99,8 @@ export interface ClientMe {
   invoice_no: string | null
   invoice_amount: number | null
   created_at: string
+  llm_enabled?: boolean
+  local_install?: boolean
 }
 
 export interface StaffMe {
@@ -129,6 +131,7 @@ export interface JobOut {
   slug: string
   coins: number | null
   has_custom_key: boolean
+  has_gateway_key?: boolean
   error: string | null
   created_at: string
   claimed_at: string | null
@@ -157,6 +160,10 @@ export interface ApplicationDetail extends ApplicationListItem {
   invoice_no: string | null
   invoice_amount: number | null
   invoice_issued_at: string | null
+  local_install?: boolean
+  llm?: LlmBalance | null
+  keys?: KeyOut[]
+  invoices?: InvoiceListItem[]
   payments: PaymentOut[]
   jobs: JobOut[]
   audit: AuditOut[]
@@ -167,6 +174,8 @@ export interface StaffConfig {
   coin_presets: number[]
   instance_domain: string
   custom_key_supported: boolean
+  topup?: Tariff | null
+  gateway_url?: string
 }
 
 export const STATUS_LABELS: Record<Status, string> = {
@@ -227,6 +236,69 @@ export interface Invoice {
   bot_host: string
   seller: { name: string; bin: string; address: string; bank: string; iik: string; bik: string; kbe: string; phone: string }
   paid: boolean
+  kind?: 'subscription' | 'renewal' | 'topup'
+  period_start?: string | null
+  period_end?: string | null
+}
+
+export interface LlmBalance {
+  coins_left: number
+  monthly_limit: number
+  monthly_coins: number
+  topup_coins: number
+  spent: number
+  period_start: string | null
+  period_end: string | null
+  status: 'active' | 'suspended' | 'revoked'
+}
+
+export interface UsageOut {
+  balance: LlmBalance
+  by_day: { day: string; coins: number }[]
+  by_model: { provider: string; model: string; requests: number; input_tokens: number; output_tokens: number; coins: number }[]
+}
+
+export interface InvoiceListItem {
+  id: number | null
+  number: string
+  kind: 'subscription' | 'renewal' | 'topup'
+  tariff: string | null
+  amount_kzt: number
+  coins: number | null
+  issued_at: string | null
+  period_start: string | null
+  paid: boolean
+}
+
+export interface KeyOut {
+  id: number
+  prefix: string
+  status: string
+  created_at: string
+  last_used_at: string | null
+  revoked_at: string | null
+}
+
+export interface KeyIssued {
+  ok: boolean
+  prefix: string
+  key: string | null
+  job_id: number | null
+}
+
+export const INVOICE_KIND: Record<InvoiceListItem['kind'], string> = {
+  subscription: 'Подключение',
+  renewal: 'Продление',
+  topup: 'Пакет коинов',
+}
+
+export function coins(n: number): string {
+  return Math.floor(n).toLocaleString('ru-RU').replace(/ | /g, ' ')
+}
+
+export function formatDay(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleDateString('ru-RU', { timeZone: 'Asia/Almaty', day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 
 export function money(amount: number): string {

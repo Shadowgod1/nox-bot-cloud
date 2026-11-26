@@ -42,6 +42,8 @@ LIMITS: dict[str, tuple[int, int]] = {
     "slug:ip": (60, 600),
     "staff-login:ip": (15, 600),
     "staff-login:email": (20, 600),
+    # LLM gateway: requests with a missing / unknown virtual key, per IP
+    "llm-badkey:ip": (60, 600),
 }
 
 

@@ -1,0 +1,24 @@
+# Local smoke run of the portal with a mock LLM upstream (never on a server, never with real keys):
+#
+#   docker compose -p nox-smoke -f portal/compose.yml -f portal/smoke/compose.smoke.yml --env-file <smoke .env> up -d --build
+#
+# The api talks to the mock instead of the providers (NOX_UPSTREAM_*_BASE_URL) with a fake company key.
+services:
+  mock:
+    image: python:3.12-slim
+    command: ["python", "/mock/mock_upstream.py"]
+    volumes:
+      - ./smoke/mock_upstream.py:/mock/mock_upstream.py:ro
+    networks: [portal]
+
+  api:
+    environment:
+      NOX_UPSTREAM_ANTHROPIC_BASE_URL: http://mock:9000
+      NOX_UPSTREAM_OPENAI_BASE_URL: http://mock:9000
+      NOX_UPSTREAM_GEMINI_BASE_URL: http://mock:9000
+      NOX_UPSTREAM_ANTHROPIC_KEY: mock-company-key
+      NOX_UPSTREAM_OPENAI_KEY: mock-company-key
+      NOX_UPSTREAM_GEMINI_KEY: mock-company-key
+    depends_on:
+      mock:
+        condition: service_started

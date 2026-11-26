@@ -8,12 +8,21 @@ Runs from nox-provisioner.service (deploy/cloud/systemd/) with EnvironmentFile=/
 (root-only). The portal container has no docker socket and no root: it only queues jobs. This script polls
 the portal's internal API on 127.0.0.1 with a shared token, and for each job:
 
-  create  -> iler-client.sh create <slug> --port <free> --coins N --public-url https://<slug>.<domain>
-             [--brand nox], LLM key via the instance's set-llm-keys.sh (non-interactive), Cloudflare tunnel
-             ingress rule + proxied CNAME, then reports port, admin URL and the one-time setup URL
+  create  -> iler-client.sh create <slug> --port <free> [--coins N] --public-url https://<slug>.<domain>
+             [--brand nox], LLM access (see below), Cloudflare tunnel ingress rule + proxied CNAME, then
+             reports port, admin URL and the one-time setup URL
   suspend -> iler-client.sh stop <slug>
   resume  -> iler-client.sh start <slug>
   remove  -> iler-client.sh remove <slug> --yes, then the tunnel rule and the CNAME are removed
+  rekey   -> writes a reissued LLM gateway key into the instance .env and restarts iler-core
+
+LLM access of a new instance, in this order:
+  1. a per-client Anthropic key (llm_key_sealed) -> set-llm-keys.sh, the bot talks to Anthropic directly;
+  2. the portal's LLM gateway (gateway_key_sealed, the usual case) -> ILER_LLM_GATEWAY_URL (NOX_GATEWAY_URL)
+     and ILER_LLM_GATEWAY_KEY (+ ILER_TOPUP_URL from NOX_TOPUP_URL) in <dir>/.env (mode 600), the
+     provider keys ILER_*_KEY are emptied and
+     ILER_MONTHLY_COINS is 0 (the portal meters coins), then iler-core is restarted;
+  3. neither (a job queued before the gateway existed) -> NOX_DEFAULT_ANTHROPIC_KEY via set-llm-keys.sh.
 
 Never logs secrets: keys, tokens and setup links are redacted from every line it prints or reports.
 Python 3 standard library only; RSA unsealing uses the openssl CLI.
@@ -36,6 +45,8 @@ from pathlib import Path
 from typing import Callable
 
 SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}[a-z0-9]$")
+GATEWAY_KEY_RE = re.compile(r"^nox_vk_[A-Za-z0-9_-]{20,128}$")
+PROVIDER_KEYS = ("ILER_ANTHROPIC_KEY", "ILER_OPENAI_KEY", "ILER_GEMINI_KEY")
 CF_API = "https://api.cloudflare.com/client/v4"
 TOKEN_HEADER = "X-Nox-Provisioner-Token"
 # environment variables never passed to child processes (iler-client.sh, install.sh, docker)
@@ -76,6 +87,8 @@ class Config:
     token: str = ""
     key_file: str = "/etc/nox-portal/provisioner-key.pem"
     default_key: str = ""
+    gateway_url: str = "https://bot.noxsw.kz"
+    topup_url: str = "https://bot.noxsw.kz/cabinet"
     iler_client: str = "/opt/iler/bundle/deploy/cloud/iler-client.sh"
     clients_dir: str = "/opt/iler/clients"
     domain: str = "noxsw.kz"
@@ -98,6 +111,8 @@ class Config:
             token=e.get("NOX_PROVISIONER_TOKEN", ""),
             key_file=e.get("NOX_PROVISIONER_KEY_FILE", cls.key_file),
             default_key=e.get("NOX_DEFAULT_ANTHROPIC_KEY", ""),
+            gateway_url=(e.get("NOX_GATEWAY_URL") or cls.gateway_url).rstrip("/"),
+            topup_url=e.get("NOX_TOPUP_URL") or cls.topup_url,
             iler_client=e.get("NOX_ILER_CLIENT", cls.iler_client),
             clients_dir=e.get("NOX_CLIENTS_DIR", cls.clients_dir).rstrip("/"),
             domain=e.get("NOX_DOMAIN", cls.domain),
@@ -125,6 +140,8 @@ class Config:
             out.append(f"NOX_ILER_CLIENT not found: {self.iler_client}")
         if not (1024 < self.port_min <= self.port_max < 65536):
             out.append("NOX_PORT_MIN / NOX_PORT_MAX are not a valid range")
+        if not re.fullmatch(r"https?://[A-Za-z0-9.:\[\]_-]+(/[A-Za-z0-9._/-]*)?", self.gateway_url):
+            out.append("NOX_GATEWAY_URL must be an http(s) URL without spaces or quotes")
         return out
 
 
@@ -325,6 +342,29 @@ def env_get(path: Path, key: str) -> str:
     return ""
 
 
+def env_set(path: Path, key: str, value: str) -> None:
+    """Replace or append KEY=value, value taken literally (same as deploy/lib/env.sh env_set). Written to a
+    temporary file next to it (mode 600) and renamed over it, so the file is never half-written."""
+    if "\n" in value or "\r" in value:
+        raise ProvisionError(f"refusing a multi-line value for {key}")
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    out, done = [], False
+    for line in lines:
+        if line.startswith(key + "="):
+            out.append(f"{key}={value}")
+            done = True
+        else:
+            out.append(line)
+    if not done:
+        out.append(f"{key}={value}")
+    tmp = path.with_name(f".{path.name}.nox-tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("\n".join(out) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
 def port_listening(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
@@ -431,7 +471,8 @@ class Provisioner:
             port = self.pick_port()
             coins = job.get("coins")
             args = ["create", slug, "--port", port, "--public-url", public_url]
-            if coins is not None:
+            # gateway mode: the portal meters coins, the instance keeps no limit of its own
+            if coins is not None and not self.gateway_mode(job):
                 args += ["--coins", int(coins)]
             if self.supports_brand():
                 args += ["--brand", "nox"]
@@ -454,8 +495,40 @@ class Provisioner:
             log(f"{slug}: owner account already exists (or setup state unknown); no setup link reported")
         return {"ok": True, "port": port, "admin_url": public_url, "setup_url": setup_url}
 
+    @staticmethod
+    def gateway_mode(job: dict) -> bool:
+        return not job.get("llm_key_sealed") and bool(job.get("gateway_key_sealed"))
+
+    def restart_core(self, directory: Path) -> None:
+        rc, out = self.run(["docker", "compose", "--project-directory", directory, "-f", directory / "compose.yml",
+                            "--env-file", directory / ".env", "up", "-d", "--no-build", "iler-core"], None)
+        if rc != 0:
+            raise ProvisionError(f"restarting iler-core failed (exit {rc}):\n{tail(out)}")
+
+    def set_gateway_key(self, job: dict, directory: Path) -> None:
+        """ILER_LLM_GATEWAY_URL / _KEY into the instance .env; no provider key stays on the instance."""
+        key = self.unseal(job["gateway_key_sealed"])
+        if not GATEWAY_KEY_RE.match(key):
+            raise ProvisionError("the unsealed gateway key does not look like nox_vk_...")
+        env_file = directory / ".env"
+        if not env_file.is_file():
+            raise ProvisionError(f"{env_file} not found")
+        env_set(env_file, "ILER_LLM_GATEWAY_URL", self.cfg.gateway_url)
+        env_set(env_file, "ILER_LLM_GATEWAY_KEY", key)
+        if self.cfg.topup_url and re.fullmatch(r"https://[^\s'\"]+", self.cfg.topup_url):
+            env_set(env_file, "ILER_TOPUP_URL", self.cfg.topup_url)  # "Пополнить" in the bot admin
+        for name in PROVIDER_KEYS:
+            if env_get(env_file, name):
+                env_set(env_file, name, "")
+        env_set(env_file, "ILER_MONTHLY_COINS", "0")
+        self.restart_core(directory)
+        log(f"{job['slug']}: LLM gateway key set ({key[:13]}..., {self.cfg.gateway_url})")
+
     def set_llm_key(self, job: dict, directory: Path) -> None:
         sealed = job.get("llm_key_sealed")
+        if self.gateway_mode(job):
+            self.set_gateway_key(job, directory)
+            return
         key = self.unseal(sealed) if sealed else self.cfg.default_key
         if not key:
             raise ProvisionError("no Anthropic key: neither a per-client key nor NOX_DEFAULT_ANTHROPIC_KEY is set")
@@ -468,6 +541,15 @@ class Provisioner:
         if rc != 0:
             raise ProvisionError(f"set-llm-keys.sh failed (exit {rc}):\n{tail(out)}")
         log(f"{job['slug']}: LLM key set ({'per-client' if sealed else 'default'})")
+
+    def do_rekey(self, job: dict) -> dict:
+        directory = self.client_dir(job["slug"])
+        if not (directory / ".env").is_file():
+            raise ProvisionError(f"no instance {job['slug']} on this host")
+        if not job.get("gateway_key_sealed"):
+            raise ProvisionError("rekey job without a key")
+        self.set_gateway_key(job, directory)
+        return {"ok": True}
 
     def do_suspend(self, job: dict) -> dict:
         self.iler("stop", job["slug"])
@@ -491,7 +573,7 @@ class Provisioner:
         if not SLUG_RE.match(slug):
             return {"ok": False, "error": f"invalid slug {slug!r}"}
         handler = {"create": self.do_create, "suspend": self.do_suspend, "resume": self.do_resume,
-                   "remove": self.do_remove}.get(str(kind))
+                   "remove": self.do_remove, "rekey": self.do_rekey}.get(str(kind))
         if handler is None:
             return {"ok": False, "error": f"unknown job kind {kind!r}"}
         log(f"job {job['id']}: {kind} {slug}")
@@ -560,8 +642,9 @@ def main(argv: list[str]) -> int:
         except ProvisionError as exc:
             log(f"check failed: {exc}")
             return 1
-        if not cfg.default_key:
-            log("warning: NOX_DEFAULT_ANTHROPIC_KEY is empty; only approvals with a per-client key will work")
+        log(f"LLM gateway for new instances: {cfg.gateway_url}")
+        if not cfg.gateway_url.startswith("https://"):
+            log("warning: NOX_GATEWAY_URL is not https; use it only for an address inside this host")
         if not Path(cfg.key_file).is_file():
             log(f"warning: {cfg.key_file} missing; per-client keys cannot be unsealed")
         return 0

@@ -131,7 +131,7 @@ async def test_payments_ledger_is_append_only(client, other, pool):
     with pytest.raises(asyncpg.RaiseError, match="append-only"):
         await pool.execute("DELETE FROM payments")
     with pytest.raises(asyncpg.RaiseError, match="append-only"):
-        await pool.execute("TRUNCATE payments")
+        await pool.execute("TRUNCATE payments CASCADE")
     # a paid account cannot be deleted from under its ledger rows
     with pytest.raises(asyncpg.ForeignKeyViolationError):
         await pool.execute("DELETE FROM accounts WHERE id = $1", aid)

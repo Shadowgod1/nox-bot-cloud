@@ -1,0 +1,136 @@
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router'
+import { Coins, PlusCircle } from 'lucide-react'
+import { api, coins, formatDay, INVOICE_KIND, money, type Invoice, type InvoiceListItem, type UsageOut } from '../api'
+import { Alert, Button, Card } from '../components/ui'
+
+/** Cabinet: coin balance of the period, spend by day and model, "Пополнить" (top-up invoice), invoices. */
+export function CoinsPanel() {
+  const navigate = useNavigate()
+  const [usage, setUsage] = useState<UsageOut | null>(null)
+  const [invoices, setInvoices] = useState<InvoiceListItem[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.get<UsageOut>('/api/me/usage').then(setUsage).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'))
+    api.get<InvoiceListItem[]>('/api/me/invoices').then(setInvoices).catch(() => undefined)
+  }, [])
+
+  async function topup() {
+    setBusy(true)
+    setError(null)
+    try {
+      const inv = await api.post<Invoice>('/api/me/topup')
+      navigate(`/invoice/${encodeURIComponent(inv.number)}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось выставить счёт')
+      setBusy(false)
+    }
+  }
+
+  const b = usage?.balance
+  const total = b ? b.monthly_coins + b.topup_coins : 0
+  const percent = b && total > 0 ? Math.max(0, Math.min(100, (b.coins_left / total) * 100)) : 0
+  const maxDay = usage ? Math.max(1, ...usage.by_day.map((d) => d.coins)) : 1
+
+  return (
+    <Card className="p-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <Coins className="size-6 text-accent" aria-hidden />
+        <h2 className="text-[17px] font-extrabold text-ink">Коины</h2>
+        <Button className="ml-auto" variant="primary" icon={<PlusCircle className="size-4" aria-hidden />} loading={busy} onClick={topup}>
+          Пополнить
+        </Button>
+      </div>
+      {error && (
+        <div className="mt-3">
+          <Alert>{error}</Alert>
+        </div>
+      )}
+      {b && (
+        <>
+          <div className="mt-4 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="text-[32px] font-extrabold tabular-nums text-ink" data-testid="coins-left">
+              {coins(b.coins_left)}
+            </span>
+            <span className="text-[14px] text-ink-2">коинов осталось</span>
+            {b.status !== 'active' && <span className="text-[13px] font-semibold text-danger">ключ отключён</span>}
+          </div>
+          <div className="mt-2 h-2 overflow-hidden rounded-full bg-sunken" role="progressbar" aria-valuenow={Math.round(percent)} aria-valuemin={0} aria-valuemax={100}>
+            <div className={percent < 10 ? 'h-full bg-danger' : percent < 25 ? 'h-full bg-warn' : 'h-full bg-ok'} style={{ width: `${percent}%` }} />
+          </div>
+          <dl className="mt-4 grid gap-x-6 gap-y-2 text-[13.5px] sm:grid-cols-3">
+            <div>
+              <dt className="text-[12px] font-semibold text-ink-3">Месячный пакет</dt>
+              <dd className="text-ink">{coins(b.monthly_coins)} (до {formatDay(b.period_end)})</dd>
+            </div>
+            <div>
+              <dt className="text-[12px] font-semibold text-ink-3">Докуплено, не сгорает</dt>
+              <dd className="text-ink">{coins(b.topup_coins)}</dd>
+            </div>
+            <div>
+              <dt className="text-[12px] font-semibold text-ink-3">Потрачено в этом месяце</dt>
+              <dd className="text-ink">{coins(b.spent)}</dd>
+            </div>
+          </dl>
+          <p className="mt-2 text-[12.5px] text-ink-3">1 коин = $0.001 расхода модели. Неиспользованный месячный пакет сгорает в конце месяца.</p>
+        </>
+      )}
+      {usage && usage.by_day.length > 0 && (
+        <div className="mt-5">
+          <h3 className="text-[13.5px] font-bold text-ink">Расход по дням</h3>
+          <ul className="mt-2 flex flex-col gap-1 text-[12.5px]" aria-label="Расход по дням">
+            {usage.by_day.map((d) => (
+              <li key={d.day} className="grid grid-cols-[84px_1fr_64px] items-center gap-2">
+                <span className="text-ink-3 tabular-nums">{d.day.split('-').reverse().join('.')}</span>
+                <span className="h-2 rounded-full bg-accent/70" style={{ width: `${Math.max(2, (d.coins / maxDay) * 100)}%` }} />
+                <span className="text-right tabular-nums text-ink">{coins(d.coins)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {usage && usage.by_model.length > 0 && (
+        <div className="mt-5 overflow-x-auto">
+          <h3 className="text-[13.5px] font-bold text-ink">По моделям</h3>
+          <table className="mt-2 w-full min-w-[420px] text-left text-[13px]">
+            <thead>
+              <tr className="text-[12px] text-ink-3">
+                <th className="py-1 font-semibold">Модель</th>
+                <th className="py-1 text-right font-semibold">Запросов</th>
+                <th className="py-1 text-right font-semibold">Коинов</th>
+              </tr>
+            </thead>
+            <tbody>
+              {usage.by_model.map((m) => (
+                <tr key={`${m.provider}/${m.model}`} className="border-t border-line">
+                  <td className="py-1.5 font-mono text-[12.5px] text-ink">{m.model}</td>
+                  <td className="py-1.5 text-right tabular-nums text-ink-2">{m.requests}</td>
+                  <td className="py-1.5 text-right tabular-nums text-ink">{coins(m.coins)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {invoices.length > 0 && (
+        <div className="mt-5">
+          <h3 className="text-[13.5px] font-bold text-ink">Счета</h3>
+          <ul className="mt-2 flex flex-col divide-y divide-line text-[13px]">
+            {invoices.map((inv) => (
+              <li key={inv.number} className="flex flex-wrap items-center gap-x-3 py-1.5">
+                <Link to={inv.kind === 'subscription' ? '/invoice' : `/invoice/${encodeURIComponent(inv.number)}`} className="font-semibold text-accent hover:text-accent-hover">
+                  № {inv.number}
+                </Link>
+                <span className="text-ink-2">{INVOICE_KIND[inv.kind]}</span>
+                <span className="tabular-nums text-ink">{money(inv.amount_kzt)}</span>
+                <span className={inv.paid ? 'text-ok' : 'text-warn'}>{inv.paid ? 'оплачен' : 'ждёт оплаты'}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
+  )
+}

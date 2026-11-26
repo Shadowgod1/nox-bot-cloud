@@ -9,7 +9,7 @@ import { Alert, Button } from '../components/ui'
  * /invoice — the client's own invoice; /staff/applications/:id/invoice — the same page for staff.
  */
 export function InvoicePage() {
-  const { id } = useParams()
+  const { id, number } = useParams()
   const navigate = useNavigate()
   const [inv, setInv] = useState<Invoice | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -17,13 +17,21 @@ export function InvoicePage() {
 
   useEffect(() => {
     api
-      .get<Invoice>(id ? `/api/staff/applications/${id}/invoice` : '/api/me/invoice')
+      .get<Invoice>(
+        id
+          ? number
+            ? `/api/staff/applications/${id}/invoices/${encodeURIComponent(number)}`
+            : `/api/staff/applications/${id}/invoice`
+          : number
+            ? `/api/me/invoices/${encodeURIComponent(number)}`
+            : '/api/me/invoice',
+      )
       .then(setInv)
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) navigate(id ? '/staff/login' : '/login', { replace: true })
         else setError(err instanceof Error ? err.message : 'Не удалось загрузить счёт')
       })
-  }, [id, navigate])
+  }, [id, number, navigate])
 
   const s = inv?.seller
   const issued = inv ? new Date(inv.issued_at).toLocaleDateString('ru-RU', { timeZone: 'Asia/Almaty' }) : ''
@@ -101,8 +109,19 @@ export function InvoicePage() {
               <tr>
                 <td className="border border-[#d9dde2] px-3 py-2">1</td>
                 <td className="border border-[#d9dde2] px-3 py-2">
-                  Абонентское обслуживание WhatsApp-ассистента Nox Bot, тариф «{inv.tariff.name}» (
-                  {inv.tariff.coins.toLocaleString('ru-RU')} коинов), 1 месяц. Адрес: {inv.bot_host}
+                  {inv.kind === 'topup' ? (
+                    <>
+                      Пакет коинов для WhatsApp-ассистента Nox Bot: {inv.tariff.coins.toLocaleString('ru-RU')} коинов (не сгорают в
+                      конце месяца). Адрес: {inv.bot_host}
+                    </>
+                  ) : (
+                    <>
+                      Абонентское обслуживание WhatsApp-ассистента Nox Bot, тариф «{inv.tariff.name}» (
+                      {inv.tariff.coins.toLocaleString('ru-RU')} коинов), 1 месяц
+                      {inv.period_start && inv.period_end ? ` (${new Date(inv.period_start).toLocaleDateString('ru-RU', { timeZone: 'Asia/Almaty' })} – ${new Date(inv.period_end).toLocaleDateString('ru-RU', { timeZone: 'Asia/Almaty' })})` : ''}
+                      . Адрес: {inv.bot_host}
+                    </>
+                  )}
                 </td>
                 <td className="border border-[#d9dde2] px-3 py-2 text-right">1</td>
                 <td className="border border-[#d9dde2] px-3 py-2 text-right tabular-nums">{money(inv.amount_kzt)}</td>
@@ -120,7 +139,11 @@ export function InvoicePage() {
 
           <p className="mt-5 text-[#565e67]">
             Оплатите счёт в течение {inv.due_days} рабочих дней. В назначении платежа укажите: «Оплата по счёту № {inv.number}».
-            После поступления оплаты бот будет создан, а на e-mail придёт ссылка на панель управления.
+            {inv.kind === 'topup'
+              ? 'Коины будут начислены на баланс сразу после поступления оплаты.'
+              : inv.kind === 'renewal'
+                ? 'После поступления оплаты начнётся следующий месяц обслуживания с новым пакетом коинов.'
+                : 'После поступления оплаты бот будет создан, а на e-mail придёт ссылка на панель управления.'}
           </p>
           <footer className="mt-10 flex justify-between border-t border-[#d9dde2] pt-4 text-[#667079]">
             <span>{s.name}</span>
