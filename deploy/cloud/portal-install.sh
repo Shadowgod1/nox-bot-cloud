@@ -172,7 +172,7 @@ if [[ "$INSTALL_SYSTEMD" == "1" ]]; then
     systemctl daemon-reload
     if [[ -n "$(env_get "$PROV_ENV" CF_API_TOKEN)" ]]; then
       systemctl enable --now nox-provisioner.timer >/dev/null
-      ok "nox-provisioner.timer enabled (every 30 s)"
+      ok "nox-provisioner.timer enabled (every 5 s)"
     else
       warn "fill in CF_* in $PROV_ENV, then: systemctl enable --now nox-provisioner.timer"
     fi

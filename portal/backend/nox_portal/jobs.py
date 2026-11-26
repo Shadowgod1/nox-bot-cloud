@@ -116,6 +116,7 @@ async def finish(conn: asyncpg.Connection, job_id: int, ok: bool, *, port: int |
                  setup_url: str | None, error: str | None, owner_preset: bool = False) -> None:
     """Record the provisioner's result; e-mails the client after the transaction commits."""
     notify: tuple[str, tuple[str, str]] | None = None
+    staff_alert: tuple[str, str] | None = None  # a failed job: staff must know, nothing retries it
     async with conn.transaction():
         job = await conn.fetchrow(
             "SELECT j.id, j.account_id, j.kind, j.slug, j.status, j.key_id, a.email, a.contact_name, a.admin_url"
@@ -193,5 +194,14 @@ async def finish(conn: asyncpg.Connection, job_id: int, ok: bool, *, port: int |
                 await conn.execute("UPDATE accounts SET last_error = $2, updated_at = now() WHERE id = $1",
                                    account_id, clean)
             await audit(conn, f"provisioner.{kind}.failed", account_id=account_id, details={"job": job_id})
+            staff_alert = (
+                f"Nox Bot: не выполнено «{kind}» для {job['slug']}",
+                f"Провижинер не смог выполнить задание {kind} (#{job_id}) для {job['slug']} ({job['email']}).\n"
+                f"Ошибка: {clean}\n\nКлиент видит в кабинете «Создание бота задерживается». "
+                "Проверьте журнал провижинера и запустите задание заново из карточки заявки.",
+            )
     if notify is not None:
         await mailer.send_quiet(notify[0], *notify[1])
+    if staff_alert is not None:
+        for to in mailer.staff_recipients():
+            await mailer.send_quiet(to, *staff_alert)

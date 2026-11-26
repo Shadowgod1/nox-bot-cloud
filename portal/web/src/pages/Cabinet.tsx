@@ -7,6 +7,7 @@ import {
 import {
   api, ApiError, daysLeft, formatDate, formatDay, FREE_CODE, money, plural, type ClientMe, type InvoiceListItem, type Tariff,
 } from '../api'
+import { BuildProgress, forgetBuildStart } from '../components/BuildProgress'
 import { Shell } from '../components/Shell'
 import { SupportLinks } from '../components/Support'
 import { Steps, stepsFor } from '../components/Steps'
@@ -424,18 +425,23 @@ function StatusView({ me, setMe }: { me: ClientMe; setMe: (me: ClientMe) => void
       return <AwaitingPayment me={me} onChange={setMe} />
     case 'approved':
       return (
-        <StateBlock icon={<Hourglass className={`${icon} text-accent`} />} title={free ? 'Тест подключается' : 'Оплата получена'}>
-          {free ? 'Бот на тестовом тарифе' : 'Спасибо! Бот'} поставлен в очередь на создание. Как только он будет готов, придёт письмо на{' '}
-          {me.email}.
+        <StateBlock icon={<Hourglass className={`${icon} text-accent`} />} title={free ? 'Создаём ваш тестовый бот' : 'Оплата получена, создаём бота'}>
+          <BuildProgress queued botHost={me.bot_host} />
           {free && <TrialInfo me={me} />}
         </StateBlock>
       )
     case 'provisioning':
+      return (
+        <StateBlock icon={<Clock className={`${icon} text-accent`} />} title="Бот создаётся">
+          <BuildProgress queued={false} botHost={me.bot_host} />
+          {free && <TrialInfo me={me} />}
+        </StateBlock>
+      )
     case 'failed':
       return (
-        <StateBlock icon={<Clock className={`${icon} text-warn`} />} title="Бот создаётся">
-          Заявка одобрена, готовим вашего бота. Обычно это занимает несколько минут — письмо придёт, как только всё будет
-          готово.
+        <StateBlock icon={<Clock className={`${icon} text-warn`} />} title="Создание бота задерживается">
+          Что-то пошло не так при запуске, мы уже повторяем попытку. Страница обновится сама, как только бот будет готов.
+          Если это затянулось — напишите в поддержку.
         </StateBlock>
       )
     case 'active':
@@ -527,8 +533,10 @@ export function Cabinet() {
 
   // refresh while the bot is being prepared
   useEffect(() => {
+    if (me?.status === 'active') forgetBuildStart()
     if (!me || !['approved', 'provisioning', 'payment_pending'].includes(me.status)) return
-    const t = setInterval(() => void load(), 15000)
+    // while the bot is being created the page refreshes often, so «готово» shows up within seconds
+    const t = setInterval(() => void load(), me.status === 'payment_pending' ? 15000 : 3000)
     return () => clearInterval(t)
   }, [me, load])
 

@@ -261,3 +261,23 @@ async def test_non_argon2id_hash_is_not_handed_over(client, other, internal, poo
     await pool.execute("UPDATE accounts SET password_hash = 'legacy-not-argon2'")
     job = (await internal.post("/internal/jobs/claim")).json()
     assert job["owner_password_hash"] is None and job["owner_email"] is None
+
+
+async def test_failed_create_alerts_staff(client, other, internal, pool, monkeypatch):
+    from nox_portal import mailer
+    from nox_portal.config import get_settings
+
+    sent: list[tuple[str, str, str]] = []
+
+    async def capture(to, subject, text):
+        sent.append((to, subject, text))
+        return True
+
+    monkeypatch.setattr(mailer, "send_quiet", capture)
+    monkeypatch.setattr(get_settings(), "staff_notify", "ops@example.kz, boss@example.kz")
+    await _approved(client, other, pool, anthropic_key=KEY)
+    job = (await internal.post("/internal/jobs/claim")).json()
+    await internal.post(f"/internal/jobs/{job['id']}/result", json={"ok": False, "error": f"boom key={KEY}"})
+    staff = [m for m in sent if m[0] in ("ops@example.kz", "boss@example.kz") and "не выполнено" in m[1]]
+    assert len(staff) == 2 and "не выполнено «create»" in staff[0][1]
+    assert KEY not in staff[0][2] and "запустите задание заново" in staff[0][2]
