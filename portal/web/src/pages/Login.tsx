@@ -45,12 +45,9 @@ export function Login() {
         <Button type="submit" variant="primary" loading={busy} disabled={!email || !password} className="w-full">
           Войти
         </Button>
-        <div className="flex items-center justify-between text-[13.5px]">
+        <div className="text-[13.5px]">
           <Link to="/reset" className="text-ink-2 hover:text-accent">
             Забыли пароль?
-          </Link>
-          <Link to="/staff/login" className="text-ink-2 hover:text-accent">
-            Вход для сотрудников Nox
           </Link>
         </div>
         <div className="border-t border-line pt-4 text-center text-[14px] text-ink-2">
