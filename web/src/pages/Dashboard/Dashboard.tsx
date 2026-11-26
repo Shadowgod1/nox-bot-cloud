@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
-import { ArrowRight, CircleAlert, CircleCheck, LogOut, Smartphone } from 'lucide-react'
+import { ArrowRight, CircleAlert, CircleCheck, FlaskConical, LogOut, Smartphone } from 'lucide-react'
 import { api } from '../../api/client'
 import type { BotSettings, Dashboard as DashboardData, WhatsAppStatus } from '../../api/types'
 import { useBrand } from '../../brand'
@@ -13,6 +13,7 @@ import { toast } from '../../components/toast'
 import { plural, ru } from '../../i18n/ru'
 import { StatusHero } from './StatusHero'
 import { CoinsCard } from './CoinsCard'
+import { RoiCard } from './RoiCard'
 import { coinsZeroText, deriveStatus } from './health'
 
 const waTone = { open: 'ok', connecting: 'warn', close: 'danger', degraded: 'danger' } as const
@@ -90,7 +91,19 @@ export function Dashboard() {
 
   return (
     <PageBody>
-      <PageHeader title="Обзор" description="Работает ли бот, сколько осталось коинов и что было сегодня." />
+      <PageHeader
+        title="Обзор"
+        description="Работает ли бот, сколько осталось коинов и что было сегодня."
+        actions={
+          <Link
+            to="/test-chat"
+            className="inline-flex h-9 items-center gap-1.5 rounded-[7px] border border-line-strong bg-surface px-3.5 text-sm font-medium text-ink hover:bg-sunken"
+          >
+            <FlaskConical className="size-4" aria-hidden />
+            Проверить бота
+          </Link>
+        }
+      />
 
       <div className="space-y-5">
         {coinsZero && (
@@ -125,6 +138,7 @@ export function Dashboard() {
             ) : undefined
           }
         />
+        <RoiCard />
         <CoinsCard coins={data.coins} />
         <section aria-labelledby="today-h" className="rounded-[var(--radius-panel)] border border-line bg-surface">
           <h2 id="today-h" className="border-b border-line px-5 py-3.5 text-[15px] font-semibold">
