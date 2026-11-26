@@ -107,6 +107,7 @@ const s: State = {
     booking_reject_template: 'К сожалению, не получилось забронировать: {reason}',
     booking_request_timeout_min: 15,
     booking_timeout_message: 'Администратор скоро свяжется с вами по заявке.',
+    no_coins_message: 'Спасибо за сообщение! Сейчас подключится менеджер и ответит вам.',
   },
   llm: { provider: 'openai', openai_model: 'gpt-5.4-mini', openai_fallback_model: null, gemini_model: 'gemini-3.8-flash', anthropic_model: 'claude-sonnet-5-5', anthropic_effort: 'low', emergency_provider: null },
   vendorProviders: ['anthropic', 'openai'],
