@@ -361,7 +361,7 @@ async def test_logout_endpoint(client, pool, authed, evo):
     assert any(e["type"] == "whatsapp.status" for e in evs)
 
 
-async def test_evolution_down_maps_to_502(client, authed):
+async def test_evolution_down_maps_to_503(client, authed):
     def boom(request):
         raise httpx.ConnectError("refused")
 
@@ -370,7 +370,7 @@ async def test_evolution_down_maps_to_502(client, authed):
         r = await client.post("/api/whatsapp/connect")
     finally:
         set_gateway(None)
-    assert r.status_code == 502 and r.json()["error"]["code"] == "evolution_unavailable"
+    assert r.status_code == 503 and r.json()["error"]["code"] == "evolution_unavailable"
 
 
 @pytest.fixture

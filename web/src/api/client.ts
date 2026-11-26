@@ -82,6 +82,15 @@ async function parseBody(res: Response): Promise<unknown> {
   return text === '' ? undefined : text
 }
 
+/** Statuses that core never returns (it uses 503/424 for upstream failures) and Cloudflare replaces with its
+ *  own page: 502/504 and its 520-527 range. */
+const GATEWAY_STATUSES = (status: number) => status === 502 || status === 504 || (status >= 520 && status <= 527)
+
+/** Kept here rather than in i18n/ru.ts to stay out of the branding work in that file. */
+export function invalidResponseText(status: number): string {
+  return `Сервер вернул некорректный ответ (код ${status}). Повторите через минуту; если ошибка повторяется, обратитесь в поддержку.`
+}
+
 function errorFrom(status: number, body: unknown): ApiError {
   const e = (body as { error?: { code?: unknown; message?: unknown } } | undefined)?.error
   if (e && typeof e.message === 'string') {
@@ -91,12 +100,20 @@ function errorFrom(status: number, body: unknown): ApiError {
     const withDetail = ru.errorDetail.includes(code) && e.message && e.message !== code
     return new ApiError(status, code, withDetail ? `${text} (${e.message})` : text)
   }
-  // FastAPI validation errors / plain detail strings.
-  const detail = (body as { detail?: unknown } | undefined)?.detail
-  if (typeof detail === 'string') return new ApiError(status, 'error', detail)
+  // FastAPI validation errors / plain detail strings. Not RFC 9457 problem documents ({type,title,detail}):
+  // those come from a proxy such as Cloudflare ("The origin web server returned an invalid ..."), not core.
+  const obj = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : undefined
+  const isProblem = obj !== undefined && ('title' in obj || 'type' in obj)
+  if (obj && !isProblem && typeof obj.detail === 'string' && !GATEWAY_STATUSES(status)) {
+    return new ApiError(status, 'error', obj.detail)
+  }
   if (status === 422) return new ApiError(status, 'validation', ru.errors.validation)
   if (status === 403) return new ApiError(status, 'forbidden', ru.errors.forbidden)
   if (status === 429) return new ApiError(status, 'rate_limited', ru.errors.rateLimited)
+  // HTML / plain text / foreign JSON, or a gateway status core never sends: a proxy answered, not core.
+  if (!obj || isProblem || GATEWAY_STATUSES(status)) {
+    return new ApiError(status, 'invalid_response', invalidResponseText(status))
+  }
   if (status >= 500) return new ApiError(status, 'server', ru.errors.server)
   return new ApiError(status, 'error', ru.errors.generic)
 }

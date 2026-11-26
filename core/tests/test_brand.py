@@ -33,9 +33,9 @@ def test_brand_names(monkeypatch):
 
 def test_key_rejected_text_follows_brand(monkeypatch):
     err = "openai HTTP 401: invalid key sk-...abcd"
-    assert public_error(err) == "openai: Ключ ILER отклонён провайдером — обратитесь в ILER"
+    assert public_error(err) == "openai: Провайдер модели отклонил ключ доступа. Обратитесь в ILER."
     monkeypatch.setattr(get_settings(), "brand", "nox")
-    assert public_error(err) == "openai: Ключ Nox отклонён провайдером — обратитесь в Nox service"
+    assert public_error(err) == "openai: Провайдер модели отклонил ключ доступа. Обратитесь в Nox service."
 
 
 def test_brand_env_name(monkeypatch):

@@ -342,7 +342,7 @@ async def test_chain_skips_providers_without_ilER_key(monkeypatch):
 def test_public_error_hides_provider_auth_errors():
     from iler.llm.base import public_error
 
-    generic = "Ключ ILER отклонён провайдером — обратитесь в ILER"
+    generic = "Провайдер модели отклонил ключ доступа. Обратитесь в ILER."
     assert public_error("anthropic HTTP 401: invalid x-api-key") == f"anthropic: {generic}"
     assert public_error("openai HTTP 403: forbidden sk-***abcd") == f"openai: {generic}"
     assert public_error("gemini HTTP 400: API key not valid. Please pass a valid API key.") == f"gemini: {generic}"

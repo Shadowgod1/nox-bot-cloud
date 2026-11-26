@@ -92,6 +92,48 @@ describe('api client', () => {
     expect((e2 as ApiError).message).toBe('Проверьте заполнение полей. (body.text: text must not be blank)')
   })
 
+  it('shows the core reason for 503/424 upstream errors', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'llm_error', message: 'anthropic: Провайдер модели отклонил ключ доступа.' } }, 424),
+    )
+    const e1 = await api.post('/api/test-chat', {}, { silent: true }).catch((e) => e)
+    expect((e1 as ApiError).status).toBe(424)
+    expect((e1 as ApiError).message).toBe('Ошибка языковой модели. (anthropic: Провайдер модели отклонил ключ доступа.)')
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'core_unavailable', message: 'Сервер перезапускается' } }, 503),
+    )
+    const e2 = await api.get('/api/dashboard', { silent: true }).catch((e) => e)
+    expect((e2 as ApiError).message).toContain('Сервер перезапускается')
+  })
+
+  it('replaces a proxy HTML page with a Russian message carrying the status', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response('<html><body>The origin web server returned an invalid or incomplete response to Cloudflare</body></html>', {
+        status: 502,
+        headers: { 'Content-Type': 'text/html' },
+      }),
+    )
+    const err = await api.post('/api/test-chat', {}, { silent: true }).catch((e) => e)
+    expect((err as ApiError).code).toBe('invalid_response')
+    expect((err as ApiError).message).toContain('Сервер вернул некорректный ответ (код 502)')
+    expect((err as ApiError).message).not.toContain('Cloudflare')
+  })
+
+  it('does not show the detail of a proxy JSON problem document', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ type: 'https://example.invalid/502', title: 'Bad gateway', status: 502,
+        detail: 'The origin web server returned an invalid or incomplete response to Cloudflare.' }, 502),
+    )
+    const err = await api.post('/api/test-chat', {}, { silent: true }).catch((e) => e)
+    expect((err as ApiError).message).toContain('Сервер вернул некорректный ответ (код 502)')
+    expect((err as ApiError).message).not.toContain('origin web server')
+
+    fetchMock.mockResolvedValueOnce(new Response('oops', { status: 500, headers: { 'Content-Type': 'text/plain' } }))
+    const e2 = await api.get('/api/x', { silent: true }).catch((e) => e)
+    expect((e2 as ApiError).message).toContain('(код 500)')
+  })
+
   it('does not toast when silent', async () => {
     const seen: string[] = []
     const unsub = subscribeToasts((items) => seen.push(...items.map((t) => t.message)))

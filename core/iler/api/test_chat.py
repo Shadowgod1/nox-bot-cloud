@@ -42,7 +42,7 @@ class TestChatResponse(BaseModel):
 async def post_test_chat(body: TestChatRequest, _user: User = Depends(current_user), _csrf=Depends(csrf_protect)):
     from iler.engine.turn import run_turn  # lazy: engine is optional at import time
     from iler.engine.prompt import BotNotConfigured
-    from iler.llm.base import ChatMessage, LlmError, public_error
+    from iler.llm.base import ChatMessage, LlmError, public_error, rejected_providers
     from iler.usage import CoinsExhausted
 
     history = [ChatMessage(role=m.role, content=m.content) for m in body.messages]
@@ -53,5 +53,8 @@ async def post_test_chat(body: TestChatRequest, _user: User = Depends(current_us
     except CoinsExhausted as e:
         raise ApiError(409, "coins_exhausted", f"Лимит коинов {brand_name()} на этот месяц исчерпан") from e
     except LlmError as e:
-        raise ApiError(502, "llm_error", public_error(str(e))) from e
+        # Never 502/504: Cloudflare (cloud edition) replaces those bodies with its own page and the admin
+        # loses the reason. 424 = the provider refused ILER's key, 503 = provider unreachable or failing.
+        status = 424 if rejected_providers(str(e)) else 503
+        raise ApiError(status, "llm_error", public_error(str(e))) from e
     return {"reply": "\n\n".join(outcome.reply_parts), "tool_calls": list(outcome.tool_calls)}

@@ -169,7 +169,7 @@ async def test_settings_llm_test_calls_provider(owner, app):
         assert r.json() == {"ok": False, "error": "invalid api key"}
         assert seen[-1].openai_model == "broken"
         r = await owner.post("/api/settings/llm/test", json=body | {"openai_model": "revoked"}, headers=csrf(owner))
-        assert r.json() == {"ok": False, "error": "openai: Ключ ILER отклонён провайдером — обратитесь в ILER"}
+        assert r.json() == {"ok": False, "error": "openai: Провайдер модели отклонил ключ доступа. Обратитесь в ILER."}
         assert "wxyz" not in r.text
         # testing does not save
         assert (await settings_store.get("llm", LlmSettings)).openai_model != "broken"
@@ -284,7 +284,7 @@ async def test_settings_llm_models_lists_for_unsaved_settings(owner, app):
         body = (await owner.get("/api/settings/llm")).json() | {"provider": "gemini"}
         r = await owner.post("/api/settings/llm/models", json=body, headers=csrf(owner))
         # the provider's auth error (may echo a masked fragment of ILER's key) is replaced by a generic text
-        assert r.json() == {"ok": False, "models": [], "error": "gemini: Ключ ILER отклонён провайдером — обратитесь в ILER"}
+        assert r.json() == {"ok": False, "models": [], "error": "gemini: Провайдер модели отклонил ключ доступа. Обратитесь в ILER."}
         assert (await settings_store.get("llm", LlmSettings)).provider == "openai"  # nothing saved
         assert (await owner.post("/api/settings/llm/models")).status_code == 403  # CSRF
     finally:

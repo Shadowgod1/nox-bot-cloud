@@ -47,10 +47,21 @@ class LlmProvider(Protocol):
 
 
 def key_rejected_ru() -> str:
-    return f"Ключ {brand_name()} отклонён провайдером — обратитесь в {brand_company()}"
+    return f"Провайдер модели отклонил ключ доступа. Обратитесь в {brand_company()}."
 
 
 _HTTP_ERR = re.compile(r"\b(anthropic|openai|gemini) HTTP (\d{3})\b([^;]*)")
+
+
+def rejected_providers(message: str) -> list[str]:
+    """Providers whose 401/403 (or Gemini's 400 "API key not valid") appears in an LlmError message."""
+    rejected: list[str] = []
+    for m in _HTTP_ERR.finditer(message):
+        provider, code, rest = m.group(1), int(m.group(2)), m.group(3)
+        if code in (401, 403) or (code == 400 and re.search(r"api[ _]?key", rest, re.IGNORECASE)):
+            if provider not in rejected:
+                rejected.append(provider)
+    return rejected
 
 
 def public_error(message: str) -> str:
@@ -58,12 +69,7 @@ def public_error(message: str) -> str:
 
     A provider's 401/403 (or Gemini's 400 "API key not valid") may echo a masked fragment of ILER's own
     key, so such errors become a generic "key rejected" message that keeps only the provider names."""
-    rejected: list[str] = []
-    for m in _HTTP_ERR.finditer(message):
-        provider, code, rest = m.group(1), int(m.group(2)), m.group(3)
-        if code in (401, 403) or (code == 400 and re.search(r"api[ _]?key", rest, re.IGNORECASE)):
-            if provider not in rejected:
-                rejected.append(provider)
+    rejected = rejected_providers(message)
     if rejected:
         return f"{', '.join(rejected)}: {key_rejected_ru()}"
     return message

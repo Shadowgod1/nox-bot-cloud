@@ -85,3 +85,19 @@ def test_openapi_disabled_by_default(monkeypatch):
     assert create_app().openapi_url is None
     monkeypatch.setenv("ILER_OPENAPI", "1")
     assert create_app().openapi_url == "/api/openapi.json"
+
+
+def test_no_api_error_uses_gateway_statuses():
+    """Cloudflare (cloud edition) swaps 502/504 bodies from the origin for its own page, so the admin would
+    see "origin returned an invalid response" instead of the real reason. Upstream failures use 503/424."""
+    import re
+
+    pattern = re.compile(r"ApiError\(\s*(502|504|52\d)\b")
+    root = Path(__file__).parent.parent / "iler"
+    offenders = [
+        f"{p.relative_to(root)}:{i}"
+        for p in root.rglob("*.py")
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+        if pattern.search(line)
+    ]
+    assert offenders == []

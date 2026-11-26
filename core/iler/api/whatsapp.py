@@ -50,7 +50,7 @@ def gateway_dep() -> WhatsAppGateway:
 
 
 def _unavailable(e: EvolutionError) -> ApiError:
-    return ApiError(502, "evolution_unavailable", f"WhatsApp service error: {e}"[:300])
+    return ApiError(503, "evolution_unavailable", f"WhatsApp service error: {e}"[:300])
 
 
 @router.get("/api/whatsapp/status", response_model=WhatsAppStatus)
