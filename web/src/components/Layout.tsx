@@ -46,9 +46,14 @@ export function Wordmark({ className }: { className?: string }) {
   const brand = useBrand()
   if (brand.id === 'nox') {
     return (
-      <span className={cx('inline-flex items-center gap-2 font-bold text-ink select-none', className)} aria-label={brand.name}>
-        <img src={brand.favicon} alt="" className="size-[1.4em] shrink-0" aria-hidden />
-        <span>{brand.name}</span>
+      // the noxsw.kz / client portal wordmark: NOX SW in Neue Machina + a mono BOT tag
+      <span className={cx('inline-flex items-center gap-2 text-ink select-none', className)} aria-label={brand.name}>
+        <span aria-hidden className="font-['Neue_Machina',var(--font-sans)] leading-none font-extrabold tracking-[-0.02em] whitespace-nowrap">
+          NOX SW
+        </span>
+        <span aria-hidden className="border border-accent/45 bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] leading-none font-bold tracking-[0.1em] text-accent md:max-lg:hidden">
+          BOT
+        </span>
       </span>
     )
   }

@@ -125,6 +125,14 @@
  * ink-3 (both), ok and danger (light); active nav text uses accent-ink. Unlayered rules on purpose: they win
  * over Tailwind utilities.
  */
+/* Nox service wordmark face (same file as noxsw.kz and the client portal) */
+@font-face {
+  font-family: 'Neue Machina';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 800;
+  src: url('/fonts/NeueMachina-Ultrabold.ttf') format('truetype');
+}
 @font-face {
   font-family: 'Nunito Sans';
   font-style: normal;
