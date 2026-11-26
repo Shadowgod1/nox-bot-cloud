@@ -144,8 +144,11 @@ class LlmProviders(BaseModel):
 @router.get("/api/settings/llm/providers", response_model=LlmProviders)
 async def get_settings_llm_providers(_: User = Depends(require_owner)):
     """Providers that have an ILER key configured on this server (the only ones the owner can pick)."""
+    from iler.llm import gateway
     from iler.llm.router import available_providers
 
+    if gateway.enabled():
+        await gateway.balance()  # cached; tells which providers the gateway has a company key for
     return {"providers": available_providers()}
 
 

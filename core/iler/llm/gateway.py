@@ -75,6 +75,8 @@ class Balance:
     monthly_limit: float
     period_end: str | None
     status: str
+    # providers the gateway has a company key for; None = an older gateway that does not say (all of them)
+    providers: tuple[str, ...] | None = None
 
     @property
     def revoked(self) -> bool:
@@ -154,7 +156,11 @@ async def _fetch() -> Balance:
     if not isinstance(data, dict):
         raise ValueError("balance is not an object")
     period_end = data.get("period_end")
+    raw_providers = data.get("providers")
+    providers = (tuple(p for p in raw_providers if isinstance(p, str))
+                 if isinstance(raw_providers, list) else None)
     return Balance(
+        providers=providers,
         coins_left=_number(data.get("coins_left")),
         monthly_limit=_number(data.get("monthly_limit") or 0),
         period_end=str(period_end) if period_end else None,
@@ -186,6 +192,13 @@ async def balance(*, force: bool = False) -> BalanceView:
                 _state.blocked = None
     return BalanceView(balance=_state.balance, fetched_at=_state.fetched_at,
                        stale=_state.error is not None or _state.balance is None, blocked=_state.blocked)
+
+
+def known_providers() -> tuple[str, ...] | None:
+    """Providers the gateway can serve, from the last balance read; None while unknown (then all)."""
+    if not enabled() or _state.balance is None:
+        return None
+    return _state.balance.providers
 
 
 async def blocked() -> str | None:

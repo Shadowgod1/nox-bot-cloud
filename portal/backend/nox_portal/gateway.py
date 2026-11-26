@@ -3,7 +3,8 @@
   /llm/anthropic/... -> https://api.anthropic.com/...
   /llm/openai/...    -> https://api.openai.com/...
   /llm/gemini/...    -> https://generativelanguage.googleapis.com/...
-  GET /llm/v1/balance -> {"coins_left", "monthly_limit", "period_end", "status"}
+  GET /llm/v1/balance -> {"coins_left", "monthly_limit", "period_end", "status", "providers"}
+    providers: the providers this gateway has a company key for (the bot offers only those)
 
 The client sends its virtual key (nox_vk_...) in x-api-key, Authorization: Bearer or x-goog-api-key (any
 of them works for any provider); ?key= in the URL is refused with 400 so keys never land in access logs.
@@ -163,8 +164,11 @@ async def get_balance(request: Request):
         status = "suspended"
     else:
         status = "active"
+    s = get_settings()
+    providers = [p for p in ("anthropic", "openai", "gemini") if getattr(s, f"upstream_{p}_key").strip()]
     return {"coins_left": bal.coins_left, "monthly_limit": bal.monthly_limit,
-            "period_end": bal.period_end.isoformat() if bal.period_end else None, "status": status}
+            "period_end": bal.period_end.isoformat() if bal.period_end else None, "status": status,
+            "providers": providers}
 
 
 async def _read_body(request: Request, cap: int) -> bytes | None:

@@ -71,7 +71,11 @@ def available_providers() -> list[str]:
     gateway mode once the virtual key is set)."""
     if config.get_settings().llm_fake:
         return list(PROVIDERS)
-    return [p for p in PROVIDERS if vendor_key(p)]
+    names = [p for p in PROVIDERS if vendor_key(p)]
+    served = gateway.known_providers()
+    if served is not None:  # cloud: only the providers the company has a key for (e.g. only Claude)
+        names = [p for p in names if p in served]
+    return names
 
 
 def _default_factory(name: str, settings: LlmSettings) -> LlmProvider:

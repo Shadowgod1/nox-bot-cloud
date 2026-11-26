@@ -321,6 +321,8 @@ async def test_balance_endpoint(client, pool, upstream):
         body = r.json()
         assert body["coins_left"] == 30000 and body["monthly_limit"] == 30000 and body["status"] == "active"
         assert body["period_end"].startswith("20")
+        assert body["providers"] == [p for p in ("anthropic", "openai", "gemini")
+                                     if getattr(get_settings(), f"upstream_{p}_key").strip()]
     await pool.execute("UPDATE accounts SET status = 'suspended'")
     assert (await client.get("/llm/v1/balance", headers={"x-api-key": key})).json()["status"] == "suspended"
     await pool.execute("UPDATE virtual_keys SET status = 'revoked'")

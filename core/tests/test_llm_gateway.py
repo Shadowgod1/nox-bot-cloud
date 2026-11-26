@@ -200,6 +200,21 @@ async def test_providers_configured_in_gateway_mode_without_vendor_keys(client, 
     assert (await client.get("/api/settings/llm/providers")).json() == {"providers": ["gemini"]}
 
 
+async def test_providers_limited_to_what_the_gateway_serves(client, gw_mode):
+    """Cloud with only a company Claude key: the owner is offered Claude only (no GPT / Gemini to fail)."""
+    r = await client.post("/api/setup/owner", json=OWNER, headers={"X-ILER-Setup-Token": "test-setup-token"})
+    assert r.status_code == 200, r.text
+    gw_mode.set(providers=["anthropic"])
+    expire_balance_cache()
+    assert (await client.get("/api/settings/llm/providers")).json() == {"providers": ["anthropic"]}
+    gw_mode.set(providers=["anthropic", "openai"])
+    expire_balance_cache()
+    assert (await client.get("/api/settings/llm/providers")).json() == {"providers": ["anthropic", "openai"]}
+    gw_mode.body.pop("providers")  # an older gateway that does not say: all of them, as before
+    expire_balance_cache()
+    assert (await client.get("/api/settings/llm/providers")).json() == {"providers": ["anthropic", "openai", "gemini"]}
+
+
 # --- router: 402 / 401 --------------------------------------------------------------------------
 
 async def test_router_402_blocks_without_fallbacks_until_balance_returns(pool, gw_mode):
