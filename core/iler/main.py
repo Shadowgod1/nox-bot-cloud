@@ -19,7 +19,7 @@ from iler.errors import install_error_handlers
 log = logging.getLogger("iler")
 
 API_MODULES = [
-    "setup", "auth", "users", "dashboard", "whatsapp", "conversations", "bookings",
+    "setup", "auth", "users", "dashboard", "whatsapp", "conversations", "client_card", "bookings",
     "settings", "test_chat", "templates", "system", "backups", "events", "knowledge",
 ]
 EXTRA_ROUTERS = ["iler.whatsapp.webhook", "iler.tools.senet.api", "iler.backup.internal_api"]

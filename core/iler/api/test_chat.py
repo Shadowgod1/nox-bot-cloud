@@ -6,6 +6,7 @@ in WhatsApp (engine.media), without calling the LLM. ``usage`` is the LLM spend 
 the provider's token usage (the LLM gateway passes it through); it counts towards the install's spend.
 """
 
+import json
 import logging
 from typing import Any, Literal
 
@@ -21,15 +22,34 @@ log = logging.getLogger("iler.api.test_chat")
 router = APIRouter(tags=["test-chat"])
 
 
+class TestChatToolCall(BaseModel):
+    """A tool call an earlier bot reply of the test dialogue made (echoed back by the admin panel), so the
+    client card of the test dialogue knows about a booking or a fact from it."""
+
+    name: str = Field(max_length=64)
+    args: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+
+    @field_validator("args")
+    @classmethod
+    def _small(cls, v: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(v, ensure_ascii=False, default=str)) > 2000:
+            raise ValueError("tool call args too large")
+        return v
+
+
 class TestChatMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field("", max_length=4000)
     media: Literal["audio", "image", "video"] | None = None  # simulated attachment of a client message
+    tool_calls: list[TestChatToolCall] | None = Field(None, max_length=8)  # assistant messages only
 
     @model_validator(mode="after")
     def _not_empty(self) -> "TestChatMessage":
         if not self.content.strip() and self.media is None:
             raise ValueError("message must have text or media")
+        if self.tool_calls and self.role != "assistant":
+            raise ValueError("only assistant messages carry tool calls")
         return self
 
 
@@ -63,7 +83,7 @@ async def post_test_chat(body: TestChatRequest, _user: User = Depends(current_us
     from iler.engine import media, prompt
     from iler.engine.prompt import BotNotConfigured
     from iler.engine.turn import run_turn  # lazy: engine is optional at import time
-    from iler.llm.base import ChatMessage, LlmError, public_error, rejected_providers
+    from iler.llm.base import ChatMessage, LlmError, ToolCall, public_error, rejected_providers
     from iler.settings_models import BotSettings
     from iler.usage import AccessSuspended, CoinsExhausted
 
@@ -78,8 +98,13 @@ async def post_test_chat(body: TestChatRequest, _user: User = Depends(current_us
         return {"reply": decision.reply, "tool_calls": [], "handed_over": decision.handover, "usage": None}
 
     history = [
-        ChatMessage(role=m.role, content=prompt.message_text(m.content, {"type": m.media} if m.media else None))
-        for m in body.messages
+        ChatMessage(
+            role=m.role, content=prompt.message_text(m.content, {"type": m.media} if m.media else None),
+            # successful calls only: the card shows what the dialogue actually did (the prompt drops them)
+            tool_calls=[ToolCall(id=f"t{i}-{j}", name=c.name, arguments=c.args)
+                        for j, c in enumerate(m.tool_calls or []) if not c.error] or None,
+        )
+        for i, m in enumerate(body.messages)
     ]
     try:
         outcome = await run_turn(None, dry_run=True, history=history)
