@@ -7,8 +7,8 @@ from zoneinfo import ZoneInfo
 
 from iler import settings_store, usage
 from iler.config import brand_company, brand_name, gateway_mode, get_settings
-from iler.engine import admission, prompt, sender, store
-from iler.engine.pii import PiiMasker, mask_phone_for_log
+from iler.engine import admission, media, prompt, sender, store
+from iler.engine.pii import PiiMasker, mask_phone_for_log, one_line
 from iler.llm import router
 from iler.llm.base import ChatMessage, LlmError
 from iler.settings_models import NO_COINS_MESSAGE_DEFAULT, BotSettings
@@ -34,6 +34,10 @@ class TurnOutcome:
     reply_parts: list[str] = field(default_factory=list)
     tool_calls: list[dict] = field(default_factory=list)
     handed_over: bool = False
+    # LLM spend of this turn (from the provider's usage; 0 when the response had none)
+    coins: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class _PiiRestoringTool:
@@ -112,6 +116,28 @@ async def _handover_no_coins(conv, turn_id: str, *, suspended: bool = False) -> 
              "model access suspended" if suspended else "coins used up")
 
 
+async def _media_reply(conv, decision: media.MediaDecision, bot, turn_id: str) -> TurnOutcome:
+    """Voice / photo the bot cannot read: the fixed reply, and the operator when the settings say so."""
+    if decision.handover:
+        before_status = conv["status"]
+        await store.set_status(conv["id"], "needs_operator", pause_minutes=bot.handover_pause_minutes)
+        if before_status != "needs_operator":
+            name = one_line(conv["name"], 60)
+            who = " ".join(x for x in (f"«{name}»" if name else "", f"+{conv['phone']}" if conv["phone"] else "")
+                           if x)
+            await sender.notify_admins(
+                f"Нужен оператор: {who or 'клиент'}. Причина: «{decision.reason}». Посмотрите вложение в админке "
+                "или на телефоне и ответьте клиенту.",
+                key=f"media:{conv['id']}:{turn_id}",
+            )
+    parts = sender.split_reply(decision.reply)
+    if parts:
+        await sender.send_reply(conv["id"], parts, turn_id=turn_id)
+    log.info("conversation %s: %s without text, fixed reply%s", conv["id"], decision.kind,
+             " and handover" if decision.handover else "")
+    return TurnOutcome(reply_parts=parts, handed_over=decision.handover)
+
+
 async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
                    history: list[ChatMessage] | None = None, phone: str = "") -> TurnOutcome:
     """Run one turn.
@@ -157,6 +183,10 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
                 return TurnOutcome()
             await sender.send_reply(conversation_id, parts, turn_id=turn_id)
             return TurnOutcome(reply_parts=parts)
+        pending, earlier = media.pending_from_rows(rows)
+        media_decision = media.decide(pending, bot, earlier)
+        if media_decision is not None:
+            return await _media_reply(conv, media_decision, bot, turn_id)
         chat = prompt.history_from_rows(rows)
         client_name = conv["name"]
         phone = conv["phone"]
@@ -194,7 +224,13 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
     if handed_over and (not text or text == router.STUB_REPLY):
         text = HANDOVER_REPLY  # the model handed over without a word to the client
     parts = sender.split_reply(text)
-    outcome = TurnOutcome(reply_parts=parts, tool_calls=tool_calls, handed_over=handed_over)
+    requests = list(getattr(result, "requests", []) or [])
+    outcome = TurnOutcome(
+        reply_parts=parts, tool_calls=tool_calls, handed_over=handed_over,
+        coins=round(sum(usage.coins_for(r.model or "", r.input_tokens, r.output_tokens) for r in requests), 3),
+        input_tokens=sum(r.input_tokens for r in requests),
+        output_tokens=sum(r.output_tokens for r in requests),
+    )
     if dry_run or not parts:
         return outcome
 

@@ -7,6 +7,8 @@ A template is a business-type prompt with a form of fields the client fills in:
     description: ...
     fields:                       # rendered as a form in the UI, in this order
       - {key: business_name, label: Название, type: text, required: true, placeholder: "..."}
+      - {key: faq, label: Частые вопросы, type: textarea, default: "В: ...\nО: ..."}  # default = prefilled
+    defaults: {services: [{name: "Маникюр", price: "от … ₸", duration_min: 60}]}  # BotSettings presets
     prompt: |
       Ты — администратор «{{business_name}}». {{#phone}}Телефон: {{phone}}.{{/phone}}
     defaults: {name: "Администратор", greeting: "..."}   # optional BotSettings defaults
@@ -45,6 +47,8 @@ class TemplateField(BaseModel):
     required: bool = False
     placeholder: str = ""
     hint: str = ""
+    # onboarding/knowledge: prefilled text the owner edits (typical FAQ, tone, booking rules); "" = empty field
+    default: str = Field("", max_length=TEMPLATE_VALUE_MAX)
 
     @field_validator("key")
     @classmethod
