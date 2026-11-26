@@ -4,15 +4,21 @@ import { LogOut, MessageCircle, Moon, Sun } from 'lucide-react'
 import { useTheme } from '../theme'
 import { SupportLinks, usePublicConfig } from './Support'
 import { cx } from './ui'
+import { Backdrop } from './Backdrop'
 
 export function Wordmark({ to = '/', subtitle }: { to?: string; subtitle?: string }) {
   return (
-    <Link to={to} className="flex items-center gap-2.5 text-ink no-underline">
-      <span className="grid size-8 place-items-center rounded-nx bg-accent text-[15px] font-extrabold text-white">N</span>
-      <span className="leading-tight">
-        <span className="block text-[16px] font-extrabold tracking-tight">Nox Bot</span>
-        {subtitle && <span className="block text-[12px] text-ink-3">{subtitle}</span>}
+    <Link to={to} aria-label="Nox Bot — на главную" className="flex items-center gap-2.5 text-ink no-underline">
+      {/* the noxsw.kz wordmark: NOX SW in Neue Machina + a mono BOT tag */}
+      <span className="font-display text-[21px] leading-none font-extrabold tracking-[-0.02em] text-ink">NOX SW</span>
+      <span className="border border-accent/45 bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] leading-none font-bold tracking-[0.1em] text-accent-ink">
+        BOT
       </span>
+      {subtitle && (
+        <span className="ml-1 hidden border-l border-line-strong pl-3 font-mono text-[11px] tracking-[0.08em] text-ink-3 uppercase sm:inline">
+          {subtitle}
+        </span>
+      )}
     </Link>
   )
 }
@@ -40,14 +46,17 @@ interface ShellProps {
   user?: string
   onLogout?: () => void
   wide?: boolean
+  /** full-strength binary rain (auth pages); otherwise it is dimmed under dense content */
+  backdrop?: boolean
 }
 
 /** Top bar + centered content. */
-export function Shell({ children, subtitle, home = '/', user, onLogout, wide }: ShellProps) {
+export function Shell({ children, subtitle, home = '/', user, onLogout, wide, backdrop = false }: ShellProps) {
   const support = usePublicConfig()?.support
   return (
-    <div className="flex min-h-dvh flex-col">
-      <header className="border-b border-line bg-surface">
+    <div className="relative isolate flex min-h-dvh flex-col">
+      <Backdrop dim={!backdrop} />
+      <header className="sticky top-0 z-10 border-b border-line bg-surface/85 backdrop-blur-md">
         <div className={cx('mx-auto flex h-14 items-center gap-3 px-4', wide ? 'max-w-[1180px]' : 'max-w-[880px]')}>
           <Wordmark to={home} subtitle={subtitle} />
           <div className="ml-auto flex items-center gap-1">
@@ -114,9 +123,15 @@ const STEPS: [string, string][] = [
 function AuthAside() {
   const support = usePublicConfig()?.support
   return (
-    <aside className="hidden lg:block">
-      <h2 className="max-w-[24ch] text-[30px] leading-[1.15] font-extrabold tracking-[-0.02em] text-ink">
-        ИИ-ассистент для WhatsApp, который отвечает вашим клиентам
+    <aside className="relative hidden lg:block">
+      {/* a soft dark pool under the text so the binary rain never fights the copy */}
+      <div aria-hidden className="pointer-events-none absolute -inset-x-16 -inset-y-12 -z-10 rounded-[48px] bg-[radial-gradient(ellipse_at_40%_45%,var(--color-canvas)_35%,transparent_75%)] opacity-90" />
+      <span className="inline-flex items-center gap-2 rounded-full border border-line-strong bg-surface/70 px-3 py-1 font-mono text-[11px] font-bold tracking-[0.08em] text-ink-2 uppercase">
+        <span className="size-1.5 rounded-full bg-accent" aria-hidden />
+        ИИ-бот для WhatsApp
+      </span>
+      <h2 className="mt-5 max-w-[16ch] font-display text-[40px] leading-[1.02] font-extrabold tracking-[-0.025em] text-ink uppercase xl:text-[46px]">
+        Отвечает вашим клиентам <span className="nx-iridescent">за вас</span>
       </h2>
       <p className="mt-3 max-w-[46ch] text-[15px] text-ink-2">
         Цены, запись, адрес и график — бот отвечает сам, сложные вопросы передаёт вашим операторам.
@@ -124,8 +139,8 @@ function AuthAside() {
       <ol className="mt-8 flex flex-col gap-5">
         {STEPS.map(([title, text], i) => (
           <li key={title} className="flex gap-3.5">
-            <span className="grid size-7 flex-none place-items-center rounded-full border border-line-strong bg-surface text-[13px] font-bold text-ink-2 tabular-nums">
-              {i + 1}
+            <span className="grid size-7 flex-none place-items-center rounded-nx border border-line-strong bg-surface/70 font-mono text-[12px] font-bold text-accent-ink tabular-nums">
+              {String(i + 1).padStart(2, '0')}
             </span>
             <span className="pt-0.5">
               <span className="block text-[15px] font-bold text-ink">{title}</span>
@@ -163,7 +178,7 @@ function AuthHelp() {
 /** Auth pages: the form card, with the "what you get" panel beside it on wide screens. */
 export function AuthCard({ title, lead, children, aside = true }: { title: string; lead?: ReactNode; children: ReactNode; aside?: boolean }) {
   return (
-    <Shell wide>
+    <Shell wide backdrop>
       <div
         className={cx(
           'mx-auto grid w-full max-w-[460px] items-center gap-12 lg:py-6',
@@ -171,8 +186,8 @@ export function AuthCard({ title, lead, children, aside = true }: { title: strin
         )}
       >
         {aside && <AuthAside />}
-        <div className="rounded-nx border border-line bg-surface p-6 shadow-[0_1px_2px_rgb(0_0_0/0.04),0_12px_32px_-18px_rgb(0_0_0/0.25)] sm:p-8">
-          <h1 className="text-[22px] font-extrabold tracking-[-0.015em] text-ink">{title}</h1>
+        <div className="nx-panel p-6 sm:p-8">
+          <h1 className="font-display text-[24px] leading-tight font-extrabold tracking-[-0.015em] text-ink">{title}</h1>
           {lead && <div className="mt-1.5 text-[14.5px] text-ink-2">{lead}</div>}
           <div className="mt-6">{children}</div>
           {aside && <AuthHelp />}

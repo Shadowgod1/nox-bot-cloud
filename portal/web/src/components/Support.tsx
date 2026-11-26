@@ -27,6 +27,14 @@ export function telHref(phone: string): string {
   return `tel:${phone.trim().startsWith('+') ? '+' : ''}${digits}`
 }
 
+/** "77084707839" / "8 708 470 7839" → "+7 708 470 78 39"; anything else is shown as typed. */
+export function formatPhone(phone: string): string {
+  let d = phone.replace(/\D/g, '')
+  if (d.length === 11 && d.startsWith('8')) d = '7' + d.slice(1)
+  if (d.length !== 11 || !d.startsWith('7')) return phone.trim()
+  return `+7 ${d.slice(1, 4)} ${d.slice(4, 7)} ${d.slice(7, 9)} ${d.slice(9)}`
+}
+
 interface LinksProps {
   support: SupportContacts | undefined | null
   /** also the e-mail (always set) */
@@ -43,7 +51,7 @@ export function SupportLinks({ support, email = false, className, linkClassName 
     support.phone && (
       <a key="phone" href={telHref(support.phone)} className={link}>
         <Phone className="size-4 flex-none" aria-hidden />
-        <span className="whitespace-nowrap">{support.phone}</span>
+        <span className="whitespace-nowrap">{formatPhone(support.phone)}</span>
       </a>
     ),
     support.whatsapp_url && (

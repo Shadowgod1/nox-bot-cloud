@@ -55,7 +55,7 @@ export function Steps({ labels, current }: { labels: string[]; current: number }
                   className={cx(
                     'grid size-6 flex-none place-items-center rounded-full text-[12px] font-bold tabular-nums',
                     state === 'done' && 'bg-ok text-white',
-                    state === 'current' && 'bg-accent text-white ring-4 ring-accent-soft',
+                    state === 'current' && 'bg-accent text-on-accent ring-4 ring-accent-soft',
                     state === 'todo' && 'border border-line-strong bg-raised text-ink-3',
                   )}
                 >

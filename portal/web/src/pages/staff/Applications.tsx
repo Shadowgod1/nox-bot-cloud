@@ -63,11 +63,11 @@ export function Applications() {
               onClick={() => setFilter(f)}
               className={cx(
                 'h-8 rounded-nx border px-3 text-[13px] font-semibold',
-                filter === f ? 'border-accent bg-accent text-white' : 'border-line bg-surface text-ink-2 hover:bg-sunken',
+                filter === f ? 'border-accent bg-accent text-on-accent' : 'border-line bg-surface text-ink-2 hover:bg-sunken',
               )}
             >
               {f === 'all' ? 'Все' : STATUS_LABELS[f]}
-              <span className={cx('ml-1.5 tabular-nums', filter === f ? 'text-white/80' : 'text-ink-3')}>{n}</span>
+              <span className={cx('ml-1.5 tabular-nums', filter === f ? 'text-on-accent/75' : 'text-ink-3')}>{n}</span>
             </button>
           )
         })}

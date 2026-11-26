@@ -21,7 +21,7 @@ function StateBlock({ icon, title, children }: { icon?: ReactNode; title: string
     <div className="flex gap-4">
       {icon && <div className="mt-0.5 shrink-0">{icon}</div>}
       <div className="min-w-0 flex-1">
-        <h2 className="text-[20px] font-extrabold tracking-[-0.015em] text-ink">{title}</h2>
+        <h2 className="font-display text-[21px] leading-tight font-extrabold tracking-[-0.015em] text-ink">{title}</h2>
         <div className="mt-1.5 text-[14.5px] text-ink-2">{children}</div>
       </div>
     </div>
@@ -172,7 +172,7 @@ function PaymentPending({ me, onChange }: { me: ClientMe; onChange: (me: ClientM
         {me.payment_url && !qr && (
           <a
             href={me.payment_url}
-            className="inline-flex h-10 items-center gap-1.5 rounded-nx bg-accent px-4 text-sm font-semibold text-white hover:bg-accent-hover"
+            className="inline-flex h-10 items-center gap-1.5 rounded-nx bg-accent px-4 text-sm font-semibold text-on-accent hover:bg-accent-hover"
           >
             <CreditCard className="size-4" aria-hidden /> Перейти к оплате
           </a>
@@ -193,7 +193,7 @@ function AwaitingPayment({ me, onChange }: { me: ClientMe; onChange: (me: Client
       <div className="mt-3 flex flex-wrap gap-2">
         <Link
           to="/invoice"
-          className="inline-flex h-10 items-center gap-1.5 rounded-nx bg-accent px-4 text-sm font-semibold text-white hover:bg-accent-hover"
+          className="inline-flex h-10 items-center gap-1.5 rounded-nx bg-accent px-4 text-sm font-semibold text-on-accent hover:bg-accent-hover"
         >
           <FileText className="size-4" aria-hidden /> Открыть счёт (PDF)
         </Link>
@@ -423,7 +423,7 @@ function StatusView({ me, setMe }: { me: ClientMe; setMe: (me: ClientMe) => void
               href={me.admin_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-2 flex h-12 w-full items-center justify-center gap-2 rounded-nx bg-accent px-5 text-[15.5px] font-bold text-white shadow-[0_1px_2px_rgb(0_0_0/0.12)] hover:bg-accent-hover sm:inline-flex sm:w-auto"
+              className="mt-2 flex h-12 w-full items-center justify-center gap-2 rounded-nx bg-accent px-5 text-[15.5px] font-bold text-on-accent shadow-[0_1px_2px_rgb(0_0_0/0.12)] hover:bg-accent-hover sm:inline-flex sm:w-auto"
             >
               <LayoutDashboard className="size-5" aria-hidden /> Открыть панель бота
               <ExternalLink className="size-4 opacity-80" aria-hidden />

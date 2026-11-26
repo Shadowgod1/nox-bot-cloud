@@ -17,7 +17,7 @@ export function cx(...parts: (string | false | null | undefined)[]) {
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
 
 const variants: Record<Variant, string> = {
-  primary: 'bg-accent text-white hover:bg-accent-hover border border-transparent shadow-[0_1px_2px_rgb(0_0_0/0.12)]',
+  primary: 'bg-accent text-on-accent hover:bg-accent-hover border border-transparent shadow-[0_1px_2px_rgb(0_0_0/0.12)]',
   secondary: 'bg-raised text-ink border border-line-strong hover:bg-sunken',
   ghost: 'bg-transparent text-ink-2 hover:bg-sunken hover:text-ink border border-transparent',
   danger: 'bg-danger text-white hover:brightness-95 border border-transparent',
@@ -113,7 +113,7 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
 
 export function Card({ children, className, ...rest }: { children: ReactNode; className?: string; 'data-testid'?: string }) {
   return (
-    <div className={cx('rounded-nx border border-line bg-surface', className)} {...rest}>
+    <div className={cx('nx-panel', className)} {...rest}>
       {children}
     </div>
   )

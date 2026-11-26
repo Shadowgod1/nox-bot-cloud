@@ -15,11 +15,8 @@ function stored(): Theme | null {
 export function initialTheme(): Theme {
   const saved = stored()
   if (saved) return saved
-  try {
-    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-  } catch {
-    return 'light'
-  }
+  // the Nox brand is dark (as noxsw.kz); light only when the visitor picks it with the toggle
+  return 'dark'
 }
 
 export function applyTheme(theme: Theme) {
@@ -41,4 +38,17 @@ export function useTheme(): [Theme, () => void] {
     })
   }, [])
   return [theme, toggle]
+}
+
+/** The theme currently on <html>, kept in sync with the toggle (which may live in another component). */
+export function useThemeValue(): Theme {
+  const read = (): Theme => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark')
+  const [theme, setTheme] = useState<Theme>(read)
+  useEffect(() => {
+    const obs = new MutationObserver(() => setTheme(read()))
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    setTheme(read())
+    return () => obs.disconnect()
+  }, [])
+  return theme
 }
