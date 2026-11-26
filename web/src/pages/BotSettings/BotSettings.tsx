@@ -256,8 +256,8 @@ export function BotSettingsPage() {
                   <Field label="Задержка склейки, сек" hint="Бот ждёт, пока клиент допишет несколько сообщений подряд. От 3 до 120.">
                     <Input type="number" min={3} max={120} value={form.buffer_delay_seconds} onChange={(e) => set('buffer_delay_seconds', clamp(e.target.value, 3, 120, 8))} className="tabular" />
                   </Field>
-                  <Field label="Память, сообщений" hint="Сколько последних сообщений бот учитывает в ответе.">
-                    <Input type="number" min={2} max={100} value={form.memory_messages} onChange={(e) => set('memory_messages', clamp(e.target.value, 2, 100, 20))} className="tabular" />
+                  <Field label="Память, сообщений" hint="Сколько последних сообщений бот видит в ответе. Имя, заявки и заметки о клиенте он помнит и сверх этого. Рекомендуем 14.">
+                    <Input type="number" min={2} max={100} value={form.memory_messages} onChange={(e) => set('memory_messages', clamp(e.target.value, 2, 100, 14))} className="tabular" />
                   </Field>
                 </div>
               </SubSection>

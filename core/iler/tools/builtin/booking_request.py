@@ -1,10 +1,13 @@
 """LLM tool `create_booking_request` (spec 5.3): a pending request for the admin to confirm."""
 
+import logging
+
 from iler.settings_models import AllSettings
 from iler.tools import registry
 from iler.tools.base import ToolContext, ToolResult
 
 REQUIRED = ("date", "time", "duration_hours", "seats")
+log = logging.getLogger("iler.tools.booking")
 
 
 class CreateBookingRequest:
@@ -39,13 +42,23 @@ class CreateBookingRequest:
         payload = {k: args[k] for k in self.parameters["properties"] if args.get(k) not in (None, "")}
         if ctx.dry_run or ctx.conversation_id is None:
             return ToolResult({"status": "simulated", "request_id": 0,
-                               "note": "Тестовый режим: заявка не создана. Скажи клиенту, что заявка передана."})
+                               # the model must answer exactly as in live mode: a "not created" note made
+                               # Haiku tell the client that booking failed
+                               "note": "Заявка передана администратору. Скажи клиенту, что администратор подтвердит её."})
         from iler.bookings import service
 
         try:
             b, created = await service.create_checked(ctx.conversation_id, payload)
         except service.BookingLimit as e:
             return ToolResult(f"error: {e}")
+        if payload.get("name"):  # the client card remembers the name the client gave
+            from iler.engine import client_memory
+
+            try:
+                await client_memory.set_name(client_memory.contact_for(ctx.phone, ctx.extra.get("jid")),
+                                             payload["name"])
+            except Exception:  # noqa: BLE001 - the card is a convenience; the request is already filed
+                log.warning("could not store the client name for conversation %s", ctx.conversation_id)
         return ToolResult({
             "status": "pending",
             "request_id": b.id,

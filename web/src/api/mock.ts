@@ -7,6 +7,7 @@ import type {
   BackupInfo,
   BotSettings,
   Booking,
+  ClientCard,
   Conversation,
   ConversationRow,
   Dashboard,
@@ -53,6 +54,8 @@ interface State {
   update: UpdateStatus
   updateTicks: number
   nextId: number
+  /** Client cards by conversation id (core: client_profiles by phone). */
+  clients: Record<number, { name: string; notes: string[]; updated_at: string }>
   /** A just-registered install: no conversations yet (payback card shows the empty state). */
   fresh: boolean
 }
@@ -110,7 +113,7 @@ const s: State = {
     greeting: 'Здравствуйте! Чем могу помочь?',
     buffer_delay_seconds: 8,
     handover_pause_minutes: 60,
-    memory_messages: 20,
+    memory_messages: 14,
     booking_confirm_template: 'Ваша бронь подтверждена ✅ {details}',
     booking_reject_template: 'К сожалению, не получилось забронировать: {reason}',
     booking_request_timeout_min: 15,
@@ -139,6 +142,9 @@ const s: State = {
   update: { job_id: null, state: null, log: '' },
   updateTicks: 0,
   nextId: 1000,
+  clients: {
+    2: { name: 'Алина', notes: ['Ходит к мастеру Айгерим', 'Удобно по будням после 18:00', 'Аллергия на латекс', 'Просит обращаться на «вы»'], updated_at: ago(12) },
+  },
 }
 
 {
@@ -448,6 +454,41 @@ const setStatus = (status: 'paused' | 'active'): Handler => (m) => {
   publish('conversation.updated', { conversation: convRow(c) }) // like core: engine/store publishes
   return json(convOut(c))
 }
+// like core api/client_card.py
+const clientCard = (id: number): ClientCard => {
+  const p = s.clients[id]
+  const when = (b: Booking) => [String(b.payload.date ?? '').split('-').reverse().join('.'), String(b.payload.time ?? '')].filter(Boolean).join(' ')
+  return {
+    name: p?.name ?? '',
+    notes: p?.notes ?? [],
+    bookings: s.bookings
+      .filter((b) => b.conversation_id === id)
+      .sort((a, b) => b.id - a.id)
+      .slice(0, 5)
+      .map((b) => ({ id: b.id, service: String(b.payload.service ?? b.payload.zone ?? ''), when: when(b), status: b.status, created_at: b.created_at })),
+    updated_at: p?.updated_at ?? null,
+  }
+}
+on('GET', '/api/conversations/:id/client', (m) => {
+  const id = Number(m[1])
+  if (!s.conversations.some((c) => c.id === id)) return fail(404, 'not_found', 'Conversation not found')
+  return json(clientCard(id))
+})
+on('POST', '/api/conversations/:id/client/notes/remove', (m, b) => {
+  const id = Number(m[1])
+  const p = s.clients[id]
+  const fact = String(b.fact ?? '')
+  if (!p || !p.notes.includes(fact)) return fail(404, 'not_found', 'Note not found')
+  p.notes = p.notes.filter((n) => n !== fact)
+  p.updated_at = new Date().toISOString()
+  return json(clientCard(id))
+})
+on('DELETE', '/api/conversations/:id/client', (m) => {
+  const id = Number(m[1])
+  if (!s.conversations.some((c) => c.id === id)) return fail(404, 'not_found', 'Conversation not found')
+  delete s.clients[id]
+  return json(clientCard(id))
+})
 on('POST', '/api/conversations/:id/takeover', setStatus('paused'))
 on('POST', '/api/conversations/:id/release', setStatus('active'))
 

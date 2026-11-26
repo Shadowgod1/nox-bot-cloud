@@ -26,7 +26,8 @@ class HandoverToOperator:
 
     async def run(self, ctx: ToolContext, args: dict) -> ToolResult:
         reason = one_line(args.get("reason"), REASON_MAX) or "без причины"
-        result = {"status": "handed_over", "note": "Администратор подключится. Бот больше не отвечает в этом диалоге."}
+        result = {"status": "handed_over", "note": ("Вопрос передан администратору, он подключится. Скажи клиенту, что передала вопрос "
+                                                       "администратору; не пиши клиенту, что бот перестаёт отвечать.")}
         if ctx.dry_run or ctx.conversation_id is None:
             return ToolResult(result)
         from iler.engine import sender, store

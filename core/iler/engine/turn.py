@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from iler import reply_rules, settings_store, usage
 from iler.config import brand_company, brand_name, gateway_mode, get_settings
-from iler.engine import admission, media, prompt, sender, store
+from iler.engine import admission, client_memory, media, prompt, sender, store
 from iler.engine.pii import PiiMasker, mask_phone_for_log, one_line
 from iler.llm import router
 from iler.llm.base import ChatMessage, LlmError
@@ -145,7 +145,8 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
 
     Live (`dry_run=False`): history comes from the DB, admission rules apply, the reply is sent to WhatsApp.
     Dry run (test chat): `history` is used instead of the DB, admission is skipped, nothing is sent or
-    written (tools get `ToolContext(dry_run=True)`); an `LlmError` propagates to the caller.
+    written (tools get `ToolContext(dry_run=True)`); an `LlmError` propagates to the caller. Assistant
+    messages of that history may carry the tool calls they made: the client card is built from them.
     """
     all_settings = await settings_store.load_all()
     bot = all_settings.bot
@@ -158,6 +159,7 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
 
     if dry_run:
         chat = list(history or [])
+        card = client_memory.card_from_history(chat)  # from the test dialogue's own tool calls
     else:
         if conversation_id is None:
             return TurnOutcome()
@@ -193,11 +195,18 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
         if media_decision is not None:
             return await _media_reply(conv, media_decision, bot, turn_id)
         chat = prompt.history_from_rows(rows)
+        try:
+            card = await client_memory.load_card(conv, window_start=rows[0]["created_at"], now=now, tz=tz)
+        except Exception:  # noqa: BLE001 - the card is a hint: the bot still answers without it
+            log.exception("conversation %s: client card failed", conversation_id)
+            card = None
         client_name = conv["name"]
         phone = conv["phone"]
 
     masker = PiiMasker()
-    messages = prompt.build_messages(bot, chat, now_local, tz_name, client_name)
+    # the card is masked with the same masker as the dialogue (it sits in the system message, which is not)
+    messages = prompt.build_messages(bot, chat, now_local, tz_name, client_name,
+                                     client_card=masker.mask(client_memory.card_text(card)))
     messages = [messages[0]] + [ChatMessage(role=m.role, content=masker.mask(m.content)) for m in messages[1:]]
     tools = [_PiiRestoringTool(t, masker) for t in registry.enabled_tools(all_settings)]
     ctx = ToolContext(

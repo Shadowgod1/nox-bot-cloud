@@ -8,9 +8,10 @@ Notes for the Claude 5.5 models (the bot uses Sonnet 5.5 or Haiku 5.5):
   next request of the tool loop, so the raw content of such turns is cached per tool_use id;
 - a policy decline is HTTP 200 with ``stop_reason == "refusal"``; server-side fallbacks
   (``fallbacks: "default"``, beta ``server-side-fallback-2026-07-01``) retry it on another model first;
-- prompt caching: an explicit breakpoint on the stable system prefix (tools + rules + business + prices,
-  shared by every conversation of the install) and top-level automatic caching for the growing dialogue.
-  The current time comes after SYSTEM_DYNAMIC_MARK, past the breakpoint, so it never breaks the cache.
+- prompt caching (``cache_layout``): a breakpoint on the stable system head (tools + rules + business +
+  prices, shared by every conversation of the install) and one on the last dialogue message; the
+  per-request tail (time, client card: after SYSTEM_DYNAMIC_MARK) goes after the dialogue as a
+  mid-conversation system message, so neither the head nor the earlier dialogue ever changes.
 """
 
 import time
@@ -42,6 +43,45 @@ def system_blocks(system: str) -> list[dict]:
     return [{"type": "text", "text": head, "cache_control": CACHE}, {"type": "text", "text": tail}]
 
 
+def split_system(system: str) -> tuple[str, str]:
+    """(stable head, per-request tail: the current time and the client card); tail is "" without the mark."""
+    head, mark, tail = system.rpartition(SYSTEM_DYNAMIC_MARK)
+    if not mark or not head.strip():
+        return system, ""
+    return head, tail
+
+
+def cache_layout(system: str | None, msgs: list[dict], *, tail_as_message: bool) -> tuple[list[dict] | None, list[dict]]:
+    """Request layout for prompt caching.
+
+    - the stable system head carries a breakpoint (tools + rules + business: shared by every conversation);
+    - the last dialogue message carries a breakpoint, so the next turn re-reads the whole earlier dialogue;
+    - the per-request tail (time, client card) goes AFTER the dialogue as a mid-conversation system message,
+      so it never changes the cached prefix. ``tail_as_message=False`` (a model that rejects such messages)
+      keeps it as a second system block, as before.
+    """
+    msgs = [dict(m) for m in msgs]
+    if msgs:
+        last = msgs[-1]
+        content = last["content"]
+        blocks = [{"type": "text", "text": content}] if isinstance(content, str) else [dict(b) for b in content]
+        if blocks:
+            blocks[-1] = {**blocks[-1], "cache_control": CACHE}
+            last["content"] = blocks
+    if not system:
+        return None, msgs
+    head, tail = split_system(system)
+    if not tail:
+        return [{"type": "text", "text": head, "cache_control": CACHE}], msgs
+    if tail_as_message and msgs and msgs[-1]["role"] == "user":
+        return [{"type": "text", "text": head, "cache_control": CACHE}], [*msgs, {"role": "system", "content": tail}]
+    return [{"type": "text", "text": head, "cache_control": CACHE}, {"type": "text", "text": tail}], msgs
+
+
+def _rejects_system_messages(e: Exception) -> bool:
+    return "role 'system'" in str(getattr(e, "message", "") or e)
+
+
 def _redact(text: str, secret: str) -> str:
     return text.replace(secret, "***") if secret else text
 
@@ -71,6 +111,8 @@ class AnthropicProvider:
         )
         # tool_use id -> (all tool_use ids of that turn, raw assistant content as returned by the API)
         self._raw: OrderedDict[str, tuple[tuple[str, ...], list[dict]]] = OrderedDict()
+        # the per-request prompt tail as a mid-conversation system message (off after a 400 that rejects it)
+        self._tail_as_message = True
 
     # --- request mapping ------------------------------------------------------------------------
 
@@ -123,16 +165,16 @@ class AnthropicProvider:
     # --- call ---------------------------------------------------------------------------------
 
     async def complete(self, messages: list[ChatMessage], tools: list[Tool], model: str) -> LlmResponse:
-        system, msgs = self.to_anthropic_messages(messages)
+        system, raw_msgs = self.to_anthropic_messages(messages)
+        system_param, msgs = cache_layout(system, raw_msgs, tail_as_message=self._tail_as_message)
         kwargs: dict = {
             "model": model,
             "max_tokens": MAX_TOKENS,
             "messages": msgs,
             "output_config": {"effort": self.effort},
         }
-        if system:
-            kwargs["system"] = system_blocks(system)
-        kwargs["extra_body"] = {"cache_control": CACHE}  # automatic caching of the dialogue tail
+        if system_param:
+            kwargs["system"] = system_param
         if tools:
             kwargs["tools"] = to_anthropic_tools(tools)
             kwargs["tool_choice"] = {"type": "auto"}
@@ -141,7 +183,17 @@ class AnthropicProvider:
             kwargs["fallbacks"] = "default"
         started = time.monotonic()
         try:
-            resp = await self._client.beta.messages.create(**kwargs)
+            try:
+                resp = await self._client.beta.messages.create(**kwargs)
+            except anthropic.BadRequestError as e:
+                if not (self._tail_as_message and _rejects_system_messages(e)):
+                    raise
+                # a model without mid-conversation system messages: the tail goes back into the system prompt
+                self._tail_as_message = False
+                system_param, kwargs["messages"] = cache_layout(system, raw_msgs, tail_as_message=False)
+                if system_param:
+                    kwargs["system"] = system_param
+                resp = await self._client.beta.messages.create(**kwargs)
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
             raise LlmError(_redact(f"anthropic HTTP {e.status_code}: {e.message}", self._key), retryable=False,
                            status=e.status_code, error_type=body_error_type(e.body)) from None

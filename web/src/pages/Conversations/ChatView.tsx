@@ -4,6 +4,7 @@ import { ArrowLeft, Bot, Hand, Send, UserRound } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Conversation, Message, Ok, Page } from '../../api/types'
 import { useEvent } from '../../hooks/useEvents'
+import { XL_QUERY, useMediaQuery } from '../../hooks/useMediaQuery'
 import { Button, EmptyState, ErrorState, Spinner, cx } from '../../components/ui'
 import { formatDateTime, formatTime, ru } from '../../i18n/ru'
 import { ClientPanel } from './ClientPanel'
@@ -53,7 +54,10 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
   // the message at most once even if the failed attempt actually reached WhatsApp.
   const pendingSend = useRef<{ conversationId: number; text: string; requestId: string } | null>(null)
   const [acting, setActing] = useState(false)
-  const [infoOpen, setInfoOpen] = useState(false)
+  // The client panel: a third column on xl+ (open by default), a sheet over the chat below (opened on demand).
+  const wide = useMediaQuery(XL_QUERY)
+  const [showClient, setShowClient] = useState(wide)
+  useEffect(() => setShowClient(wide), [wide])
   const logRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
 
@@ -158,7 +162,7 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
               {conversation ? conversation.name || conversation.phone : `Диалог #${conversationId}`}
             </h2>
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[13px] text-ink-2">
-              {conversation?.name && <span className="tabular">{conversation.phone}</span>}
+              {conversation?.name && <span className="tabular max-w-full truncate">{conversation.phone}</span>}
               {conversation && (
                 <span className="max-sm:hidden">
                   <StatusBadge conversation={conversation} />
@@ -166,6 +170,17 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
               )}
             </div>
           </div>
+          <Button
+            variant={showClient ? 'primary' : 'ghost'}
+            onClick={() => setShowClient((v) => !v)}
+            aria-pressed={showClient}
+            aria-label="Что бот знает о клиенте"
+            title="Что бот знает о клиенте"
+            className="max-sm:px-2"
+            icon={<UserRound className="size-4" aria-hidden />}
+          >
+            <span className="max-sm:hidden">Клиент</span>
+          </Button>
           {botActive ? (
             <Button onClick={() => act('takeover')} loading={acting} icon={<Hand className="size-4" aria-hidden />}>
               Перехватить
@@ -175,17 +190,6 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
               Вернуть бота
             </Button>
           )}
-          {/* below xl the client panel is a sheet: this opens it */}
-          <Button
-            variant="ghost"
-            onClick={() => setInfoOpen((v) => !v)}
-            aria-expanded={infoOpen}
-            aria-label="Что бот знает о клиенте"
-            title="Что бот знает о клиенте"
-            className="xl:hidden"
-            icon={<UserRound className="size-4" aria-hidden />}
-          />
-
           {/* phones: the status gets its own row so "Ведёт оператор до 21:30" is never cut by the button */}
           {conversation && (
             <div className="basis-full sm:hidden">
@@ -261,14 +265,16 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
           <p className="mx-auto mt-1.5 max-w-[920px] text-[12px] text-ink-3 max-sm:hidden">Ctrl + Enter — отправить</p>
         </form>
       </div>
-      <ClientPanel
-        conversationId={conversationId}
-        conversation={conversation}
-        messages={messages}
-        hasOlder={cursor != null}
-        open={infoOpen}
-        onClose={() => setInfoOpen(false)}
-      />
+      {showClient && (
+        <ClientPanel
+          conversationId={conversationId}
+          conversation={conversation}
+          messages={messages}
+          hasOlder={cursor != null}
+          wide={wide}
+          onClose={() => setShowClient(false)}
+        />
+      )}
     </div>
   )
 }

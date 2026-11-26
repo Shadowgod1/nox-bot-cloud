@@ -224,39 +224,46 @@ describe('Conversations', () => {
     expect(sent(1).request_id).toMatch(/^[A-Za-z0-9_-]{8,64}$/)
   })
 
-  it('client panel: contact, only this client’s requests and the bot memory', async () => {
-    const booking = (id: number, conversation_id: number, comment: string) => ({
-      id,
-      conversation_id,
-      payload: { time: '19:00', comment },
-      status: 'pending',
-      admin_note: null,
-      timeout_notified: false,
-      created_at: '2026-11-11T10:05:00Z',
-      decided_at: null,
-      decided_by: null,
-      phone: '',
-      name: '',
-    })
-    mockApi({
+  it('client panel adds who answers, message counters and the bot memory; requests come from the client card', async () => {
+    const fetchMock = mockApi({
       'GET /api/conversations': { items: [conv(1, 'Данияр', 'Привет'), conv(2, 'Алина', 'Ок')], next_cursor: null },
       'GET /api/conversations/1/messages': { items: [msg(10, 1, 'Привет', '2026-11-11T10:00:00Z')], next_cursor: null },
-      'GET /api/bookings': [booking(7, 1, 'У окна'), booking(8, 2, 'Чужая заявка')],
-      'GET /api/settings/bot': { memory_messages: 20 },
+      'GET /api/conversations/1/client': {
+        name: 'Данияр',
+        notes: [],
+        bookings: [{ id: 7, service: 'VIP', when: '12.11.2026 19:00', status: 'pending', created_at: '2026-11-11T10:05:00Z' }],
+        updated_at: null,
+      },
+      'GET /api/settings/bot': { memory_messages: 14 },
+    })
+    renderAt('/conversations/1')
+    await userEvent.click(await screen.findByRole('button', { name: 'Что бот знает о клиенте' }))
+    const panel = await screen.findByRole('complementary', { name: 'Что бот знает о клиенте' })
+    expect(await within(panel).findByText(/VIP, 12.11.2026 19:00/)).toBeInTheDocument()
+    expect(within(panel).getByText('Бот отвечает')).toBeInTheDocument()
+    expect(within(panel).getByText('от клиента').nextSibling).toHaveTextContent('1')
+    expect(await within(panel).findByText(/последние 14 сообщений/)).toBeInTheDocument()
+    expect(callsTo(fetchMock, 'GET', '/api/bookings')).toHaveLength(0)
+  })
+
+  it('client panel is a third column open by default on xl screens', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(min-width: 1280px)',
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+    mockApi({
+      'GET /api/conversations': { items: [conv(1, 'Данияр', 'Привет')], next_cursor: null },
+      'GET /api/conversations/1/messages': { items: [msg(10, 1, 'Привет', '2026-11-11T10:00:00Z')], next_cursor: null },
+      'GET /api/conversations/1/client': { name: '', notes: [], bookings: [], updated_at: null },
     })
     renderAt('/conversations/1')
     const panel = await screen.findByRole('complementary', { name: 'Что бот знает о клиенте' })
-    expect(await within(panel).findByText('«У окна»')).toBeInTheDocument()
-    expect(within(panel).queryByText('«Чужая заявка»')).not.toBeInTheDocument()
-    expect(within(panel).getByText('77010000001')).toBeInTheDocument()
-    expect(await within(panel).findByText(/последние 20 сообщений/)).toBeInTheDocument()
-
-    // below xl the panel is a sheet toggled from the chat header
+    expect(await within(panel).findByText('Клиент не называл имя')).toBeInTheDocument()
+    expect(panel.className).not.toContain('absolute')
     const toggle = screen.getByRole('button', { name: 'Что бот знает о клиенте' })
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
     await userEvent.click(toggle)
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    await userEvent.click(within(panel).getByRole('button', { name: 'Закрыть' }))
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('complementary', { name: 'Что бот знает о клиенте' })).not.toBeInTheDocument()
   })
 })
