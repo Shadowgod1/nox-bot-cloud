@@ -440,6 +440,19 @@ export interface ChatTurn {
   content: string
   /** Simulated attachment of a client message (test chat). */
   media?: TestMedia
+  /** Tool calls an earlier bot reply made (test chat): core builds the client card of the test from them. */
+  tool_calls?: { name: string; args: Record<string, unknown>; error: string | null }[]
+}
+
+/** GET /api/conversations/{id}/client: what the bot knows about the client (core engine/client_memory). */
+export interface ClientCard {
+  /** The name the client gave themselves ("" = not given; the WhatsApp name is in the conversation). */
+  name: string
+  /** One lasting fact per item, oldest first. */
+  notes: string[]
+  /** Last booking requests, newest first. */
+  bookings: { id: number; service: string; when: string; status: BookingStatus; created_at: string }[]
+  updated_at: string | null
 }
 
 export interface ToolCallInfo {

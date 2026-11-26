@@ -42,6 +42,30 @@ describe('Тестовый чат', () => {
     expect(screen.getByLabelText('Примеры вопросов')).toBeInTheDocument()
   })
 
+  it('echoes the tool calls of earlier replies so the test client card sees the booking', async () => {
+    const user = userEvent.setup()
+    const booking = { name: 'create_booking_request', args: { date: '2026-11-28', time: '15:00' }, result: { status: 'simulated' }, error: null }
+    const limit = { name: 'remember_client_fact', args: { fact: '+7 701' }, result: 'error: не записывай телефоны', error: null }
+    let n = 0
+    const fetchMock = renderChat(() => (n++ === 0
+      ? { reply: 'Заявка передана.', tool_calls: [booking, limit], usage: null }
+      : { reply: 'Цену уточнит администратор.', tool_calls: [], usage: null }))
+    const box = await screen.findByRole('textbox')
+    await user.type(box, 'Запишите на маникюр{Enter}')
+    await screen.findByText('Заявка передана.')
+    await user.type(box, 'А сколько стоит?{Enter}')
+    await screen.findByText('Цену уточнит администратор.')
+    const body = JSON.parse(String((callsTo(fetchMock, 'POST', '/api/test-chat')[1][1] as RequestInit).body))
+    expect(body.messages).toEqual([
+      { role: 'user', content: 'Запишите на маникюр' },
+      { role: 'assistant', content: 'Заявка передана.', tool_calls: [
+        { name: 'create_booking_request', args: { date: '2026-11-28', time: '15:00' }, error: null },
+        { name: 'remember_client_fact', args: { fact: '+7 701' }, error: 'error: не записывай телефоны' },
+      ] },
+      { role: 'user', content: 'А сколько стоит?' },
+    ])
+  })
+
   it('simulates a voice message and shows that WhatsApp would hand over', async () => {
     const user = userEvent.setup()
     const fetchMock = renderChat(() => ({ reply: 'Спасибо! Передам ваше голосовое администратору.', tool_calls: [], handed_over: true, usage: null }))
