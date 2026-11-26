@@ -1,12 +1,16 @@
 """Test chat (spec section 6.7): talk to the bot without WhatsApp. Runs a dry-run turn on the supplied history;
 nothing is written to conversations/messages and nothing is sent to WhatsApp.
+
+A client message may simulate a voice message or a photo (``media``): the bot then answers exactly as it would
+in WhatsApp (engine.media), without calling the LLM. ``usage`` is the LLM spend of this reply in coins, from
+the provider's token usage (the LLM gateway passes it through); it counts towards the install's spend.
 """
 
 import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from iler.auth.deps import User, csrf_protect, current_user
 from iler.config import brand_company, brand_name, gateway_mode
@@ -19,7 +23,14 @@ router = APIRouter(tags=["test-chat"])
 
 class TestChatMessage(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=4000)
+    content: str = Field("", max_length=4000)
+    media: Literal["audio", "image", "video"] | None = None  # simulated attachment of a client message
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> "TestChatMessage":
+        if not self.content.strip() and self.media is None:
+            raise ValueError("message must have text or media")
+        return self
 
 
 class TestChatRequest(BaseModel):
@@ -33,19 +44,43 @@ class TestChatRequest(BaseModel):
         return v
 
 
+class TestChatUsage(BaseModel):
+    coins: float
+    input_tokens: int
+    output_tokens: int
+
+
 class TestChatResponse(BaseModel):
     reply: str
     tool_calls: list[dict[str, Any]]
+    handed_over: bool = False
+    usage: TestChatUsage | None = None  # None: no LLM call (the fixed voice / photo reply)
 
 
 @router.post("/api/test-chat", response_model=TestChatResponse)
 async def post_test_chat(body: TestChatRequest, _user: User = Depends(current_user), _csrf=Depends(csrf_protect)):
-    from iler.engine.turn import run_turn  # lazy: engine is optional at import time
+    from iler import settings_store
+    from iler.engine import media, prompt
     from iler.engine.prompt import BotNotConfigured
+    from iler.engine.turn import run_turn  # lazy: engine is optional at import time
     from iler.llm.base import ChatMessage, LlmError, public_error, rejected_providers
+    from iler.settings_models import BotSettings
     from iler.usage import AccessSuspended, CoinsExhausted
 
-    history = [ChatMessage(role=m.role, content=m.content) for m in body.messages]
+    bot = await settings_store.get("bot", BotSettings)
+    idx = len(body.messages)
+    while idx > 0 and body.messages[idx - 1].role == "user":
+        idx -= 1
+    pending = [(m.content, m.media) for m in body.messages[idx:]]
+    earlier = [m.content for m in body.messages[:idx] if m.role == "user" and m.content]
+    decision = media.decide(pending, bot, earlier) if bot.prompt.strip() else None
+    if decision is not None:
+        return {"reply": decision.reply, "tool_calls": [], "handed_over": decision.handover, "usage": None}
+
+    history = [
+        ChatMessage(role=m.role, content=prompt.message_text(m.content, {"type": m.media} if m.media else None))
+        for m in body.messages
+    ]
     try:
         outcome = await run_turn(None, dry_run=True, history=history)
     except BotNotConfigured as e:
@@ -62,4 +97,10 @@ async def post_test_chat(body: TestChatRequest, _user: User = Depends(current_us
         # loses the reason. 424 = the provider refused ILER's key, 503 = provider unreachable or failing.
         status = 424 if rejected_providers(str(e)) else 503
         raise ApiError(status, "llm_error", public_error(str(e))) from e
-    return {"reply": "\n\n".join(outcome.reply_parts), "tool_calls": list(outcome.tool_calls)}
+    return {
+        "reply": "\n\n".join(outcome.reply_parts),
+        "tool_calls": list(outcome.tool_calls),
+        "handed_over": bool(getattr(outcome, "handed_over", False)),
+        "usage": {"coins": getattr(outcome, "coins", 0.0), "input_tokens": getattr(outcome, "input_tokens", 0),
+                  "output_tokens": getattr(outcome, "output_tokens", 0)},
+    }

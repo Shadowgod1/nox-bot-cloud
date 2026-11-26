@@ -190,8 +190,9 @@ async def test_bot_settings_prompt_fields_and_hours_validation(owner):
     body = (await owner.get("/api/settings/bot")).json()
     assert body["prompt"] == "" and body["template_id"] is None and body["template_values"] == {}
     assert body["prompt_edited"] is False and body["enabled"] is True
-    for removed in ("persona", "instructions", "services", "faq", "address"):
+    for removed in ("persona", "instructions", "faq", "address"):
         assert removed not in body
+    assert body["services"] == [] and body["staff"] == []  # structured price list / staff (onboarding)
     body |= {"template_id": "generic", "template_values": {"business_name": "Мастер"}, "prompt": "Ты — консультант.",
              "prompt_edited": True}
     r = await owner.put("/api/settings/bot", json=body, headers=csrf(owner))

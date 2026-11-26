@@ -14,6 +14,7 @@ import { Conversations } from './pages/Conversations/Conversations'
 import { Bookings } from './pages/Bookings/Bookings'
 import { BotSettingsPage } from './pages/BotSettings/BotSettings'
 import { TestChat } from './pages/TestChat/TestChat'
+import { Knowledge } from './pages/Knowledge/Knowledge'
 import { Integrations } from './pages/Integrations/Integrations'
 import { System } from './pages/System/System'
 
@@ -75,6 +76,7 @@ function Shell() {
           <Route path="conversations/:id?" element={<Conversations />} />
           <Route path="bookings" element={<Bookings />} />
           <Route path="bot" element={<BotSettingsPage />} />
+          <Route path="knowledge" element={<Knowledge />} />
           <Route path="test-chat" element={<TestChat />} />
           <Route path="integrations" element={<Integrations />} />
           <Route path="system" element={<System />} />

@@ -11,6 +11,7 @@ import { WhatsAppConnect } from '../../components/WhatsAppConnect'
 import { ReplyRulesCard } from '../../components/ReplyRules'
 import { LeadNotifications } from '../../components/LeadNotifications'
 import { BotSetupStep } from './BotSetupStep'
+import { TestBotStep } from './TestBotStep'
 import { StepHeader } from './StepHeader'
 import { Button, CheckLine, type CheckView, ErrorState, Field, Input, Select, Spinner, cx } from '../../components/ui'
 import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_EFFORT_HINT, ANTHROPIC_EFFORTS } from '../System/anthropic'
@@ -31,7 +32,8 @@ const PROVIDER_DESC: Record<LlmProvider, string> = {
   gemini: 'Модели Gemini от Google',
 }
 
-const STEPS = ['Владелец', 'Языковая модель', 'WhatsApp', 'Настройка бота', 'Заявки', 'Готово'] as const
+// check the bot first (test chat needs no number), then connect WhatsApp
+const STEPS = ['Владелец', 'Языковая модель', 'Настройка бота', 'Проверьте бота', 'WhatsApp', 'Заявки', 'Готово'] as const
 const TOKEN_KEY = 'iler_setup_token'
 const TOKEN_HELP = 'Откройте ссылку из установщика (она содержит одноразовый токен).'
 
@@ -91,8 +93,7 @@ export function Setup() {
       <div className="rounded-[12px] border border-line bg-surface p-6 sm:p-8">
         {step === 0 && <OwnerStep token={token} onDone={next} />}
         {step === 1 && <LlmStep onDone={next} />}
-        {step === 2 && <WhatsAppStep onDone={next} />}
-        {step === 3 && (
+        {step === 2 && (
           <BotSetupStep
             onDone={(saved) => {
               setBotReady(saved)
@@ -100,8 +101,10 @@ export function Setup() {
             }}
           />
         )}
-        {step === 4 && <LeadsStep onDone={next} />}
-        {step === 5 && (
+        {step === 3 && <TestBotStep ready={botReady} onDone={next} />}
+        {step === 4 && <WhatsAppStep onDone={next} />}
+        {step === 5 && <LeadsStep onDone={next} />}
+        {step === 6 && (
           <div className="flex flex-col items-start gap-4">
             {botReady ? <CheckCircle2 className="size-8 text-ok" aria-hidden /> : <CircleAlert className="size-8 text-warn" aria-hidden />}
             <div>

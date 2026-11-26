@@ -61,7 +61,7 @@ describe('Setup wizard', () => {
       </MemoryRouter>,
     )
     const steps = await screen.findByRole('list', { name: 'Шаги первоначальной настройки' })
-    expect(steps.textContent).toBe('1Владелец2Языковая модель3WhatsApp4Настройка бота5Заявки6Готово')
+    expect(steps.textContent).toBe('1Владелец2Языковая модель3Настройка бота4Проверьте бота5WhatsApp6Заявки7Готово')
   })
 
   it('sends the setup token from the URL and explains a missing/invalid token', async () => {
@@ -240,6 +240,53 @@ describe('BotSetupStep', () => {
       template_values: { business_name: 'Борода', phone: '' },
       prompt: 'Ты — администратор «Борода». Пиши кратко.',
       prompt_edited: true,
+    })
+  })
+
+  it('prefills typical FAQ and services from the template and saves the edited price list', async () => {
+    const user = userEvent.setup()
+    let saved: BotSettings | null = null
+    const salon: TemplateMeta = {
+      id: 'beauty_salon',
+      name: 'Салон красоты / барбершоп',
+      description: '',
+      fields: [
+        { key: 'business_name', label: 'Название', type: 'text', required: true, placeholder: '', hint: '' },
+        { key: 'faq', label: 'Частые вопросы и ответы', type: 'textarea', required: false, placeholder: '', hint: '', default: 'Как записаться? — Напишите нам.' },
+      ],
+      defaults: {
+        name: 'Администратор',
+        services: [
+          { name: 'Маникюр классический', price: 'от … ₸', duration_min: 60 },
+          { name: 'Укладка', price: 'от … ₸', duration_min: 45 },
+        ],
+      },
+    }
+    mockApi({
+      'GET /api/templates': [salon],
+      'GET /api/settings/bot': BOT,
+      'POST /api/templates/beauty_salon/render': { prompt: 'Ты — администратор.', missing: [] },
+      'PUT /api/settings/bot': (init: RequestInit) => {
+        saved = JSON.parse(String(init.body)) as BotSettings
+        return saved
+      },
+    })
+    const onDone = vi.fn()
+    render(<BotSetupStep onDone={onDone} />)
+    expect(await screen.findByLabelText('Частые вопросы и ответы')).toHaveValue('Как записаться? — Напишите нам.')
+    expect(screen.getByText(/Не заполнено цен: 2/)).toBeInTheDocument()
+    await user.clear(screen.getByLabelText('Маникюр классический: цена'))
+    await user.type(screen.getByLabelText('Маникюр классический: цена'), '5000')
+    await user.tab()
+    await user.click(screen.getByRole('button', { name: 'Удалить «Укладка»' }))
+    await user.type(screen.getByLabelText('Название'), 'Aru')
+    await user.click(screen.getByRole('button', { name: 'Собрать промпт' }))
+    await screen.findByLabelText('Промпт бота')
+    await user.click(screen.getByRole('button', { name: 'Сохранить и включить бота' }))
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(true))
+    expect(saved).toMatchObject({
+      services: [{ name: 'Маникюр классический', price: '5 000 ₸', duration_min: 60 }],
+      template_values: { business_name: 'Aru', faq: 'Как записаться? — Напишите нам.' },
     })
   })
 })

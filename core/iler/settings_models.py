@@ -52,6 +52,49 @@ def normalize_phone_digits(value: str | None) -> str:
 NO_COINS_MESSAGE_DEFAULT = "Спасибо за сообщение! Сейчас подключится менеджер и ответит вам."
 
 
+# onboarding/knowledge: the owner's price list, staff with working days, and what the bot does with
+# voice messages and photos it cannot read. Used by engine.prompt (knowledge sections) and engine.media.
+SERVICES_MAX = 300
+STAFF_MAX = 50
+VOICE_MESSAGE_DEFAULT = "Пока не могу прослушать голосовое, напишите, пожалуйста, текстом 🙏"
+PHOTO_MESSAGE_DEFAULT = "Спасибо! Передам фото мастеру, он подскажет."
+
+
+class ServiceItem(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    # free text as the owner writes it: "5000 ₸", "от 5000 ₸", "5000–7000 ₸"; "от … ₸" or "" = not filled yet
+    price: str = Field("", max_length=60)
+    duration_min: int | None = Field(None, ge=1, le=1440)
+
+
+class StaffDay(BaseModel):
+    works: bool = False
+    open: str = "10:00"
+    close: str = "19:00"
+
+    @field_validator("open", "close")
+    @classmethod
+    def _hhmm(cls, v: str) -> str:
+        if not isinstance(v, str) or not _HHMM.match(v):
+            raise ValueError("time must be HH:MM (00:00–23:59) or 24:00")
+        return v
+
+
+class StaffMember(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    role: str = Field("", max_length=120)  # "мастер маникюра", "терапевт-стоматолог"
+    services: list[str] = Field(default_factory=list, max_length=SERVICES_MAX)  # ServiceItem.name values
+    mon: StaffDay = StaffDay()
+    tue: StaffDay = StaffDay()
+    wed: StaffDay = StaffDay()
+    thu: StaffDay = StaffDay()
+    fri: StaffDay = StaffDay()
+    sat: StaffDay = StaffDay()
+    sun: StaffDay = StaffDay()
+    no_online_booking: bool = False  # the bot never files a booking request to this person
+    note: str = Field("", max_length=300)
+
+
 class BotSettings(BaseModel):
     enabled: bool = True
     name: str = "Ассистент"
@@ -76,6 +119,25 @@ class BotSettings(BaseModel):
     # Sent once per conversation when the coins are used up (or model access is suspended) and the
     # conversation goes to the operator; empty = NO_COINS_MESSAGE_DEFAULT.
     no_coins_message: str = Field(NO_COINS_MESSAGE_DEFAULT, max_length=1000)
+    # onboarding/knowledge
+    services: list[ServiceItem] = Field(default_factory=list, max_length=SERVICES_MAX)
+    staff: list[StaffMember] = Field(default_factory=list, max_length=STAFF_MAX)
+    # voice message without text: ask to write in text, or hand the conversation to the operator
+    voice_mode: Literal["ask_text", "handover"] = "ask_text"
+    voice_message: str = Field(VOICE_MESSAGE_DEFAULT, max_length=500)
+    # photo / video: thank and hand over to the operator (default), or only reply
+    photo_mode: Literal["handover", "reply"] = "handover"
+    photo_message: str = Field(PHOTO_MESSAGE_DEFAULT, max_length=500)
+
+    @field_validator("services", mode="before")
+    @classmethod
+    def _legacy_services(cls, v: object) -> object:
+        # onboarding/knowledge: very old settings had a free-text `services` field; turn it into rows
+        if isinstance(v, str):
+            from iler.knowledge.prices import parse_text
+
+            return [r.as_dict() for r in parse_text(v).rows[:SERVICES_MAX]]
+        return v
 
     # reply rules (iler.reply_rules): who gets a bot reply and when
     # Only contacts that did not write to the number before the bot was linked (see reply_rules.is_known).

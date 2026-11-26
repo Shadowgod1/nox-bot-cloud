@@ -362,6 +362,8 @@ async def test_test_chat_does_not_touch_whatsapp_or_db_conversations(client, poo
     assert r.json() == {
         "reply": "Здравствуйте!\n\nЧем помочь?",
         "tool_calls": [{"name": "get_club_info", "args": {"section": "prices"}, "result": "ok", "error": None}],
+        "handed_over": False,
+        "usage": {"coins": 0.0, "input_tokens": 0, "output_tokens": 0},
     }
     assert seen["conversation_id"] is None and seen["dry_run"] is True
     assert [(m.role, m.content) for m in seen["history"]] == [(m["role"], m["content"]) for m in body["messages"]]

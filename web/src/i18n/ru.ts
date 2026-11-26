@@ -15,6 +15,7 @@ export const ru = {
     conversations: 'Диалоги',
     bookings: 'Заявки',
     bot: 'Настройки бота',
+    knowledge: 'Услуги и мастера',
     testChat: 'Тестовый чат',
     integrations: 'Интеграции',
     system: 'Система',

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { WandSparkles } from 'lucide-react'
 import { api } from '../../api/client'
-import type { BotSettings, TemplateMeta } from '../../api/types'
+import type { BotSettings, ServiceItem, TemplateMeta } from '../../api/types'
 import { useLoad } from '../../hooks/useLoad'
 import { PromptEditor } from '../../components/PromptEditor'
-import { OVERWRITE_CONFIRM, TemplateFields, TemplatePicker, missingRequired, renderTemplate, valuesFor } from '../../components/TemplateBuilder'
+import { OVERWRITE_CONFIRM, TemplateFields, TemplatePicker, missingRequired, renderTemplate, valuesFor, withDefaults } from '../../components/TemplateBuilder'
+import { ServicesEditor, cleanServices } from '../../components/ServicesEditor'
 import { Button, EmptyState, ErrorState, Spinner } from '../../components/ui'
 import { StepHeader } from './StepHeader'
 
@@ -22,6 +23,8 @@ export function BotSetupStep({ onDone }: { onDone: (saved: boolean) => void }) {
   const [showErrors, setShowErrors] = useState(false)
   const [building, setBuilding] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [services, setServices] = useState<ServiceItem[]>([])
+  const [servicesTouched, setServicesTouched] = useState(false)
   const promptRef = useRef<HTMLDivElement>(null)
   const initialized = useRef(false)
 
@@ -30,8 +33,15 @@ export function BotSetupStep({ onDone }: { onDone: (saved: boolean) => void }) {
     initialized.current = true
     const b = bot.data
     const known = templates.data.find((t) => t.id === b.template_id)
-    setChoice(known?.id ?? templates.data[0]?.id ?? null)
-    setValues(b.template_values ?? {})
+    const first = known ?? templates.data[0]
+    setChoice(first?.id ?? null)
+    setValues(first ? withDefaults(first, b.template_values ?? {}) : (b.template_values ?? {}))
+    if (b.services?.length) {
+      setServices(b.services)
+      setServicesTouched(true) // the owner's own list: never replaced by a template's typical one
+    } else {
+      setServices(first?.defaults.services ?? [])
+    }
     setPrompt(b.prompt ?? '')
     setEdited(Boolean(b.prompt_edited))
   }, [templates.data, bot.data])
@@ -69,6 +79,7 @@ export function BotSetupStep({ onDone }: { onDone: (saved: boolean) => void }) {
       const payload: BotSettings = {
         ...bot.data,
         ...template.defaults,
+        services: cleanServices(services),
         template_id: template.id,
         template_values: valuesFor(template, values),
         prompt,
@@ -124,6 +135,11 @@ export function BotSetupStep({ onDone }: { onDone: (saved: boolean) => void }) {
             onChange={(id) => {
               setChoice(id)
               setShowErrors(false)
+              const next = templates.data?.find((t) => t.id === id)
+              if (next) {
+                setValues((cur) => withDefaults(next, cur))
+                if (!servicesTouched) setServices(next.defaults.services ?? [])
+              }
             }}
           />
         </section>
@@ -149,6 +165,24 @@ export function BotSetupStep({ onDone }: { onDone: (saved: boolean) => void }) {
             </Button>
             {stale && <span className="text-[13px] text-warn">Данные изменились — соберите промпт заново.</span>}
           </div>
+        </section>
+
+        <section aria-labelledby="bs-services" className="flex flex-col gap-3">
+          <div>
+            <h2 id="bs-services" className="text-[13px] font-semibold text-ink">
+              Услуги и цены
+            </h2>
+            <p className="mt-0.5 text-[13px] text-ink-2">
+              Мы подставили типовые услуги — впишите свои цены, лишнее удалите или загрузите свой прайс. Мастеров и дни их работы добавите потом в разделе «Услуги и мастера».
+            </p>
+          </div>
+          <ServicesEditor
+            value={services}
+            onChange={(v) => {
+              setServices(v)
+              setServicesTouched(true)
+            }}
+          />
         </section>
 
         {prompt.trim() || renderedKey ? (

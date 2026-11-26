@@ -53,12 +53,19 @@ interface State {
   update: UpdateStatus
   updateTicks: number
   nextId: number
+  /** A just-registered install: no conversations yet (payback card shows the empty state). */
+  fresh: boolean
 }
 
 const day = { open: '10:00', close: '24:00', closed: false }
+const VOICE_DEFAULT = 'Пока не могу прослушать голосовое, напишите, пожалуйста, текстом 🙏'
+const PHOTO_DEFAULT = 'Спасибо! Передам фото мастеру, он подскажет.'
+/** Mock coins spent by the test chat and price photos (shown in the payback card). */
+let mockCoinsSpent = 0
 
 const s: State = {
   needsSetup: import.meta.env.VITE_MOCK_SETUP === '1',
+  fresh: import.meta.env.VITE_MOCK_SETUP === '1',
   loggedIn: sessionStorage.getItem('iler_mock_session') === '1',
   user: { id: 1, email: 'owner@club.local', name: 'Айгерим', role: 'owner' },
   users: [
@@ -109,6 +116,12 @@ const s: State = {
     booking_request_timeout_min: 15,
     booking_timeout_message: 'Администратор скоро свяжется с вами по заявке.',
     no_coins_message: 'Спасибо за сообщение! Сейчас подключится менеджер и ответит вам.',
+    services: [],
+    staff: [],
+    voice_mode: 'ask_text',
+    voice_message: VOICE_DEFAULT,
+    photo_mode: 'handover',
+    photo_message: PHOTO_DEFAULT,
     // reply rules
     new_contacts_only: false,
     exclude_phones: [],
@@ -246,7 +259,8 @@ on('POST', '/api/setup/owner', (_m, b, _url, init) => {
   s.user = { id: 1, email: String(b.email).trim().toLowerCase(), name: String(b.name ?? ''), role: 'owner' }
   s.users = [{ ...s.user, created_at: new Date().toISOString(), last_login_at: null }]
   s.wa = { status: 'close', phone: null, last_error: null }
-  s.bot = { ...s.bot, prompt: '', template_id: null, template_values: {}, prompt_edited: false }
+  s.bot = { ...s.bot, prompt: '', template_id: null, template_values: {}, prompt_edited: false, services: [], staff: [] }
+  s.fresh = true
   login() // core sets the session + CSRF cookies here
   return json(s.user)
 })
@@ -543,28 +557,143 @@ on('POST', '/api/integrations/senet/test', async (_m, b) => {
 
 /* ---------- test chat ---------- */
 
+const usage = (coins: number) => {
+  mockCoinsSpent += coins
+  return { coins, input_tokens: Math.round(coins * 300), output_tokens: Math.round(coins * 40) }
+}
+
 on('POST', '/api/test-chat', async (_m, b) => {
-  await sleep(900)
-  const msgs = (b.messages as { role: string; content: string }[]) ?? []
-  const last = msgs[msgs.length - 1]?.content.toLowerCase() ?? ''
-  if (last.includes('брон')) {
+  await sleep(700)
+  if (!s.bot.prompt.trim()) return fail(409, 'bot_not_configured', 'Промпт бота пуст: настройте бота по шаблону')
+  const msgs = (b.messages as { role: string; content: string; media?: string }[]) ?? []
+  const lastMsg = msgs[msgs.length - 1]
+  if (lastMsg?.media === 'image') {
+    return json({ reply: s.bot.photo_message || PHOTO_DEFAULT, tool_calls: [], handed_over: s.bot.photo_mode === 'handover', usage: null })
+  }
+  if (lastMsg?.media === 'audio' && !lastMsg.content.trim()) {
+    const handover = s.bot.voice_mode === 'handover'
+    const text = s.bot.voice_message && s.bot.voice_message !== VOICE_DEFAULT ? s.bot.voice_message : handover ? 'Спасибо! Передам ваше голосовое администратору, он скоро ответит.' : VOICE_DEFAULT
+    return json({ reply: text, tool_calls: [], handed_over: handover, usage: null })
+  }
+  const last = lastMsg?.content.toLowerCase() ?? ''
+  if (/[әғқңөұүһі]/i.test(last)) {
+    return json({ reply: 'Сәлеметсіз бе! Маникюр 6 000 ₸-дан басталады. Қай күнге жазайын?', tool_calls: [], usage: usage(0.4) })
+  }
+  if (last.includes('айгерим') || last.includes('четверг')) {
+    const a = s.bot.staff.find((x) => x.name.toLowerCase().startsWith('айгерим'))
+    const reply = a?.thu.works
+      ? `Айгерим в четверг работает с ${a.thu.open} до ${a.thu.close}. Записать вас на 18:00? Точное время подтвердит администратор.`
+      : a
+        ? 'Айгерим в четверг не работает. Могу предложить другой день или другого мастера.'
+        : 'Уточню у администратора, работает ли мастер в четверг, и вернусь с ответом.'
+    return json({ reply, tool_calls: [], usage: usage(0.6) })
+  }
+  if (last.includes('брон') || last.includes('запиш')) {
     return json({
-      reply: 'Заявку передала администратору, он подтвердит в течение 15 минут.',
-      tool_calls: [{ name: 'create_booking_request', args: { date: '2026-11-12', time: '19:00', duration_hours: 2, seats: 3 }, result: 'Заявка #13 создана', error: null }],
+      reply: 'Заявку передала администратору, он подтвердит время.',
+      tool_calls: [{ name: 'create_booking_request', args: { date: '2026-11-27', time: '18:00', duration_hours: 1.5, seats: 1, zone: 'Маникюр, Айгерим' }, result: 'Заявка #13 создана', error: null }],
+      usage: usage(0.9),
     })
   }
-  if (last.includes('свобод') || last.includes('мест')) {
-    return json({
-      reply: 'Сейчас свободно 17 компьютеров: 13 в Стандарте и 4 в VIP.',
-      tool_calls: [{ name: 'senet_free_workstations', args: {}, result: 'Свободно 17 из 42', error: null }],
-    })
+  if (last.includes('где') || last.includes('адрес')) {
+    return json({ reply: `Мы находимся по адресу: ${s.bot.template_values.address || 'адрес уточнит администратор'}.`, tool_calls: [], usage: usage(0.3) })
   }
-  return json({ reply: 'Час в зоне Стандарт стоит 800 ₸, в VIP — 1 200 ₸. Подсказать что-нибудь ещё?', tool_calls: [] })
+  const mani = s.bot.services.find((x) => x.name.toLowerCase().includes('маникюр'))
+  if (last.includes('маникюр') || last.includes('стоит')) {
+    const price = mani && /\d/.test(mani.price) && !mani.price.includes('…') ? mani.price : null
+    return json({ reply: price ? `${mani!.name} — ${price}. Записать вас?` : 'Цену маникюра уточнит администратор — сейчас передам вопрос.', tool_calls: [], usage: usage(0.5) })
+  }
+  return json({ reply: 'Здравствуйте! Подскажу по услугам и ценам и помогу записаться.', tool_calls: [], usage: usage(0.3) })
+})
+
+/* ---------- knowledge ---------- */
+
+on('GET', '/api/knowledge/import-prices', () => json({ photo: true, provider: 'anthropic' }))
+on('POST', '/api/knowledge/import-prices', async (_m, b) => {
+  await sleep(500)
+  if (typeof b.content_base64 === 'string' && b.content_base64) {
+    const name = String(b.filename ?? '').toLowerCase()
+    if (name.endsWith('.xls')) return fail(422, 'price_import_failed', 'Старый формат Excel (.xls) не поддерживается: сохраните файл как .xlsx или .csv.')
+    if (/\.(png|jpe?g|webp)$/.test(name)) {
+      await sleep(1200)
+      mockCoinsSpent += 12
+      return json({
+        source: 'image',
+        rows: [
+          { name: 'Маникюр классический', price: 'от 5 000 ₸', duration_min: 60 },
+          { name: 'Покрытие гель-лак', price: '4 000 ₸', duration_min: 45 },
+          { name: 'Педикюр', price: 'от 8 000 ₸', duration_min: 90 },
+        ],
+        warnings: [],
+        coins: 12,
+      })
+    }
+    let text = ''
+    try {
+      text = new TextDecoder().decode(Uint8Array.from(atob(b.content_base64), (c) => c.charCodeAt(0)))
+    } catch {
+      return fail(422, 'validation_error', 'Файл повреждён: загрузите его снова')
+    }
+    return json(mockParse(text.split(/\r?\n/).slice(name.endsWith('.csv') ? 1 : 0).join('\n').replace(/[;,]/g, ' — '), name.endsWith('.xlsx') ? 'xlsx' : 'csv'))
+  }
+  const text = String(b.text ?? '')
+  if (!text.trim()) return fail(422, 'validation_error', 'Загрузите файл или вставьте текст прайса')
+  return json(mockParse(text, 'text'))
+})
+
+/** Rough stand-in for core's parser: "Маникюр — 5000, 60 мин" per line. */
+function mockParse(text: string, source: string) {
+  const rows: { name: string; price: string; duration_min: number | null }[] = []
+  let skipped = 0
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line) continue
+    const dm = line.match(/(\d+)\s*мин/)
+    const dh = line.match(/(\d+(?:[.,]\d)?)\s*ч/)
+    const rest = line.replace(/(\d+)\s*мин\S*/, '').replace(/(\d+(?:[.,]\d)?)\s*ч\S*/, '')
+    const pm = rest.match(/(от\s*)?(\d[\d\s]*\d|\d)(?!.*\d)/)
+    if (!pm) {
+      skipped++
+      continue
+    }
+    const name = rest.slice(0, pm.index).replace(/[\s—–:\-|;,.]+$/, '').replace(/^[\s\d.)•-]+/, '').trim()
+    if (!name) continue
+    const amount = Number(pm[2].replace(/\s/g, '')).toLocaleString('ru-RU').replace(/ /g, ' ')
+    rows.push({ name, price: `${pm[1] ? 'от ' : ''}${amount} ₸`, duration_min: dm ? Number(dm[1]) : dh ? Math.round(Number(dh[1].replace(',', '.')) * 60) : null })
+  }
+  const warnings = skipped ? [`Пропущено строк без цены: ${skipped} (обычно это заголовки разделов).`] : []
+  if (!rows.length) warnings.unshift('Не нашли ни одной услуги с ценой. Проверьте, что в файле есть колонки «Услуга» и «Цена».')
+  return { source, rows, warnings, coins: null }
+}
+
+/* ---------- payback ---------- */
+
+on('GET', '/api/dashboard/roi', (_m, _b, url) => {
+  const days = url.searchParams.get('days') === '30' ? 30 : 7
+  const since = new Date(now - (days - 1) * 86_400_000)
+  since.setHours(0, 0, 0, 0)
+  if (s.fresh) {
+    return json({ days, since: since.toISOString(), bot_conversations: 0, bookings: 0, after_hours_conversations: 0, handovers: 0, coins: Math.round(mockCoinsSpent * 100) / 100, hours_source: s.bot.hours.always_open ? 'default' : 'settings', has_activity: false })
+  }
+  const k = days === 30 ? 4.1 : 1
+  return json({
+    days,
+    since: since.toISOString(),
+    bot_conversations: Math.round(38 * k),
+    bookings: Math.round(11 * k),
+    after_hours_conversations: Math.round(9 * k),
+    handovers: Math.round(4 * k),
+    coins: Math.round((212.4 * k + mockCoinsSpent) * 100) / 100,
+    hours_source: s.bot.hours.always_open ? 'default' : 'settings',
+    has_activity: true,
+  })
 })
 
 /* ---------- templates ---------- */
 
-const f = (key: string, label: string, type: TemplateField['type'], required: boolean, placeholder = ''): TemplateField => ({ key, label, type, required, placeholder, hint: '' })
+const f = (key: string, label: string, type: TemplateField['type'], required: boolean, placeholder = '', def = '', hint = ''): TemplateField => ({ key, label, type, required, placeholder, hint, default: def })
+const svc = (name: string, duration_min: number) => ({ name, price: 'от … ₸', duration_min })
+const MORE_SERVICES = f('services', 'Ещё об услугах (текстом)', 'textarea', false, 'Цена окрашивания зависит от длины волос', '', 'Основной прайс — в таблице «Услуги и цены». Сюда — то, что не влезает в таблицу.')
 const COMMON_HEAD = [
   f('business_name', 'Название', 'text', true, 'CyberArena'),
   f('address', 'Адрес', 'text', true, 'Алматы, ул. Абая 10'),
@@ -585,16 +714,37 @@ const TEMPLATES: (TemplateMeta & { prompt: string })[] = [
     id: 'beauty_salon',
     name: 'Салон красоты / барбершоп',
     description: 'Услуги и цены, мастера, заявки на запись на удобное время.',
-    fields: [...COMMON_HEAD, f('services', 'Услуги и цены', 'textarea', true, 'Стрижка — 5000 ₸'), f('masters', 'Мастера', 'textarea', false), EXTRA],
-    defaults: { name: 'Администратор' },
-    prompt: 'Ты — администратор «{{business_name}}».\nАдрес: {{address}}\nЧасы работы: {{hours}}\n\nУслуги и цены:\n{{services}}\n{{#masters}}\nМастера:\n{{masters}}{{/masters}}',
+    fields: [
+      ...COMMON_HEAD,
+      f('tone', 'Тон общения', 'text', false, 'Тепло и вежливо, на «вы»', 'Тепло и вежливо, на «вы», без канцелярита; смайлики — изредка'),
+      f('faq', 'Частые вопросы и ответы', 'textarea', false, '', 'Как записаться? — Напишите услугу, удобный день и время, администратор подтвердит запись.\nСтерилизуете ли инструменты? — Да, инструменты проходят стерилизацию после каждого клиента.\nКак можно оплатить? — Kaspi, картой или наличными.', 'Проверьте ответы и поправьте под свой салон.'),
+      f('booking_rules', 'Правила записи', 'textarea', false, '', 'Запись подтверждает администратор.\nОпоздание больше 15 минут — запись может сдвинуться или перенестись.\nОтмена или перенос — не позже чем за 3 часа.'),
+      MORE_SERVICES,
+      EXTRA,
+    ],
+    defaults: {
+      name: 'Администратор',
+      greeting: 'Здравствуйте! Я администратор салона. Подскажу по услугам и ценам и помогу записаться ✂️',
+      services: [svc('Маникюр классический', 60), svc('Маникюр с покрытием гель-лак', 90), svc('Наращивание ногтей', 150), svc('Педикюр с покрытием', 90), svc('Женская стрижка', 60), svc('Мужская стрижка', 45), svc('Окрашивание волос', 180), svc('Коррекция и окрашивание бровей', 45)],
+    },
+    prompt: 'Ты — администратор «{{business_name}}».\n{{#tone}}Тон общения: {{tone}}.{{/tone}}\nАдрес: {{address}}\nЧасы работы: {{hours}}\n{{#faq}}\nЧастые вопросы и ответы:\n{{faq}}{{/faq}}\n{{#booking_rules}}\nПравила записи:\n{{booking_rules}}{{/booking_rules}}',
   },
   {
     id: 'clinic',
     name: 'Клиника / стоматология',
     description: 'Услуги, врачи, заявки на приём. Не даёт медицинских советов.',
-    fields: [...COMMON_HEAD, f('services', 'Услуги и цены', 'textarea', true), f('doctors', 'Врачи и специализации', 'textarea', false), EXTRA],
-    defaults: { name: 'Администратор клиники' },
+    fields: [
+      ...COMMON_HEAD,
+      f('tone', 'Тон общения', 'text', false, '', 'Вежливо, спокойно и с заботой, на «вы», без смайликов'),
+      f('faq', 'Частые вопросы и ответы', 'textarea', false, '', 'Как записаться? — Напишите услугу или врача, удобный день и время, администратор подтвердит запись.\nКак можно оплатить? — Kaspi, картой или наличными.'),
+      MORE_SERVICES,
+      EXTRA,
+    ],
+    defaults: {
+      name: 'Администратор клиники',
+      greeting: 'Здравствуйте! Я администратор клиники. Подскажу по услугам и ценам и помогу записаться на приём.',
+      services: [svc('Консультация стоматолога', 30), svc('Профессиональная чистка зубов', 60), svc('Лечение кариеса', 60), svc('Удаление зуба', 45), svc('Отбеливание зубов', 90)],
+    },
     prompt: 'Ты — администратор клиники «{{business_name}}». Никогда не ставь диагнозы.\nАдрес: {{address}}\n\nУслуги и цены:\n{{services}}',
   },
   {

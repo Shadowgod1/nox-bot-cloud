@@ -5,9 +5,9 @@ import type { BotPauseState, BotSettings, TemplateMeta } from '../../api/types'
 import { useLoad } from '../../hooks/useLoad'
 import { PageBody } from '../../components/Layout'
 import { PromptEditor } from '../../components/PromptEditor'
-import { OVERWRITE_CONFIRM, TemplateFields, TemplatePicker, missingRequired, renderTemplate, valuesFor } from '../../components/TemplateBuilder'
+import { OVERWRITE_CONFIRM, TemplateFields, TemplatePicker, missingRequired, renderTemplate, valuesFor, withDefaults } from '../../components/TemplateBuilder'
 import { ReplyRulesFields, useKnownCount } from '../../components/ReplyRules'
-import { Badge, Button, ErrorState, Field, Input, PageHeader, Panel, Spinner, Textarea, cx } from '../../components/ui'
+import { Badge, Button, ErrorState, Field, Input, PageHeader, Panel, Select, Spinner, Textarea, cx } from '../../components/ui'
 import { toast } from '../../components/toast'
 import { ru } from '../../i18n/ru'
 
@@ -143,6 +143,8 @@ export function BotSettingsPage() {
                 onChange={(id) => {
                   setChoice(id)
                   setShowErrors(false)
+                  const next = templates.data?.find((t) => t.id === id)
+                  if (next) set('template_values', withDefaults(next, form.template_values))
                 }}
               />
               <TemplateFields
@@ -202,7 +204,7 @@ export function BotSettingsPage() {
         <Collapsible
           id="behavior"
           title="Поведение"
-          description="Имя, приветствие, темп ответа и тексты по заявкам."
+          description="Имя, приветствие, голосовые и фото, темп ответа и тексты по заявкам."
         >
           <div className="flex flex-col divide-y divide-line">
             <div className="grid gap-5 pb-6">
@@ -215,6 +217,32 @@ export function BotSettingsPage() {
                 </Field>
               </div>
             </div>
+
+            <SubSection
+              title="Голосовые и фото"
+              description="Бот не слышит голосовые и не видит фото. Вместо догадок он ответит так, как вы настроите. Клиенту, который пишет по-казахски, стандартный текст уйдёт на казахском."
+            >
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="Голосовое без текста">
+                  <Select value={form.voice_mode} onChange={(e) => set('voice_mode', e.target.value as BotSettings['voice_mode'])}>
+                    <option value="ask_text">Попросить написать текстом</option>
+                    <option value="handover">Передать администратору</option>
+                  </Select>
+                </Field>
+                <Field label="Ответ на голосовое" hint={form.voice_mode === 'handover' ? 'Пусто или стандартный текст — «Передам ваше голосовое администратору».' : undefined}>
+                  <Textarea rows={2} maxLength={500} value={form.voice_message} onChange={(e) => set('voice_message', e.target.value)} />
+                </Field>
+                <Field label="Фото или видео">
+                  <Select value={form.photo_mode} onChange={(e) => set('photo_mode', e.target.value as BotSettings['photo_mode'])}>
+                    <option value="handover">Ответить и передать администратору</option>
+                    <option value="reply">Только ответить</option>
+                  </Select>
+                </Field>
+                <Field label="Ответ на фото">
+                  <Textarea rows={2} maxLength={500} value={form.photo_message} onChange={(e) => set('photo_message', e.target.value)} />
+                </Field>
+              </div>
+            </SubSection>
 
             <SubSection title="Темп и память">
               <div className="grid gap-5 md:grid-cols-2">
