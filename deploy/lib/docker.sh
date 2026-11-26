@@ -3,8 +3,9 @@
 
 # Offline mode only means "images come from the archive": Docker Engine itself is still installed from
 # the internet when it is missing (the Windows installer always runs in offline mode).
+# Usage: ensure_docker <offline 0|1> - the flag is kept for callers; the Engine install does not depend on it.
 ensure_docker() {
-  local offline="$1" tmp docker_bin
+  local tmp docker_bin
   # Docker Desktop's WSL integration puts a "docker" CLI into every distro (/mnt/wsl/docker-desktop/...);
   # ILER needs its own Docker Engine inside the distro, so that CLI does not count.
   docker_bin=""

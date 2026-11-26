@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
 # Set ILER's LLM API keys and the monthly coin limit on a client server (run by the ILER technician,
 # never by the client).
 #

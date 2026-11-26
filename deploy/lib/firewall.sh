@@ -142,12 +142,16 @@ configure_firewall() {
   if ufw_active; then
     ufw_apply_iler "$port"
     # ufw reload re-creates DOCKER-USER from its files; put our chain jump back on top
-    [[ -x "$FW_HELPER" ]] && "$FW_HELPER" "$port" >/dev/null 2>&1 || true
+    if [[ -x "$FW_HELPER" ]]; then
+      "$FW_HELPER" "$port" >/dev/null 2>&1 || true
+    fi
   fi
 }
 
 remove_firewall() {
   ufw_remove_iler
-  have ufw && ufw_active && ufw reload >/dev/null || true
+  if have ufw && ufw_active; then
+    ufw reload >/dev/null || true
+  fi
   iptables_remove_iler
 }

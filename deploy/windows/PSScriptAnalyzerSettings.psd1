@@ -6,6 +6,8 @@
         # Script-internal helper functions, not exported cmdlets; -WhatIf is not meaningful here.
         'PSUseShouldProcessForStateChangingFunctions',
         # Script parameters used inside functions via script scope are reported as unused.
-        'PSReviewUnusedParameter'
+        'PSReviewUnusedParameter',
+        # Script-internal helpers (Save-PendingKeys, Set-IlerKeys, ConvertTo-Megabytes) read naturally in plural.
+        'PSUseSingularNouns'
     )
 }
