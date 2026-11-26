@@ -46,7 +46,7 @@ interface ShellProps {
   user?: string
   onLogout?: () => void
   wide?: boolean
-  /** full-strength binary rain (auth pages); otherwise it is dimmed under dense content */
+  /** auth pages: the noxsw.kz look with the binary rain; without it — the calm, motionless app theme */
   backdrop?: boolean
 }
 
@@ -54,8 +54,8 @@ interface ShellProps {
 export function Shell({ children, subtitle, home = '/', user, onLogout, wide, backdrop = false }: ShellProps) {
   const support = usePublicConfig()?.support
   return (
-    <div className="relative isolate flex min-h-dvh flex-col">
-      <Backdrop dim={!backdrop} />
+    <div className={cx('relative isolate flex min-h-dvh flex-col', !backdrop && 'nx-app')}>
+      {backdrop && <Backdrop />}
       <header className="sticky top-0 z-10 border-b border-line bg-surface/85 backdrop-blur-md">
         <div className={cx('mx-auto flex h-14 items-center gap-3 px-4', wide ? 'max-w-[1180px]' : 'max-w-[880px]')}>
           <Wordmark to={home} subtitle={subtitle} />

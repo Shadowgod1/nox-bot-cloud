@@ -160,6 +160,23 @@
       0 24px 60px -20px rgba(0, 0, 0, 0.7),
       inset 0 1px 0 rgba(255, 255, 255, 0.05);
   }
+  /*
+   * The working app (cabinet, staff): no rain, no dot pattern, no glass — flat calm panels on a soft canvas.
+   * The brand stays in the wordmark, the lime accent and the type.
+   */
+  :root[data-theme='dark'] .nx-app {
+    background: #0c0d12;
+  }
+  :root[data-theme='dark'] .nx-app .nx-panel {
+    border-color: rgba(255, 255, 255, 0.08);
+    background: #13151c;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+  :root[data-theme='dark'] .nx-app header {
+    background: #0c0d12;
+    backdrop-filter: none;
+  }
+
   /* the noxsw.kz holographic gradient, for one emphasised word in a heading */
   .nx-iridescent {
     background: linear-gradient(100deg, #f1c6dd 0%, #c1a4e8 30%, #b8e2fb 60%, #e1c1e5 100%);

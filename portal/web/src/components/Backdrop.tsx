@@ -19,9 +19,9 @@ const bit = () => (Math.random() < 0.5 ? '0' : '1')
 /**
  * The noxsw.kz backdrop: falling 0/1 streams (lime and violet), two soft glows and a vignette.
  * Dark theme only; static frame with prefers-reduced-motion; paused while the tab is hidden.
- * `dim` lowers the rain under dense content (the cabinet), auth pages get it at full strength.
+ * Used on the auth pages only; the cabinet and staff screens stay motionless.
  */
-export function Backdrop({ dim = false }: { dim?: boolean }) {
+export function Backdrop() {
   const ref = useRef<HTMLCanvasElement>(null)
   const theme = useThemeValue()
   const dark = theme === 'dark'
@@ -32,7 +32,7 @@ export function Backdrop({ dim = false }: { dim?: boolean }) {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-    const peak = dim ? 0.32 : 0.55
+    const peak = 0.55
     let width = 0
     let height = 0
     let cell = 18
@@ -122,7 +122,7 @@ export function Backdrop({ dim = false }: { dim?: boolean }) {
       window.removeEventListener('resize', onResize)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [dark, dim])
+  }, [dark])
 
   if (!dark) return null
   return (
