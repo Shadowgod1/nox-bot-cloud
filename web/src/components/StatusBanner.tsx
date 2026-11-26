@@ -32,7 +32,7 @@ export function StatusBanner() {
 
   const degraded = wa.status === 'degraded'
   return (
-    <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-danger/20 bg-danger-soft px-6 py-2.5 text-sm text-ink lg:px-8">
+    <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-danger/20 bg-danger-soft px-4 py-2.5 text-sm text-ink sm:px-6 lg:px-8">
       {degraded ? <AlertTriangle className="size-4 shrink-0 text-danger" aria-hidden /> : <WifiOff className="size-4 shrink-0 text-danger" aria-hidden />}
       <span className="font-medium">
         {degraded ? 'WhatsApp подключён, но сообщения не отправляются.' : 'WhatsApp не подключён — бот не получает и не отправляет сообщения.'}

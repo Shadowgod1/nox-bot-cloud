@@ -120,7 +120,7 @@ export function PhoneListInput({ label, hint, value, onChange, emptyText = 'Сп
         </Button>
       </div>
       {hint && (
-        <p id={`${id}-hint`} className="text-[12px] text-ink-3">
+        <p id={`${id}-hint`} className="max-w-[80ch] text-[12px] text-ink-3">
           {hint}
         </p>
       )}

@@ -103,7 +103,7 @@ export function ReplyRulesFields<T extends ReplyRulesValue>({
             text="Старых клиентов, друзей и родных бот не трогает."
           />
         </div>
-        <p className="text-[13px] leading-relaxed text-ink-2">
+        <p className="max-w-[80ch] text-[13px] leading-relaxed text-ink-2">
           {value.new_contacts_only ? 'Как бот понимает, кто новый: ' : 'Если выберете «только новым»: '}
           при подключении WhatsApp передаёт боту недавнюю переписку, и бот запоминает всех, кто уже писал на этот номер. Ещё он
           запоминает тех, кому вы первыми написали с телефона. Им бот не отвечает — вы общаетесь с ними сами.
@@ -154,7 +154,7 @@ export function ReplyRulesFields<T extends ReplyRulesValue>({
       </Block>
 
       <Block title="Если администратор ответил сам">
-        <p className="text-[13px] leading-relaxed text-ink-2">
+        <p className="max-w-[80ch] text-[13px] leading-relaxed text-ink-2">
           Напишите клиенту с телефона или из «Диалогов» — бот сразу замолчит в этом чате. Вернуть его можно кнопкой «Вернуть бота» в
           переписке, иначе он вернётся сам через выбранное время.
         </p>

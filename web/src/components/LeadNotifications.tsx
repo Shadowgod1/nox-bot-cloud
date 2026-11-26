@@ -109,7 +109,7 @@ export function LeadNotifications({ onSaved }: { onSaved?: () => void }) {
 
   return (
     <div className="flex flex-col gap-5">
-      <p className="text-[13px] leading-relaxed text-ink-2">
+      <p className="max-w-[80ch] text-[13px] leading-relaxed text-ink-2">
         Когда клиент оставляет заявку или просит позвать человека, бот сразу присылает уведомление: имя, телефон, услугу, желаемое время и
         ссылку на переписку в админке.
       </p>

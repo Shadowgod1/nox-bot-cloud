@@ -95,7 +95,7 @@ export function Field({ label, hint, error, children, className, hideLabel }: Fi
       </label>
       {control}
       {hint && !error && (
-        <p id={hintId} className="text-[13px] text-ink-2">
+        <p id={hintId} className="max-w-[80ch] text-[13px] text-ink-2">
           {hint}
         </p>
       )}
@@ -186,7 +186,7 @@ export function Panel({ title, description, actions, children, className, id, bo
       className={cx('rounded-[var(--radius-panel)] border border-line bg-surface', className)}
     >
       {(title || actions) && (
-        <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-5 py-4">
+        <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-4 py-4 sm:px-5">
           <div className="min-w-0">
             {title && (
               <h2 id={headingId} className="text-[15px] font-semibold text-ink">
@@ -198,7 +198,8 @@ export function Panel({ title, description, actions, children, className, id, bo
           {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
         </header>
       )}
-      <div className={cx('px-5 py-4', bodyClassName)}>{children}</div>
+      {/* bodyClassName replaces the default padding: joined classes would not override it reliably ("p-0" vs "px-5") */}
+      <div className={bodyClassName ?? 'px-4 py-4 sm:px-5'}>{children}</div>
     </section>
   )
 }
