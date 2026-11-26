@@ -30,19 +30,19 @@ class UpdaterClient:
             ) as c:
                 r = await c.request(method, path)
         except httpx.HTTPError as e:
-            raise ApiError(502, "updater_unavailable", f"Updater is not reachable ({type(e).__name__})") from e
+            raise ApiError(503, "updater_unavailable", f"Updater is not reachable ({type(e).__name__})") from e
         if r.status_code == 409:
             raise ApiError(409, "update_in_progress", "An update is already running")
         if r.status_code == 404:
             raise ApiError(404, "not_found", "Unknown update job")
         if r.status_code >= 400:
-            raise ApiError(502, "updater_error", f"Updater returned HTTP {r.status_code}")
+            raise ApiError(503, "updater_error", f"Updater returned HTTP {r.status_code}")
         try:
             data = r.json()
         except ValueError as e:
-            raise ApiError(502, "updater_error", "Updater returned invalid JSON") from e
+            raise ApiError(503, "updater_error", "Updater returned invalid JSON") from e
         if not isinstance(data, dict):
-            raise ApiError(502, "updater_error", "Updater returned an unexpected payload")
+            raise ApiError(503, "updater_error", "Updater returned an unexpected payload")
         return data
 
     async def get_version(self) -> dict[str, Any]:

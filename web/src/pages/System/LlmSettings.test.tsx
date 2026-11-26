@@ -77,12 +77,12 @@ describe('key check', () => {
       'GET /api/settings/llm': llm,
       'GET /api/settings/llm/providers': ALL,
       'POST /api/settings/llm/models': { ok: true, models: [] },
-      'POST /api/settings/llm/test': { ok: false, error: 'openai: Ключ ILER отклонён провайдером — обратитесь в ILER' },
+      'POST /api/settings/llm/test': { ok: false, error: 'openai: Провайдер модели отклонил ключ доступа. Обратитесь к поставщику бота.' },
     })
     render(<LlmSettingsPanel />)
     await screen.findByLabelText('Основной провайдер')
     await userEvent.click(screen.getByRole('button', { name: 'Проверить' }))
-    expect(await screen.findByRole('status')).toHaveTextContent('Не работает: openai: Ключ ILER отклонён')
+    expect(await screen.findByRole('status')).toHaveTextContent('Не работает: openai: Провайдер модели отклонил ключ доступа')
     await userEvent.selectOptions(screen.getByLabelText('Основной провайдер'), 'Anthropic (Claude)')
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })

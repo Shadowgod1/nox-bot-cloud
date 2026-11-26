@@ -210,7 +210,7 @@ async def test_updater_unavailable(app, client, as_owner):
     assert body["current"] is None and body["updater_available"] is False and body["core_version"]
 
     r = await client.post("/api/system/update")
-    assert r.status_code == 502
+    assert r.status_code == 503
     assert r.json()["error"]["code"] == "updater_unavailable"
 
 

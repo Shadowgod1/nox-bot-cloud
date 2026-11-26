@@ -219,7 +219,7 @@ async def send_message(
         raise
     except Exception as e:  # noqa: BLE001 - surface as a uniform API error
         log.exception("operator send failed for conversation %s", conversation_id)
-        raise ApiError(502, "send_failed", f"Message was not sent: {type(e).__name__}") from e
+        raise ApiError(503, "send_failed", f"Message was not sent: {type(e).__name__}") from e
     return {"ok": True}
 
 

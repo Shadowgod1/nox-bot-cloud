@@ -387,7 +387,7 @@ async def test_test_chat_validation(client, monkeypatch):
         assert r.status_code == 422, body
 
 
-async def test_test_chat_llm_error_is_502(client, monkeypatch):
+async def test_test_chat_llm_error_is_503(client, monkeypatch):
     await login(client)
     from iler.llm.base import LlmError
 
@@ -397,7 +397,7 @@ async def test_test_chat_llm_error_is_502(client, monkeypatch):
     fake_engine_module(monkeypatch, "turn", run_turn=run_turn)
     r = await client.post("/api/test-chat", json={"messages": [{"role": "user", "content": "hi"}]},
                           headers=csrf(client))
-    assert r.status_code == 502 and r.json()["error"]["code"] == "llm_error"
+    assert r.status_code == 503 and r.json()["error"]["code"] == "llm_error"
 
 
 async def test_test_chat_hides_provider_auth_error(client, monkeypatch):
@@ -412,8 +412,8 @@ async def test_test_chat_hides_provider_auth_error(client, monkeypatch):
     fake_engine_module(monkeypatch, "turn", run_turn=run_turn)
     r = await client.post("/api/test-chat", json={"messages": [{"role": "user", "content": "hi"}]},
                           headers=csrf(client))
-    assert r.status_code == 502 and "wxyz" not in r.text
-    assert r.json()["error"]["message"] == "anthropic: Ключ ILER отклонён провайдером — обратитесь в ILER"
+    assert r.status_code == 424 and "wxyz" not in r.text
+    assert r.json()["error"]["message"] == "anthropic: Провайдер модели отклонил ключ доступа. Обратитесь к поставщику бота."
 
 
 # --- dashboard ----------------------------------------------------------------------------------

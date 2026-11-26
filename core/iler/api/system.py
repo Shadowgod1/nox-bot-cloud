@@ -48,7 +48,7 @@ async def post_system_update(
     resp = await updater.start_update()
     job_id = resp.get("job_id")
     if not isinstance(job_id, str) or not job_id:
-        raise ApiError(502, "updater_error", "Updater did not return a job id")
+        raise ApiError(503, "updater_error", "Updater did not return a job id")
     await settings_store.put(UPDATE_JOB_KEY, UpdateJob(job_id=job_id, started_at=datetime.now(UTC).isoformat()))
     await audit(user, "system.update", {"job_id": job_id})
     return {"job_id": job_id}

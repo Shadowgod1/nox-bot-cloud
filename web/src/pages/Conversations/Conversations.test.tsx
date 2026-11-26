@@ -167,7 +167,7 @@ describe('Conversations', () => {
   })
 
   it('keeps the request_id when a failed send is retried and renews it otherwise', async () => {
-    const results = [502, 200, 200, 200]
+    const results = [503, 200, 200, 200]
     const fetchMock = mockApi({
       'GET /api/conversations': { items: [conv(1, 'Данияр', 'Привет')], next_cursor: null },
       'GET /api/conversations/1/messages': { items: [], next_cursor: null },
@@ -204,7 +204,7 @@ describe('Conversations', () => {
     const fetchMock = mockApi({
       'GET /api/conversations': { items: [conv(1, 'Данияр', 'Привет')], next_cursor: null },
       'GET /api/conversations/1/messages': { items: [], next_cursor: null },
-      'POST /api/conversations/1/send': () => jsonResponse({ error: { code: 'send_failed', message: 'нет' } }, 502),
+      'POST /api/conversations/1/send': () => jsonResponse({ error: { code: 'send_failed', message: 'нет' } }, 503),
     })
     renderAt('/conversations/1')
     const box = await screen.findByLabelText('Ответ клиенту')
