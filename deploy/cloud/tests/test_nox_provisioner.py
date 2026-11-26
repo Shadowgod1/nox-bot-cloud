@@ -5,6 +5,8 @@ stubbed HTTP and a fake iler-client.sh (no network, no real tokens, no docker).
 """
 
 import base64
+import os
+import stat
 import importlib.util
 import shutil
 import sys
@@ -154,6 +156,10 @@ class FakeIlerClient:
         cmd = [str(c) for c in cmd]
         self.commands.append(cmd)
         self.envs.append(env)
+        if cmd[0] == "docker":
+            if "docker" in self.fail:
+                return 1, "Error response from daemon"
+            return 0, "Container iler-core Started"
         if cmd[1].endswith("set-llm-keys.sh"):
             if "llm" in self.fail:
                 return 1, "error: ILER_ANTHROPIC_KEY=sk-ant-api03-secret rejected"
@@ -448,3 +454,108 @@ def test_unseal_roundtrip_with_openssl(tmp_path):
     assert np.unseal(blob, str(pem)) == secret
     with pytest.raises(np.ProvisionError):
         np.unseal("not base64!!", str(pem))
+
+
+# ---- LLM gateway ----------------------------------------------------------------------------
+
+GW_KEY = "nox_vk_" + "G" * 43
+
+
+def gw_job(job_id=1, kind="create", sealed_llm=None):
+    job = create_job(job_id=job_id, sealed=sealed_llm)
+    job.update(kind=kind, gateway_key_sealed="c2VhbGVkLWd3")
+    return job
+
+
+def test_create_in_gateway_mode_writes_gateway_vars_only(env):
+    cfg, clients = env
+    cfg.gateway_url = "https://bot.example.kz"
+    http = FakeHttp(jobs=[gw_job()])
+    runner = FakeIlerClient(clients)
+    seen = []
+    p = make(cfg, http, runner, unseal_fn=lambda blob: seen.append(blob) or GW_KEY)
+    p.run_once()
+    assert http.reports[1]["ok"] is True, http.reports[1]
+    assert seen == ["c2VhbGVkLWd3"]
+    env_file = clients / "acme" / ".env"
+    text = env_file.read_text()
+    assert f"ILER_LLM_GATEWAY_KEY={GW_KEY}\n" in text
+    assert "ILER_LLM_GATEWAY_URL=https://bot.example.kz\n" in text
+    assert "ILER_MONTHLY_COINS=0\n" in text and "sk-ant" not in text
+    if os.name != "nt":
+        assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+    # no real key path, no instance coin limit, key never on a command line, core restarted
+    assert not any(c[1].endswith("set-llm-keys.sh") for c in runner.commands)
+    create = next(c for c in runner.commands if c[2] == "create")
+    assert "--coins" not in create
+    assert not any(GW_KEY in " ".join(c) for c in runner.commands)
+    docker = [c for c in runner.commands if c[0] == "docker"]
+    assert docker and docker[-1][-4:] == ["up", "-d", "--no-build", "iler-core"]
+
+
+def test_per_client_key_takes_precedence_over_gateway(env):
+    cfg, clients = env
+    http = FakeHttp(jobs=[gw_job(sealed_llm="cGVyLWNsaWVudA==")])
+    runner = FakeIlerClient(clients)
+    make(cfg, http, runner).run_once()
+    assert http.reports[1]["ok"] is True
+    text = (clients / "acme" / ".env").read_text()
+    assert "ILER_LLM_GATEWAY" not in text
+    assert "ILER_ANTHROPIC_KEY=sk-ant-api03-per-client-key-yyyyyyyy" in text
+
+
+def test_rekey_rewrites_env_and_drops_provider_keys(env):
+    cfg, clients = env
+    http = FakeHttp(jobs=[create_job()])
+    runner = FakeIlerClient(clients)
+    make(cfg, http, runner).run_once()  # legacy instance with the default Anthropic key
+    env_file = clients / "acme" / ".env"
+    assert "ILER_ANTHROPIC_KEY=sk-ant" in env_file.read_text()
+    http.jobs.append(gw_job(job_id=2, kind="rekey"))
+    make(cfg, http, runner, unseal_fn=lambda blob: GW_KEY).run_once()
+    assert http.reports[2] == {"ok": True}
+    text = env_file.read_text()
+    assert f"ILER_LLM_GATEWAY_KEY={GW_KEY}" in text and "ILER_ANTHROPIC_KEY=\n" in text
+    assert "ILER_PROJECT=iler-acme" in text, "other settings kept"
+    # a second rekey replaces the key in place (one line)
+    other = "nox_vk_" + "H" * 43
+    http.jobs.append(gw_job(job_id=3, kind="rekey"))
+    make(cfg, http, runner, unseal_fn=lambda blob: other).run_once()
+    text = env_file.read_text()
+    assert text.count("ILER_LLM_GATEWAY_KEY=") == 1 and other in text
+
+
+def test_rekey_failures_are_reported(env):
+    cfg, clients = env
+    http = FakeHttp(jobs=[gw_job(kind="rekey")])
+    runner = FakeIlerClient(clients)
+    make(cfg, http, runner, unseal_fn=lambda blob: GW_KEY).run_once()
+    assert http.reports[1]["ok"] is False and "no instance" in http.reports[1]["error"]
+    # bad unsealed value / docker failure
+    make(cfg, FakeHttp(jobs=[create_job()]), runner).run_once()
+    http.jobs.append(gw_job(job_id=2, kind="rekey"))
+    make(cfg, http, runner, unseal_fn=lambda blob: "not-a-key").run_once()
+    assert http.reports[2]["ok"] is False and "nox_vk_" in http.reports[2]["error"]
+    runner.fail.add("docker")
+    http.jobs.append(gw_job(job_id=3, kind="rekey"))
+    make(cfg, http, runner, unseal_fn=lambda blob: GW_KEY).run_once()
+    assert http.reports[3]["ok"] is False and "iler-core" in http.reports[3]["error"]
+    assert GW_KEY not in http.reports[3]["error"]
+
+
+def test_env_set_matches_env_sh(tmp_path):
+    f = tmp_path / ".env"
+    f.write_text("A=1\nILER_X=old\nB=2\n")
+    np.env_set(f, "ILER_X", "new=value with $dollar")
+    np.env_set(f, "C", "3")
+    assert f.read_text() == "A=1\nILER_X=new=value with $dollar\nB=2\nC=3\n"
+    with pytest.raises(np.ProvisionError):
+        np.env_set(f, "D", "two\nlines")
+
+
+def test_gateway_url_config(env):
+    cfg, _ = env
+    assert np.Config.from_env({}).gateway_url == "https://bot.noxsw.kz"
+    assert np.Config.from_env({"NOX_GATEWAY_URL": "http://172.17.0.1:8100/"}).gateway_url == "http://172.17.0.1:8100"
+    cfg.gateway_url = "https://bot.example.kz/x y"
+    assert any("NOX_GATEWAY_URL" in p for p in cfg.problems())
