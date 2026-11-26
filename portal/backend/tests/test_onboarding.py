@@ -54,7 +54,7 @@ async def test_balance_shows_dialogs_left(client, other, pool, internal):
     await _free_active(other, pool, internal)
     usage = (await other.get("/api/me/usage")).json()
     assert usage["balance"]["coins_left"] == 2000
-    assert usage["balance"]["dialogs_left"] == 50
+    assert usage["balance"]["dialogs_left"] == 100  # 2 000 coins at the default 20 per dialog
 
 
 # ---- support contacts -----------------------------------------------------------------------

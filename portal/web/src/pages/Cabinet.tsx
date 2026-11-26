@@ -332,7 +332,7 @@ function HelpCard() {
 
 function Faq() {
   const config = usePublicConfig()
-  const perDialog = config?.coins_per_dialog ?? 37
+  const perDialog = config?.coins_per_dialog ?? 20
   const items: [string, ReactNode][] = [
     [
       'Что такое коины?',
@@ -508,50 +508,55 @@ export function Cabinet() {
   }
 
   return (
-    <Shell subtitle="Личный кабинет" user={me?.email} onLogout={logout}>
+    <Shell subtitle="Личный кабинет" user={me?.email} onLogout={logout} wide>
       {error && <Alert>{error}</Alert>}
       {me && (
-        <div className="flex flex-col gap-5">
-          <Card className="overflow-hidden">
-            {(() => {
-              const steps = stepsFor(me.status, me.tariff === FREE_CODE)
-              return steps ? (
-                <div className="border-b border-line bg-sunken/60 px-6 py-4">
-                  <Steps {...steps} />
-                </div>
-              ) : null
-            })()}
-            <div className="p-6">
-              <StatusView me={me} setMe={setMe} />
-            </div>
-          </Card>
-          {!me.local_install && ['approved', 'provisioning', 'active', 'failed'].includes(me.status) && (
-            <SetupHelp me={me} onChange={setMe} />
-          )}
-          {me.llm_enabled && !['removed', 'rejected'].includes(me.status) && <CoinsPanel />}
-          <Faq />
-          <HelpCard />
-          <Card className="p-6">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-[16px] font-bold text-ink">Данные заявки</h2>
-              <StatusBadge status={me.status} />
-            </div>
-            <dl className="mt-4 grid gap-x-6 gap-y-3 text-[14px] sm:grid-cols-2">
-              {[
-                ['Компания', me.company],
-                ['Контактное лицо', me.contact_name],
-                ['E-mail', me.email],
-                ['Телефон', me.phone],
-                ['Адрес бота', me.bot_host],
-                ['Подана', formatDate(me.created_at)],
-              ].map(([k, v]) => (
-                <div key={k}>
-                  <dt className="text-[12.5px] font-semibold text-ink-3">{k}</dt>
-                  <dd className="text-ink">{v}</dd>
-                </div>
-              ))}
-            </dl>
-          </Card>
+        // wide screens: the work on the left, help and the application details in a side column
+        <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="flex min-w-0 flex-col gap-5">
+            <Card className="overflow-hidden">
+              {(() => {
+                const steps = stepsFor(me.status, me.tariff === FREE_CODE)
+                return steps ? (
+                  <div className="border-b border-line bg-sunken/60 px-6 py-4">
+                    <Steps {...steps} />
+                  </div>
+                ) : null
+              })()}
+              <div className="p-6">
+                <StatusView me={me} setMe={setMe} />
+              </div>
+            </Card>
+            {me.llm_enabled && !['removed', 'rejected'].includes(me.status) && <CoinsPanel />}
+            <Faq />
+          </div>
+          <aside className="flex min-w-0 flex-col gap-5 lg:sticky lg:top-20">
+            {!me.local_install && ['approved', 'provisioning', 'active', 'failed'].includes(me.status) && (
+              <SetupHelp me={me} onChange={setMe} />
+            )}
+            <HelpCard />
+            <Card className="p-6">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-[16px] font-bold text-ink">Данные заявки</h2>
+                <StatusBadge status={me.status} />
+              </div>
+              <dl className="mt-4 grid gap-x-6 gap-y-3 text-[14px] sm:grid-cols-2 lg:grid-cols-1">
+                {[
+                  ['Компания', me.company],
+                  ['Контактное лицо', me.contact_name],
+                  ['E-mail', me.email],
+                  ['Телефон', me.phone],
+                  ['Адрес бота', me.bot_host],
+                  ['Подана', formatDate(me.created_at)],
+                ].map(([k, v]) => (
+                  <div key={k} className="min-w-0">
+                    <dt className="text-[12.5px] font-semibold text-ink-3">{k}</dt>
+                    <dd className="break-words text-ink">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+            </Card>
+          </aside>
         </div>
       )}
     </Shell>

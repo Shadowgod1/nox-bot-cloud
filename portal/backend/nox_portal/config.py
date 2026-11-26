@@ -119,7 +119,7 @@ class Settings(BaseSettings):
 
     # ---- client-facing texts ----
     # coins one typical client dialog costs: tariff cards and the cabinet show "≈ N диалогов" (tariffs.dialogs)
-    coins_per_dialog: int = 37
+    coins_per_dialog: int = 20
     # support contacts shown in the portal (header/footer, login panel, cabinet) and in the signature of letters;
     # empty = not shown. WhatsApp: the number in digits (wa.me link), e.g. 77001234567
     support_phone: str = ""
