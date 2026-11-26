@@ -1,11 +1,11 @@
-"""Client flows: register -> e-mail code -> waiting for staff -> bot ready; login, password reset, logout."""
+"""Client flows: register -> e-mail code -> tariff + invoice -> staff marks paid -> bot ready; login, reset."""
 
 import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from nox_portal import codes, letters, mailer, ratelimit, security, slugs
+from nox_portal import billing, codes, letters, mailer, ratelimit, security, slugs, tariffs
 from nox_portal.config import get_settings
 from nox_portal.db import get_pool
 from nox_portal.deps import (
@@ -14,14 +14,15 @@ from nox_portal.deps import (
 )
 from nox_portal.errors import ApiError
 from nox_portal.schemas import (
-    ClientMe, Credentials, EmailOnly, Ok, Register, ResetConfirm, SetupLink, SlugCheck, Verify,
+    ClientMe, Credentials, EmailOnly, Invoice, Ok, Register, ResetConfirm, SetupLink, SlugCheck, TariffChoice,
+    TariffOut, Verify,
 )
 
 log = logging.getLogger("nox_portal.client")
 router = APIRouter(tags=["client"])
 
 _ACCOUNT_COLS = ("id, email, password_hash, company, contact_name, phone, slug, status, admin_url, reject_reason,"
-                 " setup_link_enc, created_at")
+                 " setup_link_enc, tariff, invoice_no, invoice_amount, invoice_issued_at, created_at")
 # unverified registrations hold their slug for a day, then disappear
 UNVERIFIED_TTL = "24 hours"
 INVALID_CREDENTIALS = ApiError(401, "invalid_credentials", "Неверный e-mail или пароль")
@@ -32,7 +33,8 @@ def client_me(row: asyncpg.Record) -> ClientMe:
         email=row["email"], company=row["company"], contact_name=row["contact_name"], phone=row["phone"],
         slug=row["slug"], bot_host=f"{row['slug']}.{get_settings().instance_domain}", status=row["status"],
         admin_url=row["admin_url"], reject_reason=row["reject_reason"],
-        setup_link_available=bool(row["setup_link_enc"]), created_at=row["created_at"],
+        setup_link_available=bool(row["setup_link_enc"]), tariff=row["tariff"], invoice_no=row["invoice_no"],
+        invoice_amount=row["invoice_amount"], created_at=row["created_at"],
     )
 
 
@@ -228,7 +230,7 @@ async def get_me(client: Principal = Depends(current_client)):
     return client_me(row)
 
 
-@router.post("/api/me/setup-link", response_model=SetupLink, dependencies=[Depends(csrf_protect)])
+@router.post("/api/me/setup-link", response_model=SetupLink, dependencies=[Depends(current_client), Depends(csrf_protect)])
 async def post_reveal_setup_link(request: Request, client: Principal = Depends(current_client)):
     """The owner setup link is shown exactly once, then erased from the portal."""
     pool = get_pool()
@@ -242,3 +244,39 @@ async def post_reveal_setup_link(request: Request, client: Principal = Depends(c
         raise ApiError(404, "setup_link_gone", "Ссылка уже была показана. Её копия есть в письме «Ваш бот готов».")
     await audit(pool, "client.setup_link_revealed", account_id=client.id, ip=ratelimit.client_ip(request))
     return SetupLink(setup_url=security.decrypt(enc))
+
+
+# ---- tariff and invoice ---------------------------------------------------------------------
+
+
+@router.get("/api/tariffs", response_model=list[TariffOut])
+async def get_tariffs():
+    return tariffs.as_dicts()
+
+
+@router.post("/api/me/tariff", response_model=ClientMe, dependencies=[Depends(current_client), Depends(csrf_protect)])
+async def post_choose_tariff(body: TariffChoice, request: Request, client: Principal = Depends(current_client)):
+    """Pick a tariff after verification: the invoice is issued (or re-issued for another tariff while unpaid)
+    and e-mailed; the application waits for payment."""
+    pool = get_pool()
+    async with pool.acquire() as conn, conn.transaction():
+        row = await billing.choose_tariff(conn, client.id, body.tariff)
+        await audit(conn, "client.tariff_chosen", account_id=client.id, ip=ratelimit.client_ip(request),
+                    details={"tariff": row["tariff"], "invoice": row["invoice_no"], "amount": row["invoice_amount"]})
+    tariff = tariffs.get(row["tariff"])
+    assert tariff is not None
+    amount = tariffs.money(row["invoice_amount"])
+    await mailer.send_quiet(row["email"], *letters.invoice(row["contact_name"], row["invoice_no"], tariff.name, amount,
+                                                           get_settings().invoice_due_days))
+    subject, text = letters.staff_tariff_chosen(row["company"], row["invoice_no"], tariff.name, amount)
+    for to in mailer.staff_recipients():
+        await mailer.send_quiet(to, subject, text)
+    me = await pool.fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1", client.id)
+    return client_me(me)
+
+
+@router.get("/api/me/invoice", response_model=Invoice)
+async def get_invoice(client: Principal = Depends(current_client)):
+    pool = get_pool()
+    row = await pool.fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1", client.id)
+    return billing.invoice_from_row(row, await billing.is_paid(pool, client.id, row["invoice_no"]))

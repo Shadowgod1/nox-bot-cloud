@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router'
 import { ArrowLeft } from 'lucide-react'
-import { api, formatDate, type ApplicationDetail, type AuditOut, type StaffConfig } from '../../api'
+import { api, formatDate, money, type ApplicationDetail, type AuditOut, type StaffConfig } from '../../api'
 import { Shell } from '../../components/Shell'
 import { Alert, Button, Card, Field, Input, StatusBadge } from '../../components/ui'
 import { ApproveForm } from './ApproveForm'
@@ -149,6 +149,33 @@ export function ApplicationView() {
               )}
             </Card>
 
+            <Section title="Счёт и платежи">
+              {app.invoice_no ? (
+                <p className="text-[14px] text-ink">
+                  Тариф «{config?.tariffs.find((t) => t.code === app.tariff)?.name ?? app.tariff}», счёт № {app.invoice_no} на{' '}
+                  {app.invoice_amount !== null ? money(app.invoice_amount) : '—'} от {formatDate(app.invoice_issued_at)}.{' '}
+                  <Link to={`/staff/applications/${app.id}/invoice`} className="font-semibold text-accent hover:text-accent-hover">
+                    Открыть счёт
+                  </Link>
+                </p>
+              ) : (
+                <p className="text-[13.5px] text-ink-3">Счёт не выставлен: клиент ещё не выбрал тариф</p>
+              )}
+              {app.payments.length > 0 && (
+                <ul className="mt-3 flex flex-col divide-y divide-line text-[13.5px]">
+                  {app.payments.map((p) => (
+                    <li key={p.id} className="flex flex-wrap gap-x-3 py-2">
+                      <span className="text-ink-3 tabular-nums">{formatDate(p.created_at)}</span>
+                      <span className={p.amount_kzt < 0 ? 'font-semibold text-danger' : 'font-semibold text-ok'}>{money(p.amount_kzt)}</span>
+                      {p.invoice_no && <span className="text-ink-2">счёт {p.invoice_no}</span>}
+                      {p.reference && <span className="text-ink-2">{p.reference}</span>}
+                      <span className="text-ink-3">{p.staff_email}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Section>
+
             <Section title="Задания провизионера">
               {app.jobs.length === 0 ? (
                 <p className="text-[13.5px] text-ink-3">Заданий нет</p>
@@ -178,12 +205,34 @@ export function ApplicationView() {
 
           <div className="flex flex-col gap-5">
             {openJob && <Alert tone="info">Выполняется: {JOB_KIND[openJob.kind] ?? openJob.kind}. Страница обновляется сама.</Alert>}
+            {app.status === 'awaiting_payment' && config && (
+              <Section title="Отметить оплату">
+                <ApproveForm
+                  mode="payment"
+                  applicationId={app.id}
+                  defaultSlug={app.slug}
+                  config={config}
+                  invoiceNo={app.invoice_no}
+                  invoiceAmount={app.invoice_amount}
+                  tariffCoins={config.tariffs.find((t) => t.code === app.tariff)?.coins ?? null}
+                  onDone={() => {
+                    setNotice('Оплата записана, бот поставлен в очередь на создание')
+                    void load()
+                  }}
+                />
+              </Section>
+            )}
             {['verified', 'rejected'].includes(app.status) && config && (
-              <Section title="Одобрить">
+              <Section title={app.status === 'verified' ? 'Одобрить без оплаты' : 'Одобрить'}>
+                {app.status === 'verified' && (
+                  <p className="mb-3 text-[13px] text-ink-3">
+                    Клиент ещё не выбрал тариф. Одобрение без счёта — для пробного периода и партнёров; фиксируется в журнале.
+                  </p>
+                )}
                 <ApproveForm applicationId={app.id} defaultSlug={app.slug} config={config} onDone={() => { setNotice('Заявка одобрена, бот ставится в очередь на создание'); void load() }} />
               </Section>
             )}
-            {['verified', 'approved', 'failed'].includes(app.status) && (
+            {['verified', 'awaiting_payment', 'approved', 'failed'].includes(app.status) && (
               <Section title="Отклонить">
                 <Field label="Причина (уйдёт клиенту письмом)">
                   <textarea

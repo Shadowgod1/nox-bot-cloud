@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     # A claimed job without a result after this many minutes is marked failed (staff may retry).
     job_timeout_minutes: int = 30
 
+    # Seller requisites printed on invoices (placeholders in .env.example; real values only on the server)
+    seller_name: str = "Nox service"
+    seller_bin: str = ""
+    seller_address: str = ""
+    seller_bank: str = ""
+    seller_iik: str = ""
+    seller_bik: str = ""
+    seller_kbe: str = ""
+    seller_phone: str = ""
+    # days the client has to pay an invoice (shown on it)
+    invoice_due_days: int = 5
+
     openapi: bool = False
 
 

@@ -115,8 +115,8 @@ class SlugCheck(BaseModel):
     message: str | None = None
 
 
-Status = Literal["new", "verified", "approved", "provisioning", "active", "failed", "rejected",
-                 "suspended", "removed"]
+Status = Literal["new", "verified", "awaiting_payment", "approved", "provisioning", "active", "failed",
+                 "rejected", "suspended", "removed"]
 
 
 class ClientMe(BaseModel):
@@ -131,6 +131,9 @@ class ClientMe(BaseModel):
     admin_url: str | None
     reject_reason: str | None
     setup_link_available: bool
+    tariff: str | None
+    invoice_no: str | None
+    invoice_amount: int | None
     created_at: datetime
 
 
@@ -150,6 +153,14 @@ class Approve(BaseModel):
     slug: Slug | None = None
     # write-only: sealed for the provisioner immediately, never stored in clear or returned
     anthropic_key: Annotated[str | None, Field(max_length=256), AfterValidator(_llm_key)] = None
+
+
+class MarkPaid(Approve):
+    """Record a payment (ledger row) and approve in the same transaction; coins default to the tariff's."""
+    coins: int | None = Field(None, ge=0, le=999_999_999)  # type: ignore[assignment]
+    amount_kzt: int = Field(gt=0, le=1_000_000_000)
+    reference: str = Field("", max_length=200)
+    note: str = Field("", max_length=1000)
 
 
 class Reject(BaseModel):
@@ -193,6 +204,7 @@ class ApplicationListItem(BaseModel):
     slug: str
     status: Status
     coins_limit: int | None
+    tariff: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -205,11 +217,66 @@ class ApplicationDetail(ApplicationListItem):
     last_error: str | None
     email_verified_at: datetime | None
     register_ip: str | None
+    invoice_no: str | None
+    invoice_amount: int | None
+    invoice_issued_at: datetime | None
+    payments: list["PaymentOut"]
     jobs: list[JobOut]
     audit: list[AuditOut]
 
 
+class TariffOut(BaseModel):
+    code: str
+    name: str
+    price_kzt: int
+    coins: int
+    description: str
+
+
+class TariffChoice(BaseModel):
+    tariff: str = Field(max_length=32)
+
+
+class Seller(BaseModel):
+    name: str
+    bin: str
+    address: str
+    bank: str
+    iik: str
+    bik: str
+    kbe: str
+    phone: str
+
+
+class Invoice(BaseModel):
+    number: str
+    issued_at: datetime
+    due_days: int
+    amount_kzt: int
+    tariff: TariffOut
+    buyer_company: str
+    buyer_contact: str
+    buyer_email: str
+    buyer_phone: str
+    bot_host: str
+    seller: Seller
+    paid: bool
+
+
+class PaymentOut(BaseModel):
+    id: int
+    invoice_no: str | None
+    tariff: str | None
+    amount_kzt: int
+    method: str
+    reference: str
+    note: str
+    staff_email: str | None
+    created_at: datetime
+
+
 class StaffConfig(BaseModel):
+    tariffs: list[TariffOut]
     coin_presets: list[int]
     instance_domain: str
     custom_key_supported: bool
@@ -234,3 +301,6 @@ class JobResult(BaseModel):
     admin_url: Annotated[str | None, Field(max_length=300)] = None
     setup_url: Annotated[str | None, Field(max_length=500)] = None
     error: Annotated[str | None, Field(max_length=2000)] = None
+
+
+ApplicationDetail.model_rebuild()

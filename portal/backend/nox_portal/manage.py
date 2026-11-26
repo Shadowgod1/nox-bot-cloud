@@ -1,10 +1,10 @@
 """Portal admin CLI (staff accounts exist only through this command).
 
-  docker compose -p nox-portal exec api python manage.py create-staff --email ops@example.kz [--name "Имя"]
-  docker compose -p nox-portal exec api python manage.py set-staff-password --email ops@example.kz
-  docker compose -p nox-portal exec api python manage.py disable-staff --email ops@example.kz
-  docker compose -p nox-portal exec api python manage.py enable-staff --email ops@example.kz
-  docker compose -p nox-portal exec api python manage.py list-staff
+  cd /opt/nox-portal && docker compose exec api python manage.py create-staff --email ops@example.kz [--name "Имя"]
+  cd /opt/nox-portal && docker compose exec api python manage.py set-staff-password --email ops@example.kz
+  cd /opt/nox-portal && docker compose exec api python manage.py disable-staff --email ops@example.kz
+  cd /opt/nox-portal && docker compose exec api python manage.py enable-staff --email ops@example.kz
+  cd /opt/nox-portal && docker compose exec api python manage.py list-staff
 
 The password is prompted (hidden, twice); for automation it may come from stdin with --password-stdin.
 """

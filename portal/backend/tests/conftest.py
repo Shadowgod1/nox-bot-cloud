@@ -112,7 +112,12 @@ async def clean_db(request):
     p = get_pool()
     tables = [r["tablename"] for r in await p.fetch(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'schema_migrations'")]
-    await p.execute("TRUNCATE " + ", ".join(f'"{t}"' for t in tables) + " RESTART IDENTITY CASCADE")
+    # the payments ledger refuses TRUNCATE (append-only trigger): lift it for the test reset only
+    async with p.acquire() as conn, conn.transaction():
+        await conn.execute("ALTER TABLE payments DISABLE TRIGGER payments_no_truncate")
+        await conn.execute("TRUNCATE " + ", ".join(f'"{t}"' for t in tables) + " RESTART IDENTITY CASCADE")
+        await conn.execute("ALTER TABLE payments ENABLE TRIGGER payments_no_truncate")
+        await conn.execute("ALTER SEQUENCE invoice_seq RESTART")
     yield
 
 

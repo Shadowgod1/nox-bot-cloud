@@ -1,6 +1,7 @@
 import { Link, Route, Routes } from 'react-router'
 import { Shell } from './components/Shell'
 import { Cabinet } from './pages/Cabinet'
+import { InvoicePage } from './pages/InvoicePage'
 import { Login } from './pages/Login'
 import { Register } from './pages/Register'
 import { Reset } from './pages/Reset'
@@ -29,9 +30,11 @@ export function App() {
       <Route path="/verify" element={<Verify />} />
       <Route path="/login" element={<Login />} />
       <Route path="/reset" element={<Reset />} />
+      <Route path="/invoice" element={<InvoicePage />} />
       <Route path="/staff/login" element={<StaffLogin />} />
       <Route path="/staff" element={<Applications />} />
       <Route path="/staff/applications/:id" element={<ApplicationView />} />
+      <Route path="/staff/applications/:id/invoice" element={<InvoicePage />} />
       <Route path="/staff/audit" element={<AuditPage />} />
       <Route path="*" element={<NotFound />} />
     </Routes>

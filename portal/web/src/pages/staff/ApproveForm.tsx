@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { api, type StaffConfig } from '../../api'
+import { api, money, type StaffConfig } from '../../api'
 import { Alert, Button, cx, Field, Input } from '../../components/ui'
 import { slugProblem } from '../Register'
 
@@ -8,48 +8,84 @@ interface Props {
   defaultSlug: string
   config: StaffConfig
   onDone: () => void
+  /** payment: "Mark as paid" — records the payment (ledger) and approves in one step */
+  mode?: 'approve' | 'payment'
+  invoiceNo?: string | null
+  invoiceAmount?: number | null
+  /** coin limit of the client's tariff (preselected) */
+  tariffCoins?: number | null
 }
 
 const fmt = (n: number) => n.toLocaleString('ru-RU')
 
-/** Approve: monthly coin limit (preset or custom), optional slug change, optional write-only Anthropic key. */
-export function ApproveForm({ applicationId, defaultSlug, config, onDone }: Props) {
-  const [preset, setPreset] = useState<number | 'custom'>(config.coin_presets[0] ?? 30000)
-  const [custom, setCustom] = useState('')
+/** Approve: monthly coin limit (preset or custom), optional slug change, optional write-only Anthropic key.
+ * In payment mode it also takes the received amount and the payment reference. */
+export function ApproveForm({ applicationId, defaultSlug, config, onDone, mode = 'approve', invoiceNo, invoiceAmount, tariffCoins }: Props) {
+  const presets = config.coin_presets
+  const initialPreset: number | 'custom' =
+    tariffCoins == null ? (presets[0] ?? 30000) : presets.includes(tariffCoins) ? tariffCoins : 'custom'
+  const [preset, setPreset] = useState<number | 'custom'>(initialPreset)
+  const [custom, setCustom] = useState(tariffCoins != null && !presets.includes(tariffCoins) ? String(tariffCoins) : '')
   const [slug, setSlug] = useState(defaultSlug)
   const [key, setKey] = useState('')
+  const [amount, setAmount] = useState(invoiceAmount != null ? String(invoiceAmount) : '')
+  const [reference, setReference] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const payment = mode === 'payment'
 
   const coins = preset === 'custom' ? (/^\d{1,9}$/.test(custom) ? Number(custom) : null) : preset
   const slugError = slug !== defaultSlug ? slugProblem(slug) : null
   const keyError = key && !/^sk-ant-[A-Za-z0-9._-]{16,240}$/.test(key.trim()) ? 'Ключ должен начинаться с sk-ant-' : null
+  const amountValue = /^\d{1,10}$/.test(amount) && Number(amount) > 0 ? Number(amount) : null
+  const amountError = payment && amount && amountValue === null ? 'Сумма в тенге, целое число больше нуля' : null
+  const invalid = coins === null || !!slugError || !!keyError || (payment && amountValue === null)
 
   async function submit(e: FormEvent) {
     e.preventDefault()
-    if (coins === null || slugError || keyError) return
+    if (invalid) return
     setBusy(true)
     setError(null)
     try {
       const body: Record<string, unknown> = { coins }
       if (slug !== defaultSlug) body.slug = slug
       if (key.trim()) body.anthropic_key = key.trim()
-      await api.post(`/api/staff/applications/${applicationId}/approve`, body)
+      if (payment) {
+        body.amount_kzt = amountValue
+        body.reference = reference.trim()
+      }
+      await api.post(`/api/staff/applications/${applicationId}/${payment ? 'mark-paid' : 'approve'}`, body)
       setKey('')
       onDone()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось одобрить заявку.')
+      setError(err instanceof Error ? err.message : 'Не удалось выполнить действие.')
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-4" aria-label="Одобрить заявку" noValidate>
+    <form onSubmit={submit} className="flex flex-col gap-4" aria-label={payment ? 'Отметить оплату' : 'Одобрить заявку'} noValidate>
+      {payment && (
+        <>
+          <p className="text-[13.5px] text-ink-2">
+            Счёт № {invoiceNo ?? '—'} на {invoiceAmount != null ? money(invoiceAmount) : '—'}. Оплата попадёт в журнал платежей, бот
+            сразу встанет в очередь на создание.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Получено, ₸" error={amountError} hint={amountValue !== null && invoiceAmount != null && amountValue !== invoiceAmount ? 'Сумма отличается от счёта' : undefined}>
+              <Input value={amount} onChange={(e) => setAmount(e.target.value.replace(/\s/g, ''))} inputMode="numeric" />
+            </Field>
+            <Field label="Платёжное поручение">
+              <Input value={reference} onChange={(e) => setReference(e.target.value)} maxLength={200} placeholder="№ и дата" />
+            </Field>
+          </div>
+        </>
+      )}
       <fieldset>
         <legend className="text-[13px] font-semibold text-ink-2">Лимит коинов в месяц</legend>
         <div className="mt-1.5 flex flex-wrap gap-1.5">
-          {config.coin_presets.map((p) => (
+          {presets.map((p) => (
             <label
               key={p}
               className={cx(
@@ -99,8 +135,8 @@ export function ApproveForm({ applicationId, defaultSlug, config, onDone }: Prop
       )}
       {error && <Alert>{error}</Alert>}
       <div>
-        <Button type="submit" variant="primary" loading={busy} disabled={coins === null || !!slugError || !!keyError}>
-          Одобрить и создать бота
+        <Button type="submit" variant="primary" loading={busy} disabled={invalid}>
+          {payment ? 'Отметить оплату и создать бота' : 'Одобрить и создать бота'}
         </Button>
       </div>
     </form>

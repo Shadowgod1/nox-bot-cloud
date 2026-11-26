@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router'
-import { CheckCircle2, Clock, Copy, ExternalLink, Hourglass, KeyRound, PauseCircle, XCircle } from 'lucide-react'
-import { api, ApiError, formatDate, type ClientMe } from '../api'
+import { Link, useNavigate } from 'react-router'
+import { CheckCircle2, Clock, Copy, ExternalLink, FileText, Hourglass, KeyRound, PauseCircle, Receipt, XCircle } from 'lucide-react'
+import { api, ApiError, formatDate, money, type ClientMe } from '../api'
 import { Shell } from '../components/Shell'
 import { Alert, Button, Card, StatusBadge } from '../components/ui'
+import { TariffPicker } from './TariffPicker'
 
 function StateBlock({ icon, title, children }: { icon: ReactNode; title: string; children?: ReactNode }) {
   return (
@@ -82,14 +83,58 @@ function SetupLink({ onRevealed }: { onRevealed: () => void }) {
   )
 }
 
-function StatusView({ me, reload }: { me: ClientMe; reload: () => void }) {
+function AwaitingPayment({ me, onChange }: { me: ClientMe; onChange: (me: ClientMe) => void }) {
+  const [changing, setChanging] = useState(false)
+  return (
+    <StateBlock icon={<Receipt className="size-9 text-warn" />} title="Ожидаем оплату">
+      <p>
+        Счёт № {me.invoice_no} на {me.invoice_amount !== null ? money(me.invoice_amount) : '—'} отправлен на {me.email}. Оплатите
+        его банковским переводом — после поступления оплаты мы создадим бота и пришлём ссылку на панель.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Link
+          to="/invoice"
+          className="inline-flex h-10 items-center gap-1.5 rounded-nx bg-accent px-4 text-sm font-semibold text-white hover:bg-accent-hover"
+        >
+          <FileText className="size-4" aria-hidden /> Открыть счёт (PDF)
+        </Link>
+        {!changing && (
+          <Button variant="ghost" onClick={() => setChanging(true)}>
+            Сменить тариф
+          </Button>
+        )}
+      </div>
+      {changing && (
+        <div className="mt-4">
+          <TariffPicker
+            current={me.tariff}
+            onChosen={(next) => {
+              setChanging(false)
+              onChange(next)
+            }}
+          />
+        </div>
+      )}
+    </StateBlock>
+  )
+}
+
+function StatusView({ me, reload, setMe }: { me: ClientMe; reload: () => void; setMe: (me: ClientMe) => void }) {
   const icon = 'size-9'
   switch (me.status) {
     case 'verified':
+      return (
+        <StateBlock icon={<Hourglass className={`${icon} text-accent`} />} title="Выберите тариф">
+          <p className="mb-4">E-mail подтверждён. Выберите тариф — мы выставим счёт на первый месяц, оплата банковским переводом.</p>
+          <TariffPicker onChosen={setMe} />
+        </StateBlock>
+      )
+    case 'awaiting_payment':
+      return <AwaitingPayment me={me} onChange={setMe} />
     case 'approved':
       return (
-        <StateBlock icon={<Hourglass className={`${icon} text-accent`} />} title="Заявка на рассмотрении">
-          Мы проверим заявку и свяжемся с вами в рабочее время. Как только бот будет готов, придёт письмо на {me.email}.
+        <StateBlock icon={<Hourglass className={`${icon} text-accent`} />} title="Оплата получена">
+          Спасибо! Бот поставлен в очередь на создание. Как только он будет готов, придёт письмо на {me.email}.
         </StateBlock>
       )
     case 'provisioning':
@@ -172,7 +217,7 @@ export function Cabinet() {
       {me && (
         <div className="flex flex-col gap-5">
           <Card className="p-6">
-            <StatusView me={me} reload={load} />
+            <StatusView me={me} reload={load} setMe={setMe} />
           </Card>
           <Card className="p-6">
             <div className="flex items-center justify-between gap-3">

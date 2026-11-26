@@ -35,6 +35,14 @@ def already_registered(name: str) -> tuple[str, str]:
     )
 
 
+def staff_tariff_chosen(company: str, number: str, tariff_name: str, amount: str) -> tuple[str, str]:
+    return (
+        f"Выставлен счёт {number}: {company}",
+        f"Клиент выбрал тариф «{tariff_name}», счёт {number} на {amount}.\n\n"
+        f"После поступления оплаты отметьте её в портале: {_portal()}/staff",
+    )
+
+
 def staff_new_application(company: str, contact: str, email: str, phone: str, slug: str) -> tuple[str, str]:
     domain = get_settings().instance_domain
     return (
@@ -43,6 +51,26 @@ def staff_new_application(company: str, contact: str, email: str, phone: str, sl
         f"Компания: {company}\nКонтакт: {contact}\nE-mail: {email}\nТелефон: {phone}\n"
         f"Адрес: {slug}.{domain}\n\n"
         f"Рассмотреть: {_portal()}/staff",
+    )
+
+
+def invoice(name: str, number: str, tariff_name: str, amount: str, due_days: int) -> tuple[str, str]:
+    s = get_settings()
+    requisites = "\n".join(
+        f"{label}: {value}" for label, value in (
+            ("Получатель", s.seller_name), ("БИН", s.seller_bin), ("Банк", s.seller_bank), ("ИИК", s.seller_iik),
+            ("БИК", s.seller_bik), ("Кбе", s.seller_kbe),
+        ) if value
+    )
+    return (
+        f"Счёт {number} на оплату Nox Bot",
+        f"Здравствуйте, {name}!\n\n"
+        f"Выставлен счёт {number} за тариф «{tariff_name}» на первый месяц: {amount}.\n"
+        f"Оплатите его в течение {due_days} рабочих дней банковским переводом, в назначении платежа укажите "
+        f"номер счёта {number}.\n\n"
+        f"{requisites}\n\n"
+        f"Счёт для печати (PDF): {_portal()}/invoice\n\n"
+        "После поступления оплаты мы создадим бота и пришлём письмо со ссылкой на панель управления.",
     )
 
 

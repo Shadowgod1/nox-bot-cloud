@@ -4,7 +4,7 @@ Every endpoint here requires a staff session; mutations also require the CSRF he
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from nox_portal import jobs, letters, mailer, ratelimit, security
+from nox_portal import billing, jobs, letters, mailer, ratelimit, security, tariffs
 from nox_portal.config import get_settings
 from nox_portal.db import get_pool
 from nox_portal.deps import (
@@ -13,7 +13,8 @@ from nox_portal.deps import (
 )
 from nox_portal.errors import ApiError
 from nox_portal.schemas import (
-    ApplicationDetail, ApplicationListItem, Approve, AuditOut, Credentials, JobOut, Ok, Reject, RemoveConfirm,
+    ApplicationDetail, ApplicationListItem, Approve, AuditOut, Credentials, Invoice, JobOut, MarkPaid, Ok, Reject,
+    RemoveConfirm,
     StaffConfig, StaffMe, Status,
 )
 
@@ -23,7 +24,7 @@ staff_only = [Depends(current_staff)]
 staff_mutation = [Depends(current_staff), Depends(csrf_protect)]
 
 COIN_PRESETS = [30000, 100000, 300000]
-_LIST_COLS = "id, company, contact_name, email, phone, slug, status, coins_limit, created_at, updated_at"
+_LIST_COLS = "id, company, contact_name, email, phone, slug, status, coins_limit, tariff, created_at, updated_at"
 
 
 # ---- auth -----------------------------------------------------------------------------------
@@ -72,7 +73,7 @@ async def get_staff_config():
         sealing = True
     except security.SealingUnavailable:
         sealing = False
-    return StaffConfig(coin_presets=COIN_PRESETS, instance_domain=get_settings().instance_domain,
+    return StaffConfig(tariffs=tariffs.as_dicts(), coin_presets=COIN_PRESETS, instance_domain=get_settings().instance_domain,
                        custom_key_supported=sealing)
 
 
@@ -122,7 +123,8 @@ async def _audit_rows(conn, account_id: int | None, limit: int) -> list[AuditOut
 async def get_application(account_id: int):
     pool = get_pool()
     row = await pool.fetchrow(
-        f"SELECT {_LIST_COLS}, admin_url, port, reject_reason, last_error, email_verified_at, register_ip"
+        f"SELECT {_LIST_COLS}, admin_url, port, reject_reason, last_error, email_verified_at, register_ip,"
+        " invoice_no, invoice_amount, invoice_issued_at"
         " FROM accounts WHERE id = $1",
         account_id,
     )
@@ -135,13 +137,15 @@ async def get_application(account_id: int):
     )
     return ApplicationDetail(
         **dict(row), bot_host=f"{row['slug']}.{get_settings().instance_domain}",
+        payments=await billing.payments_of(pool, account_id),
         jobs=[_job_out(r) for r in job_rows], audit=await _audit_rows(pool, account_id, 100),
     )
 
 
 async def _lock_account(conn, account_id: int) -> asyncpg.Record:
     row = await conn.fetchrow(
-        "SELECT id, email, contact_name, slug, status, coins_limit FROM accounts WHERE id = $1 FOR UPDATE",
+        "SELECT id, email, contact_name, slug, status, coins_limit, tariff, invoice_no, invoice_amount"
+        " FROM accounts WHERE id = $1 FOR UPDATE",
         account_id,
     )
     if row is None:
@@ -154,35 +158,83 @@ def _require_status(row: asyncpg.Record, *allowed: str) -> None:
         raise ApiError(409, "wrong_status", f"Действие недоступно в статусе «{row['status']}»")
 
 
+def _seal(key: str | None) -> str | None:
+    if not key:
+        return None
+    try:
+        return security.seal_for_provisioner(key)
+    except security.SealingUnavailable:
+        raise ApiError(503, "custom_key_unavailable",
+                       "Персональный ключ недоступен: на сервере нет открытого ключа провизионера") from None
+
+
+async def _approve(conn, row: asyncpg.Record, body: Approve, coins: int, sealed: str | None, staff: Principal,
+                   request: Request, payment_id: int | None) -> None:
+    """Queue the create job (shared by approve and mark-paid; the caller holds the row lock)."""
+    account_id = row["id"]
+    slug = row["slug"]
+    if body.slug and body.slug != slug:
+        if await conn.fetchval("SELECT EXISTS (SELECT 1 FROM accounts WHERE slug = $1)", body.slug):
+            raise ApiError(409, "slug_taken", "Этот адрес уже занят")
+        slug = body.slug
+    await conn.execute(
+        "UPDATE accounts SET status = 'approved', slug = $2, coins_limit = $3, reject_reason = NULL,"
+        " last_error = NULL, updated_at = now() WHERE id = $1",
+        account_id, slug, coins,
+    )
+    job_id = await jobs.enqueue(conn, account_id, "create", slug, coins=coins, llm_key_sealed=sealed, staff_id=staff.id)
+    await audit(conn, "staff.approve", staff_id=staff.id, account_id=account_id, ip=ratelimit.client_ip(request),
+                details={"job": job_id, "coins": coins, "slug": slug, "slug_changed": slug != row["slug"],
+                         "custom_key": sealed is not None, "payment": payment_id})
+
+
 @router.post("/api/staff/applications/{account_id}/approve", response_model=Ok, dependencies=staff_mutation)
 async def post_approve(account_id: int, body: Approve, request: Request, staff: Principal = Depends(current_staff)):
-    sealed = None
-    if body.anthropic_key:
-        try:
-            sealed = security.seal_for_provisioner(body.anthropic_key)
-        except security.SealingUnavailable:
-            raise ApiError(503, "custom_key_unavailable",
-                           "Персональный ключ недоступен: на сервере нет открытого ключа провизионера") from None
+    """Approve without a recorded payment (trial, partner, paid elsewhere); audited with payment = null."""
+    sealed = _seal(body.anthropic_key)
     pool = get_pool()
     async with pool.acquire() as conn, conn.transaction():
         row = await _lock_account(conn, account_id)
-        _require_status(row, "verified", "rejected")
-        slug = row["slug"]
-        if body.slug and body.slug != slug:
-            if await conn.fetchval("SELECT EXISTS (SELECT 1 FROM accounts WHERE slug = $1)", body.slug):
-                raise ApiError(409, "slug_taken", "Этот адрес уже занят")
-            slug = body.slug
-        await conn.execute(
-            "UPDATE accounts SET status = 'approved', slug = $2, coins_limit = $3, reject_reason = NULL,"
-            " last_error = NULL, updated_at = now() WHERE id = $1",
-            account_id, slug, body.coins,
-        )
-        job_id = await jobs.enqueue(conn, account_id, "create", slug, coins=body.coins, llm_key_sealed=sealed,
-                                    staff_id=staff.id)
-        await audit(conn, "staff.approve", staff_id=staff.id, account_id=account_id, ip=ratelimit.client_ip(request),
-                    details={"job": job_id, "coins": body.coins, "slug": slug, "slug_changed": slug != row["slug"],
-                             "custom_key": sealed is not None})
+        _require_status(row, "verified", "awaiting_payment", "rejected")
+        await _approve(conn, row, body, body.coins, sealed, staff, request, None)
     return Ok()
+
+
+@router.post("/api/staff/applications/{account_id}/mark-paid", response_model=Ok, dependencies=staff_mutation)
+async def post_mark_paid(account_id: int, body: MarkPaid, request: Request, staff: Principal = Depends(current_staff)):
+    """Record the bank payment in the ledger and approve in one transaction: payment is the gate, so a paid
+    application never waits for a second click. Coins default to the tariff's monthly coins."""
+    sealed = _seal(body.anthropic_key)
+    pool = get_pool()
+    async with pool.acquire() as conn, conn.transaction():
+        row = await _lock_account(conn, account_id)
+        _require_status(row, "awaiting_payment")
+        tariff = tariffs.get(row["tariff"])
+        coins = body.coins if body.coins is not None else (tariff.coins if tariff else None)
+        if coins is None:
+            raise ApiError(422, "validation_error", "coins: укажите лимит коинов")
+        payment_id = await billing.record_payment(
+            conn, account_id, invoice_no=row["invoice_no"], tariff=row["tariff"], amount_kzt=body.amount_kzt,
+            reference=body.reference, note=body.note, staff_id=staff.id,
+        )
+        await audit(conn, "staff.mark_paid", staff_id=staff.id, account_id=account_id, ip=ratelimit.client_ip(request),
+                    details={"payment": payment_id, "invoice": row["invoice_no"], "amount": body.amount_kzt,
+                             "invoice_amount": row["invoice_amount"], "reference": body.reference.strip()})
+        await _approve(conn, row, body, coins, sealed, staff, request, payment_id)
+    return Ok()
+
+
+@router.get("/api/staff/applications/{account_id}/invoice", response_model=Invoice, dependencies=staff_only)
+async def get_application_invoice(account_id: int):
+    pool = get_pool()
+    row = await pool.fetchrow(
+        "SELECT id, email, contact_name, company, phone, slug, tariff, invoice_no, invoice_amount, invoice_issued_at"
+        " FROM accounts WHERE id = $1",
+        account_id,
+    )
+    if row is None:
+        raise ApiError(404, "not_found", "Заявка не найдена")
+    return billing.invoice_from_row(row, await billing.is_paid(pool, account_id, row["invoice_no"]))
 
 
 @router.post("/api/staff/applications/{account_id}/reject", response_model=Ok, dependencies=staff_mutation)
@@ -191,7 +243,7 @@ async def post_reject(account_id: int, body: Reject, request: Request, staff: Pr
     pool = get_pool()
     async with pool.acquire() as conn, conn.transaction():
         row = await _lock_account(conn, account_id)
-        _require_status(row, "verified", "approved", "failed")
+        _require_status(row, "verified", "awaiting_payment", "approved", "failed")
         if await conn.fetchval("SELECT EXISTS (SELECT 1 FROM jobs WHERE account_id = $1 AND status = 'claimed')",
                                account_id):
             raise ApiError(409, "job_in_progress", "Бот уже создаётся; дождитесь результата")

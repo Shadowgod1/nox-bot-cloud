@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { bodyOf, json, mockFetch } from '../../test/utils'
 import { ApproveForm } from './ApproveForm'
 
-const config = { coin_presets: [30000, 100000, 300000], instance_domain: 'example.kz', custom_key_supported: true }
+const config = { tariffs: [], coin_presets: [30000, 100000, 300000], instance_domain: 'example.kz', custom_key_supported: true }
 const URL_ = 'POST /api/staff/applications/7/approve'
 
 function setup(cfg = config) {

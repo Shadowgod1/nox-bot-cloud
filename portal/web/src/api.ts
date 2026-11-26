@@ -74,6 +74,7 @@ export const api = {
 export type Status =
   | 'new'
   | 'verified'
+  | 'awaiting_payment'
   | 'approved'
   | 'provisioning'
   | 'active'
@@ -94,6 +95,9 @@ export interface ClientMe {
   admin_url: string | null
   reject_reason: string | null
   setup_link_available: boolean
+  tariff: string | null
+  invoice_no: string | null
+  invoice_amount: number | null
   created_at: string
 }
 
@@ -113,6 +117,7 @@ export interface ApplicationListItem {
   slug: string
   status: Status
   coins_limit: number | null
+  tariff: string | null
   created_at: string
   updated_at: string
 }
@@ -149,11 +154,16 @@ export interface ApplicationDetail extends ApplicationListItem {
   last_error: string | null
   email_verified_at: string | null
   register_ip: string | null
+  invoice_no: string | null
+  invoice_amount: number | null
+  invoice_issued_at: string | null
+  payments: PaymentOut[]
   jobs: JobOut[]
   audit: AuditOut[]
 }
 
 export interface StaffConfig {
+  tariffs: Tariff[]
   coin_presets: number[]
   instance_domain: string
   custom_key_supported: boolean
@@ -162,6 +172,7 @@ export interface StaffConfig {
 export const STATUS_LABELS: Record<Status, string> = {
   new: 'Новая',
   verified: 'Подтверждена',
+  awaiting_payment: 'Ждёт оплаты',
   approved: 'Одобрена',
   provisioning: 'Создаётся',
   active: 'Работает',
@@ -181,4 +192,43 @@ export function formatDate(iso: string | null | undefined): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+export interface Tariff {
+  code: string
+  name: string
+  price_kzt: number
+  coins: number
+  description: string
+}
+
+export interface PaymentOut {
+  id: number
+  invoice_no: string | null
+  tariff: string | null
+  amount_kzt: number
+  method: string
+  reference: string
+  note: string
+  staff_email: string | null
+  created_at: string
+}
+
+export interface Invoice {
+  number: string
+  issued_at: string
+  due_days: number
+  amount_kzt: number
+  tariff: Tariff
+  buyer_company: string
+  buyer_contact: string
+  buyer_email: string
+  buyer_phone: string
+  bot_host: string
+  seller: { name: string; bin: string; address: string; bank: string; iik: string; bik: string; kbe: string; phone: string }
+  paid: boolean
+}
+
+export function money(amount: number): string {
+  return `${amount.toLocaleString('ru-RU').replace(/\u00a0|\u202f/g, ' ')} ₸`
 }
