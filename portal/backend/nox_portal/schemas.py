@@ -155,6 +155,8 @@ class ClientMe(BaseModel):
     # "Попросить помочь с настройкой": when asked, and when a manager marked that they got in touch
     setup_help_requested_at: datetime | None = None
     setup_help_contacted_at: datetime | None = None
+    # the bot panel's owner was created from this account: log in there with the cabinet e-mail and password
+    owner_preset: bool = False
 
 
 class SetupLink(BaseModel):
@@ -486,6 +488,13 @@ class ClaimedJob(BaseModel):
     # the account's LLM gateway virtual key (nox_vk_...), sealed the same way; create / rekey jobs.
     # A per-client llm_key_sealed takes precedence (the instance then talks to Anthropic directly).
     gateway_key_sealed: str | None = None
+    # create jobs only: the panel owner is created from the application (one account for cabinet and panel).
+    # owner_password_hash is the cabinet's argon2id hash (core verifies it as is); the internal API on 127.0.0.1
+    # is the only place it leaves the database, and the provisioner hands it on through the environment.
+    owner_email: str | None = None
+    owner_name: str | None = None
+    company: str | None = None
+    owner_password_hash: str | None = None
 
 
 class JobResult(BaseModel):
@@ -494,6 +503,8 @@ class JobResult(BaseModel):
     admin_url: Annotated[str | None, Field(max_length=300)] = None
     setup_url: Annotated[str | None, Field(max_length=500)] = None
     error: Annotated[str | None, Field(max_length=2000)] = None
+    # create: the instance's owner was created from owner_* of the job (no setup link)
+    owner_preset: bool = False
 
 
 ApplicationDetail.model_rebuild()

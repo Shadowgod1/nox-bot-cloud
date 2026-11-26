@@ -34,16 +34,17 @@ async def get_ping():
 async def post_claim():
     async with get_pool().acquire() as conn:
         job = await jobs.claim(conn)
-    if job is None:
-        return Response(status_code=204)
+        if job is None:
+            return Response(status_code=204)
+        owner = await jobs.owner_for(conn, job) if job["kind"] == "create" else {}
     return ClaimedJob(id=job["id"], kind=job["kind"], slug=job["slug"], coins=job["coins"],
                       public_url=jobs.public_url_for(job["slug"]), llm_key_sealed=job["llm_key_sealed"],
-                      gateway_key_sealed=job["gateway_key_sealed"])
+                      gateway_key_sealed=job["gateway_key_sealed"], **owner)
 
 
 @router.post("/jobs/{job_id}/result", response_model=Ok)
 async def post_result(job_id: int, body: JobResult):
     async with get_pool().acquire() as conn:
         await jobs.finish(conn, job_id, body.ok, port=body.port, admin_url=body.admin_url,
-                          setup_url=body.setup_url, error=body.error)
+                          setup_url=body.setup_url, error=body.error, owner_preset=body.owner_preset)
     return Ok()
