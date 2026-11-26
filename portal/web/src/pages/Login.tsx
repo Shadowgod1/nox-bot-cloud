@@ -49,8 +49,14 @@ export function Login() {
           <Link to="/reset" className="text-ink-2 hover:text-accent">
             Забыли пароль?
           </Link>
+          <Link to="/staff/login" className="text-ink-2 hover:text-accent">
+            Вход для сотрудников Nox
+          </Link>
+        </div>
+        <div className="border-t border-line pt-4 text-center text-[14px] text-ink-2">
+          Ещё нет аккаунта?{' '}
           <Link to="/register" className="font-semibold text-accent hover:text-accent-hover">
-            Подключить бота
+            Зарегистрироваться и подключить бота
           </Link>
         </div>
       </form>
