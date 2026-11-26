@@ -1,0 +1,160 @@
+"""Provisioning job state machine.
+
+  account:  verified --approve--> approved --claim--> provisioning --ok--> active
+                                                                  --fail-> failed --retry--> approved
+            active --suspend job ok--> suspended --resume job ok--> active
+            active|suspended|failed --remove job ok--> removed
+  job:      pending --claim--> claimed --result--> done | failed
+            claimed for longer than NOX_JOB_TIMEOUT_MINUTES --> failed (timeout)
+
+At most one open (pending / claimed) job per account (partial unique index jobs_one_open_per_account).
+"""
+
+import logging
+
+import asyncpg
+
+from nox_portal import letters, mailer, security
+from nox_portal.config import get_settings
+from nox_portal.deps import audit
+from nox_portal.errors import ApiError
+
+log = logging.getLogger("nox_portal.jobs")
+
+TIMEOUT_ERROR = "нет ответа от провизионера (таймаут); проверьте journalctl -u nox-provisioner и повторите"
+
+
+def public_url_for(slug: str) -> str:
+    return f"https://{slug}.{get_settings().instance_domain}"
+
+
+async def enqueue(conn: asyncpg.Connection, account_id: int, kind: str, slug: str, *, coins: int | None = None,
+                  llm_key_sealed: str | None = None, staff_id: int | None = None) -> int:
+    try:
+        return await conn.fetchval(
+            "INSERT INTO jobs(account_id, kind, slug, coins, llm_key_sealed, created_by)"
+            " VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+            account_id, kind, slug, coins, llm_key_sealed, staff_id,
+        )
+    except asyncpg.UniqueViolationError:
+        raise ApiError(409, "job_in_progress", "Для этой заявки уже выполняется операция, дождитесь её завершения") \
+            from None
+
+
+async def expire_stale(conn: asyncpg.Connection) -> int:
+    timeout = get_settings().job_timeout_minutes
+    rows = await conn.fetch(
+        "UPDATE jobs SET status = 'failed', error = $2, finished_at = now()"
+        " WHERE status = 'claimed' AND claimed_at < now() - make_interval(mins => $1)"
+        " RETURNING id, account_id, kind",
+        timeout, TIMEOUT_ERROR,
+    )
+    for r in rows:
+        if r["kind"] == "create":
+            await conn.execute(
+                "UPDATE accounts SET status = 'failed', last_error = $2, updated_at = now()"
+                " WHERE id = $1 AND status = 'provisioning'",
+                r["account_id"], TIMEOUT_ERROR,
+            )
+        else:
+            await conn.execute("UPDATE accounts SET last_error = $2, updated_at = now() WHERE id = $1",
+                               r["account_id"], TIMEOUT_ERROR)
+        await audit(conn, f"provisioner.{r['kind']}.timeout", account_id=r["account_id"], details={"job": r["id"]})
+    return len(rows)
+
+
+async def claim(conn: asyncpg.Connection) -> asyncpg.Record | None:
+    async with conn.transaction():
+        await expire_stale(conn)
+        job = await conn.fetchrow(
+            "SELECT id, account_id, kind, slug, coins, llm_key_sealed FROM jobs WHERE status = 'pending'"
+            " ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED"
+        )
+        if job is None:
+            return None
+        await conn.execute("UPDATE jobs SET status = 'claimed', claimed_at = now() WHERE id = $1", job["id"])
+        if job["kind"] == "create":
+            await conn.execute("UPDATE accounts SET status = 'provisioning', updated_at = now() WHERE id = $1",
+                               job["account_id"])
+        await audit(conn, f"provisioner.{job['kind']}.claimed", account_id=job["account_id"],
+                    details={"job": job["id"], "slug": job["slug"]})
+        return job
+
+
+def _check_urls(slug: str, admin_url: str | None, setup_url: str | None) -> None:
+    expected = public_url_for(slug)
+    if admin_url is not None and admin_url.rstrip("/") != expected:
+        raise ApiError(422, "bad_result", f"admin_url must be {expected}")
+    if setup_url is not None and not setup_url.startswith(expected + "/setup?token="):
+        raise ApiError(422, "bad_result", "setup_url must be <admin_url>/setup?token=...")
+
+
+async def finish(conn: asyncpg.Connection, job_id: int, ok: bool, *, port: int | None, admin_url: str | None,
+                 setup_url: str | None, error: str | None) -> None:
+    """Record the provisioner's result; e-mails the client after the transaction commits."""
+    notify: tuple[str, tuple[str, str]] | None = None
+    async with conn.transaction():
+        job = await conn.fetchrow(
+            "SELECT j.id, j.account_id, j.kind, j.slug, j.status, a.email, a.contact_name, a.admin_url"
+            " FROM jobs j JOIN accounts a ON a.id = j.account_id WHERE j.id = $1 FOR UPDATE OF j",
+            job_id,
+        )
+        if job is None:
+            raise ApiError(404, "not_found", "job not found")
+        if job["status"] != "claimed":
+            raise ApiError(409, "job_not_claimed", f"job is {job['status']}, not claimed")
+        kind, account_id = job["kind"], job["account_id"]
+        if ok:
+            _check_urls(job["slug"], admin_url, setup_url)
+            await conn.execute(
+                "UPDATE jobs SET status = 'done', error = NULL, llm_key_sealed = NULL, finished_at = now()"
+                " WHERE id = $1",
+                job_id,
+            )
+            if kind == "create":
+                if not admin_url or not port:
+                    raise ApiError(422, "bad_result", "create result needs port and admin_url")
+                await conn.execute(
+                    "UPDATE accounts SET status = 'active', port = $2, admin_url = $3, setup_link_enc = $4,"
+                    " last_error = NULL, updated_at = now() WHERE id = $1",
+                    account_id, port, admin_url.rstrip("/"),
+                    security.encrypt(setup_url) if setup_url else None,
+                )
+                notify = (job["email"], letters.bot_ready(job["contact_name"], admin_url.rstrip("/"), setup_url))
+            elif kind == "suspend":
+                await conn.execute(
+                    "UPDATE accounts SET status = 'suspended', last_error = NULL, updated_at = now() WHERE id = $1",
+                    account_id,
+                )
+                notify = (job["email"], letters.suspended(job["contact_name"]))
+            elif kind == "resume":
+                await conn.execute(
+                    "UPDATE accounts SET status = 'active', last_error = NULL, updated_at = now() WHERE id = $1",
+                    account_id,
+                )
+                notify = (job["email"], letters.resumed(job["contact_name"], job["admin_url"] or ""))
+            elif kind == "remove":
+                await conn.execute(
+                    "UPDATE accounts SET status = 'removed', port = NULL, admin_url = NULL, setup_link_enc = NULL,"
+                    " last_error = NULL, updated_at = now() WHERE id = $1",
+                    account_id,
+                )
+                await conn.execute("UPDATE jobs SET llm_key_sealed = NULL WHERE account_id = $1", account_id)
+            await audit(conn, f"provisioner.{kind}.done", account_id=account_id,
+                        details={"job": job_id, "port": port} if kind == "create" else {"job": job_id})
+        else:
+            clean = security.sanitize(error or "неизвестная ошибка")
+            await conn.execute(
+                "UPDATE jobs SET status = 'failed', error = $2, finished_at = now() WHERE id = $1", job_id, clean
+            )
+            if kind == "create":
+                await conn.execute(
+                    "UPDATE accounts SET status = 'failed', last_error = $2, updated_at = now() WHERE id = $1",
+                    account_id, clean,
+                )
+            else:
+                await conn.execute("UPDATE accounts SET last_error = $2, updated_at = now() WHERE id = $1",
+                                   account_id, clean)
+            await audit(conn, f"provisioner.{kind}.failed", account_id=account_id, details={"job": job_id})
+    if notify is not None:
+        await mailer.send_quiet(notify[0], *notify[1])

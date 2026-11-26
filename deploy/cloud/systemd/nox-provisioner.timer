@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll the Nox portal for provisioning jobs every 30 seconds
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=30s
+AccuracySec=5s
+Unit=nox-provisioner.service
+
+[Install]
+WantedBy=timers.target
