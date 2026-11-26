@@ -114,6 +114,8 @@ export interface ClientMe {
   /** "Попросить помочь с настройкой": when asked / when a manager marked that they got in touch */
   setup_help_requested_at?: string | null
   setup_help_contacted_at?: string | null
+  /** the bot panel's owner was created from this account: log in there with the cabinet e-mail and password */
+  owner_preset?: boolean
 }
 
 export interface SupportContacts {

@@ -204,3 +204,60 @@ async def test_jobs_claimed_in_order(client, other, internal, pool):
     second = (await internal.post("/internal/jobs/claim")).json()
     assert (first["slug"], second["slug"]) == ("primer", "second")
     assert second["coins"] == 0
+
+
+# ---- one account for the cabinet and the panel ------------------------------------------------
+
+
+async def test_create_job_carries_the_owner_only_on_the_internal_api(client, other, internal, pool):
+    from argon2 import PasswordHasher
+
+    aid = await _approved(client, other, pool)
+    stored = await pool.fetchval("SELECT password_hash FROM accounts")
+    job = (await internal.post("/internal/jobs/claim")).json()
+    assert job["owner_email"] == REG["email"] and job["owner_name"] == REG["contact_name"]
+    assert job["company"] == REG["company"]
+    assert job["owner_password_hash"] == stored and stored.startswith("$argon2id$")
+    # the core verifies the portal hash with the same argon2-cffi PasswordHasher: the cabinet password works
+    assert PasswordHasher().verify(job["owner_password_hash"], REG["password"])
+
+    mailer.OUTBOX.clear()
+    assert (await _ok(internal, job["id"], port=8110, admin_url="https://primer.example.kz", setup_url=SETUP,
+                      owner_preset=True)).status_code == 200
+    row = await pool.fetchrow("SELECT status, owner_preset, setup_link_enc FROM accounts")
+    assert (row["status"], row["owner_preset"], row["setup_link_enc"]) == ("active", True, None)
+    ready = mailer.OUTBOX[-1]
+    assert "тем же e-mail (owner@example.kz) и паролем, что в личном кабинете" in ready.text
+    assert "token=" not in ready.text and "argon2" not in ready.text
+
+    # the public API never shows the hash: neither to the client nor to the staff
+    me = await other.get("/api/me")
+    assert me.json()["owner_preset"] is True and me.json()["setup_link_available"] is False
+    detail = await client.get(f"/api/staff/applications/{aid}")
+    listing = await client.get("/api/staff/applications")
+    for resp in (me, detail, listing):
+        assert resp.status_code == 200
+        assert "argon2" not in resp.text and stored.rsplit("$", 1)[1] not in resp.text
+        assert "password_hash" not in resp.text
+    assert (await other.post("/api/me/setup-link", headers=csrf(other))).status_code == 404
+
+
+async def test_owner_fields_only_on_create_jobs_and_old_provisioner_keeps_setup_link(client, other, internal, pool):
+    aid = await _approved(client, other, pool)
+    job = (await internal.post("/internal/jobs/claim")).json()
+    # an older provisioner reports no owner_preset: the setup link path as before
+    assert (await _ok(internal, job["id"], port=8110, admin_url="https://primer.example.kz",
+                      setup_url=SETUP)).status_code == 200
+    me = (await other.get("/api/me")).json()
+    assert me["owner_preset"] is False and me["setup_link_available"] is True
+    assert (await client.post(f"/api/staff/applications/{aid}/suspend", headers=csrf(client))).status_code == 200
+    suspend = (await internal.post("/internal/jobs/claim")).json()
+    assert suspend["kind"] == "suspend"
+    assert all(suspend[k] is None for k in ("owner_email", "owner_name", "company", "owner_password_hash"))
+
+
+async def test_non_argon2id_hash_is_not_handed_over(client, other, internal, pool):
+    await _approved(client, other, pool)
+    await pool.execute("UPDATE accounts SET password_hash = 'legacy-not-argon2'")
+    job = (await internal.post("/internal/jobs/claim")).json()
+    assert job["owner_password_hash"] is None and job["owner_email"] is None

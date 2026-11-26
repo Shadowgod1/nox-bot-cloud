@@ -28,9 +28,39 @@ function StateBlock({ icon, title, children }: { icon?: ReactNode; title: string
   )
 }
 
+function PanelPasswordHelp() {
+  const support = usePublicConfig()?.support
+  return (
+    <div className="mt-4 text-[13.5px] text-ink-2" data-testid="panel-password-help">
+      <p>Забыли пароль от панели? Напишите в поддержку — поможем войти.</p>
+      <SupportLinks support={support} email className="mt-1.5" />
+    </div>
+  )
+}
+
+/** The panel owner was created from this account: one login for the cabinet and the panel. */
+function PanelLogin() {
+  return (
+    <div className="mt-4 rounded-nx border border-line bg-sunken p-4" data-testid="panel-login">
+      <p className="flex items-center gap-2 text-[14px] font-bold text-ink">
+        <KeyRound className="size-4 text-accent" aria-hidden /> Вход — тем же e-mail и паролем, что в кабинете
+      </p>
+      <p className="mt-1 text-[13.5px] text-ink-2">
+        Пароль от панели меняется в самой панели: если поменяете пароль кабинета, в панели останется прежний.
+      </p>
+    </div>
+  )
+}
+
+/** Panel address for the "Открыть панель бота" button: with ?email= when the panel login is the cabinet one (the
+ * panel only pre-fills the field). */
+function panelHref(me: ClientMe): string {
+  const base = (me.admin_url ?? '').replace(/\/+$/, '')
+  return me.owner_preset ? `${base}/login?email=${encodeURIComponent(me.email)}` : (me.admin_url ?? '')
+}
+
 /** First login to the bot panel: the one-time owner link, or (once used) where to go when the password is lost. */
 function SetupLink({ available }: { available: boolean }) {
-  const support = usePublicConfig()?.support
   const [url, setUrl] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -49,14 +79,7 @@ function SetupLink({ available }: { available: boolean }) {
     }
   }
 
-  if (!url && !available) {
-    return (
-      <div className="mt-4 text-[13.5px] text-ink-2" data-testid="panel-password-help">
-        <p>Забыли пароль от панели? Напишите в поддержку — поможем войти.</p>
-        <SupportLinks support={support} email className="mt-1.5" />
-      </div>
-    )
-  }
+  if (!url && !available) return <PanelPasswordHelp />
 
   if (url) {
     return (
@@ -420,7 +443,7 @@ function StatusView({ me, setMe }: { me: ClientMe; setMe: (me: ClientMe) => void
         <StateBlock icon={<CheckCircle2 className={`${icon} text-ok`} />} title="Ваш бот готов">
           {me.admin_url && (
             <a
-              href={me.admin_url}
+              href={panelHref(me)}
               target="_blank"
               rel="noopener noreferrer"
               className="mt-2 flex h-12 w-full items-center justify-center gap-2 rounded-nx bg-accent px-5 text-[15.5px] font-bold text-on-accent shadow-[0_1px_2px_rgb(0_0_0/0.12)] hover:bg-accent-hover sm:inline-flex sm:w-auto"
@@ -431,7 +454,14 @@ function StatusView({ me, setMe }: { me: ClientMe; setMe: (me: ClientMe) => void
           )}
           <p className="mt-3">Здесь — тариф, оплата и коины. Настройка бота и переписка — в панели бота.</p>
           {me.admin_url && <p className="mt-1 break-all text-[13px] text-ink-3">Адрес панели: {me.admin_url}</p>}
-          <SetupLink available={me.setup_link_available} />
+          {me.owner_preset ? (
+            <>
+              <PanelLogin />
+              <PanelPasswordHelp />
+            </>
+          ) : (
+            <SetupLink available={me.setup_link_available} />
+          )}
           {free && (
             <>
               <TrialInfo me={me} />

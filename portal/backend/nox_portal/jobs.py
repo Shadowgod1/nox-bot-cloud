@@ -13,6 +13,7 @@ At most one open (pending / claimed) job per account (partial unique index jobs_
 """
 
 import logging
+import re
 
 import asyncpg
 
@@ -24,6 +25,22 @@ from nox_portal.errors import ApiError
 log = logging.getLogger("nox_portal.jobs")
 
 TIMEOUT_ERROR = "нет ответа от провизионера (таймаут); проверьте journalctl -u nox-provisioner и повторите"
+
+
+# what argon2-cffi's PasswordHasher writes (security.hash_password); anything else is not handed to the instance
+_ARGON2ID_RE = re.compile(r"^\$argon2id\$v=\d+\$m=\d+,t=\d+,p=\d+\$[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}$")
+
+
+async def owner_for(conn: asyncpg.Connection, job: asyncpg.Record) -> dict:
+    """Owner of a new instance (create job): e-mail, contact name, company and the cabinet password hash, so the
+    client logs in to the panel with the cabinet password. Read at claim time: a password reset before the bot is
+    created is taken into account. Empty when the hash is not an argon2id one (then the setup link is used)."""
+    row = await conn.fetchrow("SELECT email, contact_name, company, password_hash FROM accounts WHERE id = $1",
+                              job["account_id"])
+    if row is None or not _ARGON2ID_RE.match(row["password_hash"] or ""):
+        return {}
+    return {"owner_email": row["email"].strip().lower(), "owner_name": row["contact_name"], "company": row["company"],
+            "owner_password_hash": row["password_hash"]}
 
 
 def public_url_for(slug: str) -> str:
@@ -96,7 +113,7 @@ def _check_urls(slug: str, admin_url: str | None, setup_url: str | None) -> None
 
 
 async def finish(conn: asyncpg.Connection, job_id: int, ok: bool, *, port: int | None, admin_url: str | None,
-                 setup_url: str | None, error: str | None) -> None:
+                 setup_url: str | None, error: str | None, owner_preset: bool = False) -> None:
     """Record the provisioner's result; e-mails the client after the transaction commits."""
     notify: tuple[str, tuple[str, str]] | None = None
     async with conn.transaction():
@@ -120,13 +137,17 @@ async def finish(conn: asyncpg.Connection, job_id: int, ok: bool, *, port: int |
             if kind == "create":
                 if not admin_url or not port:
                     raise ApiError(422, "bad_result", "create result needs port and admin_url")
+                # the owner came from the application: the panel login is the cabinet one, no setup link
+                if owner_preset:
+                    setup_url = None
                 await conn.execute(
                     "UPDATE accounts SET status = 'active', port = $2, admin_url = $3, setup_link_enc = $4,"
-                    " last_error = NULL, updated_at = now() WHERE id = $1",
+                    " owner_preset = $5, last_error = NULL, updated_at = now() WHERE id = $1",
                     account_id, port, admin_url.rstrip("/"),
-                    security.encrypt(setup_url) if setup_url else None,
+                    security.encrypt(setup_url) if setup_url else None, owner_preset,
                 )
-                notify = (job["email"], letters.bot_ready(job["contact_name"], admin_url.rstrip("/"), setup_url))
+                notify = (job["email"], letters.bot_ready(job["contact_name"], admin_url.rstrip("/"), setup_url,
+                                                          owner_email=job["email"] if owner_preset else None))
             elif kind == "suspend":
                 await conn.execute(
                     "UPDATE accounts SET status = 'suspended', last_error = NULL, updated_at = now() WHERE id = $1",
@@ -142,7 +163,7 @@ async def finish(conn: asyncpg.Connection, job_id: int, ok: bool, *, port: int |
             elif kind == "remove":
                 await conn.execute(
                     "UPDATE accounts SET status = 'removed', port = NULL, admin_url = NULL, setup_link_enc = NULL,"
-                    " last_error = NULL, updated_at = now() WHERE id = $1",
+                    " owner_preset = false, last_error = NULL, updated_at = now() WHERE id = $1",
                     account_id,
                 )
                 await conn.execute("UPDATE jobs SET llm_key_sealed = NULL, gateway_key_sealed = NULL"
@@ -152,7 +173,8 @@ async def finish(conn: asyncpg.Connection, job_id: int, ok: bool, *, port: int |
                 # the new key is in the instance: the older ones stop working now
                 await wallet.revoke_keys(conn, account_id, "replaced by a reissued key", keep=job["key_id"])
             await audit(conn, f"provisioner.{kind}.done", account_id=account_id,
-                        details={"job": job_id, "port": port} if kind == "create" else {"job": job_id})
+                        details={"job": job_id, "port": port, "owner_preset": owner_preset} if kind == "create"
+                        else {"job": job_id})
         else:
             clean = security.sanitize(error or "неизвестная ошибка")
             await conn.execute(

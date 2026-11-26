@@ -1,12 +1,17 @@
-"""First-run wizard: the owner account can be created exactly once, while no users exist."""
+"""First-run wizard: the owner account can be created exactly once, while no users exist.
+
+Cloud instances get the owner from the Nox portal at start (iler.auth.preset_owner): then needs_setup is false,
+the owner logs in with the portal password, and wizard_pending tells the admin UI to open the wizard after the
+"owner" step until the owner finishes it (POST /api/setup/finish)."""
 
 import hmac
 import os
 
-from fastapi import APIRouter, Header, Response
+from fastapi import APIRouter, Depends, Header, Response
 from pydantic import BaseModel
 
-from iler.auth.deps import User, audit, set_session_cookies
+from iler.auth import preset_owner
+from iler.auth.deps import User, audit, csrf_protect, require_owner, set_session_cookies
 from iler.auth.passwords import hash_password
 from iler.auth.schemas import OwnerCreate
 from iler.config import brand, get_settings
@@ -18,12 +23,31 @@ router = APIRouter(tags=["setup"])
 
 class SetupState(BaseModel):
     needs_setup: bool
+    # the owner came from the portal and has not finished the wizard yet: open it at the step after "owner"
+    wizard_pending: bool = False
+
+
+async def _state() -> SetupState:
+    pool = get_pool()
+    has_users = await pool.fetchval("SELECT EXISTS (SELECT 1 FROM users)")
+    if not has_users:
+        return SetupState(needs_setup=True)
+    wizard = await preset_owner.wizard_state(pool)
+    return SetupState(needs_setup=False, wizard_pending=bool(wizard.get("pending")))
 
 
 @router.get("/api/setup/state", response_model=SetupState)
 async def get_setup_state():
-    has_users = await get_pool().fetchval("SELECT EXISTS (SELECT 1 FROM users)")
-    return SetupState(needs_setup=not has_users)
+    return await _state()
+
+
+@router.post("/api/setup/finish", response_model=SetupState, dependencies=[Depends(csrf_protect)])
+async def post_setup_finish(owner: User = Depends(require_owner)):
+    """The owner reached the end of the wizard (only matters for an owner created from the portal)."""
+    if (await preset_owner.wizard_state(get_pool())).get("pending"):
+        await preset_owner.finish_wizard(get_pool())
+        await audit(owner.id, "setup.wizard_finished")
+    return await _state()
 
 
 class BrandInfo(BaseModel):

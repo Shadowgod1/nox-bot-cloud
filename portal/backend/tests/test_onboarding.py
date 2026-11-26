@@ -201,11 +201,14 @@ async def test_migration_0005_is_additive(tmp_path):
     admin = await asyncpg.connect(ADMIN_DSN)
     await admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
     await admin.execute(f'CREATE DATABASE "{name}"')
-    old = tmp_path / "old"
+    old, new = tmp_path / "old", tmp_path / "new"
     old.mkdir()
+    new.mkdir()
     for f in sorted(MIGRATIONS_DIR.glob("*.sql")):
         if f.name < "0005":
             shutil.copy(f, old / f.name)
+        if f.name < "0006":
+            shutil.copy(f, new / f.name)
     pool = await asyncpg.create_pool(f"{_base}/{name}", min_size=1, max_size=2)
     try:
         await migrate(pool, old)
@@ -213,10 +216,14 @@ async def test_migration_0005_is_additive(tmp_path):
             "INSERT INTO accounts(email, password_hash, company, contact_name, phone, slug, status, consent_at,"
             " tariff, free_until) VALUES ('old@example.kz', 'x', 'Old', 'O', '+7 700 000 00 01', 'old', 'active',"
             " now(), 'free', now() + interval '1 day')")
-        assert await migrate(pool, MIGRATIONS_DIR) == ["0005_onboarding.sql"]
+        assert await migrate(pool, new) == ["0005_onboarding.sql"]
         acc = await pool.fetchrow("SELECT status, tariff, setup_help_requested_at, setup_help_contacted_at,"
                                   " setup_help_contacted_by, trial_notice_days FROM accounts")
         assert tuple(acc) == ("active", "free", None, None, None, None)
+        assert await migrate(pool, new) == [], "applied once"
+        # 0006: existing bots keep the setup link path (owner_preset false)
+        assert await migrate(pool, MIGRATIONS_DIR) == ["0006_owner_preset.sql"]
+        assert await pool.fetchval("SELECT owner_preset FROM accounts") is False
         assert await migrate(pool, MIGRATIONS_DIR) == [], "applied once"
     finally:
         await pool.close()

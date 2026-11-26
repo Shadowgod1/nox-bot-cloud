@@ -31,6 +31,8 @@ export interface Ok {
 
 export interface SetupState {
   needs_setup: boolean
+  /** The owner was created from the Nox portal and has not finished the wizard (it starts after the owner step). */
+  wizard_pending?: boolean
 }
 
 /** GET /api/brand (no session needed): deploy-time brand of the admin, from ILER_BRAND. */

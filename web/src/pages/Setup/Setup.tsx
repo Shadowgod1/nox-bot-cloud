@@ -55,24 +55,49 @@ function captureSetupToken(): string | null {
 }
 
 export function Setup() {
-  const { phase, refresh } = useAuth()
+  const { phase, refresh, wizardPending } = useAuth()
   const navigate = useNavigate()
-  const [step, setStep] = useState(0)
+  const [rawStep, setStep] = useState(0)
   const [botReady, setBotReady] = useState(false)
   const [token] = useState(captureSetupToken)
+  // the owner came from the Nox portal (same e-mail and password as the cabinet): no "owner" step, from the
+  // very first render (kept after finishing, while the page navigates away)
+  const [presetSeen, setPresetSeen] = useState(false)
+  const presetOwner = presetSeen || (phase === 'ready' && wizardPending)
+  const first = presetOwner ? 1 : 0
+  const step = Math.max(rawStep, first)
 
-  // Wizard is only reachable while the server reports needs_setup (or mid-wizard).
+  // Wizard is only reachable while the server reports needs_setup or wizard_pending (or mid-wizard).
   useEffect(() => {
+    if (phase === 'ready' && wizardPending) {
+      setPresetSeen(true)
+      return
+    }
+    if (presetSeen) return
     if (step === 0 && phase === 'ready') navigate('/', { replace: true })
     if (step === 0 && phase === 'anonymous') navigate('/login', { replace: true })
-  }, [phase, step, navigate])
+  }, [phase, step, wizardPending, presetSeen, navigate])
 
-  const next = () => setStep((s) => Math.min(s + 1, STEPS.length - 1))
+  const next = () => setStep((s) => Math.min(Math.max(s, first) + 1, STEPS.length - 1))
+
+  async function finish() {
+    if (presetOwner) {
+      try {
+        await api.post('/api/setup/finish', {}, { silent: true })
+      } catch {
+        /* the wizard opens again after the next login; nothing is lost */
+      }
+    }
+    await refresh()
+    navigate('/', { replace: true })
+  }
 
   return (
     <AuthFrame wide>
       <ol className="mb-6 flex flex-wrap items-center gap-x-2 gap-y-2 text-[13px]" aria-label="Шаги первоначальной настройки">
-        {STEPS.map((label, i) => (
+        {STEPS.slice(first).map((label, n) => {
+          const i = n + first
+          return (
           <li key={label} className="flex items-center gap-2" aria-current={i === step ? 'step' : undefined}>
             <span
               className={cx(
@@ -83,12 +108,13 @@ export function Setup() {
               )}
               aria-hidden
             >
-              {i < step ? <Check className="size-3.5" /> : i + 1}
+              {i < step ? <Check className="size-3.5" /> : n + 1}
             </span>
             <span className={cx(i === step ? 'font-medium text-ink' : 'text-ink-2', 'max-sm:sr-only')}>{label}</span>
             {i < STEPS.length - 1 && <span aria-hidden className="mx-1 h-px w-5 bg-line-strong" />}
           </li>
-        ))}
+          )
+        })}
       </ol>
       <div className="rounded-[12px] border border-line bg-surface p-6 sm:p-8">
         {step === 0 && <OwnerStep token={token} onDone={next} />}
@@ -115,13 +141,7 @@ export function Setup() {
                   : 'Бот не отвечает клиентам, пока не настроен промпт. Выберите шаблон в разделе «Настройки бота».'}
               </p>
             </div>
-            <Button
-              variant="primary"
-              onClick={async () => {
-                await refresh()
-                navigate('/', { replace: true })
-              }}
-            >
+            <Button variant="primary" onClick={() => void finish()}>
               Перейти в админку
             </Button>
           </div>

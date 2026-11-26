@@ -61,6 +61,12 @@ services:
       ILER_UPDATER_TOKEN: ${ILER_UPDATER_TOKEN}
       # one-time token for the first-run wizard (printed by install.sh as the setup link)
       ILER_SETUP_TOKEN: ${ILER_SETUP_TOKEN}
+      # cloud: the owner from the Nox portal (iler-client.sh create), created on the first start while no user
+      # exists and ignored afterwards; the provisioner empties the hash once core has used it
+      ILER_OWNER_EMAIL: ${ILER_OWNER_EMAIL:-}
+      ILER_OWNER_NAME: ${ILER_OWNER_NAME:-}
+      ILER_COMPANY: ${ILER_COMPANY:-}
+      ILER_OWNER_PASSWORD_HASH: ${ILER_OWNER_PASSWORD_HASH:-}
       ILER_REDIS_PASSWORD: ${ILER_REDIS_PASSWORD}
       # ILER's LLM keys (set by the technician with deploy/set-llm-keys.sh; not editable in the admin UI)
       ILER_OPENAI_KEY: ${ILER_OPENAI_KEY:-}

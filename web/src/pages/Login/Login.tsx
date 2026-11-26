@@ -15,10 +15,26 @@ export function AuthFrame({ children, wide }: { children: ReactNode; wide?: bool
   )
 }
 
+/** ?email= from the cabinet's "Открыть панель бота" button: only pre-fills the field (no auto-login), then leaves the
+ * address bar. */
+function emailFromLink(): string {
+  try {
+    const url = new URL(window.location.href)
+    if (!url.searchParams.has('email')) return ''
+    const email = (url.searchParams.get('email') ?? '').trim()
+    url.searchParams.delete('email')
+    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
+    return /^\S+@\S+\.\S+$/.test(email) && email.length <= 254 ? email : ''
+  } catch {
+    return ''
+  }
+}
+
 export function Login() {
   const { refresh } = useAuth()
   const navigate = useNavigate()
-  const [email, setEmail] = useState('')
+  const [fromCabinet] = useState(emailFromLink)
+  const [email, setEmail] = useState(fromCabinet)
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -30,8 +46,9 @@ export function Login() {
     setError(null)
     try {
       await api.post('/api/auth/login', { email: email.trim(), password }, { silent: true, noAuthRedirect: true })
-      await refresh()
-      navigate('/', { replace: true })
+      const state = await refresh()
+      // an owner from the portal continues with the setup wizard (it starts after the owner step)
+      navigate(state.wizardPending ? '/setup' : '/', { replace: true })
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) setError('Неверный e-mail или пароль.')
       else setError(err instanceof Error ? err.message : 'Не удалось войти.')
@@ -45,12 +62,24 @@ export function Login() {
       <div className="rounded-[12px] border border-line bg-surface p-6 sm:p-7">
         <h1 className="text-[19px] font-semibold text-ink">Вход в {brand.name}</h1>
         <p className="mt-1 text-sm text-ink-2">Админка WhatsApp-ассистента.</p>
+        {fromCabinet && (
+          <p className="mt-3 rounded-[7px] bg-accent-soft px-3 py-2 text-[13px] text-ink" data-testid="cabinet-login-hint">
+            Войдите e-mail и паролем от личного кабинета.
+          </p>
+        )}
         <form onSubmit={submit} className="mt-6 flex flex-col gap-4" noValidate>
           <Field label="E-mail">
-            <Input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
+            <Input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} autoFocus={!fromCabinet} />
           </Field>
           <Field label="Пароль">
-            <Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+            <Input
+              type="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoFocus={Boolean(fromCabinet)}
+            />
           </Field>
           {error && (
             <p role="alert" className="rounded-[7px] bg-danger-soft px-3 py-2 text-[13px] text-danger">

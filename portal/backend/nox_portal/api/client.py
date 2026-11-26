@@ -26,7 +26,7 @@ router = APIRouter(tags=["client"])
 _ACCOUNT_COLS = ("id, email, password_hash, company, contact_name, phone, slug, status, admin_url, reject_reason,"
                  " setup_link_enc, tariff, invoice_no, invoice_amount, invoice_issued_at, created_at, period_start,"
                  " local_install, invoice_note, pay_method, free_until, suspend_reason, upgrade_tariff,"
-                 " setup_help_requested_at, setup_help_contacted_at")
+                 " setup_help_requested_at, setup_help_contacted_at, owner_preset")
 # unverified registrations hold their slug for a day, then disappear
 UNVERIFIED_TTL = "24 hours"
 INVALID_CREDENTIALS = ApiError(401, "invalid_credentials", "Неверный e-mail или пароль")
@@ -43,6 +43,7 @@ def client_me(row: asyncpg.Record, payment_url: str | None = None) -> ClientMe:
         pay_method=row["pay_method"], payment_url=payment_url, free_until=row["free_until"],
         suspend_reason=row["suspend_reason"], upgrade_tariff=row["upgrade_tariff"],
         setup_help_requested_at=row["setup_help_requested_at"], setup_help_contacted_at=row["setup_help_contacted_at"],
+        owner_preset=row["owner_preset"],
     )
 
 

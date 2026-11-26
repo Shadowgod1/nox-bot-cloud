@@ -197,13 +197,20 @@ def rejected(name: str, reason: str) -> tuple[str, str]:
     )
 
 
-def bot_ready(name: str, admin_url: str, setup_url: str | None) -> tuple[str, str]:
-    setup = (
-        "Создайте учётную запись владельца по одноразовой ссылке (не пересылайте её никому):\n"
-        f"{setup_url}\n\n"
-        if setup_url
-        else ""
-    )
+def bot_ready(name: str, admin_url: str, setup_url: str | None, *, owner_email: str | None = None) -> tuple[str, str]:
+    if owner_email:
+        # the panel owner was created from the application: one account for the cabinet and the panel
+        setup = (
+            f"Вход в панель — тем же e-mail ({owner_email}) и паролем, что в личном кабинете. "
+            "Пароль от панели потом меняется в самой панели: смена пароля кабинета на панель не влияет.\n\n"
+        )
+    elif setup_url:
+        setup = (
+            "Создайте учётную запись владельца по одноразовой ссылке (не пересылайте её никому):\n"
+            f"{setup_url}\n\n"
+        )
+    else:
+        setup = ""
     return (
         "Ваш бот Nox Bot готов",
         f"Здравствуйте, {name}!\n\n"
