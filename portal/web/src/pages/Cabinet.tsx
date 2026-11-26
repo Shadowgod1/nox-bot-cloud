@@ -3,18 +3,19 @@ import { Link, useNavigate } from 'react-router'
 import { CheckCircle2, Clock, Copy, CreditCard, ExternalLink, FileText, FlaskConical, Hourglass, KeyRound, PauseCircle, Receipt, XCircle } from 'lucide-react'
 import { api, ApiError, formatDate, formatDay, FREE_CODE, money, type ClientMe, type InvoiceListItem, type Tariff } from '../api'
 import { Shell } from '../components/Shell'
+import { Steps, stepsFor } from '../components/Steps'
 import { Alert, Button, Card, StatusBadge } from '../components/ui'
 import { CoinsPanel } from './CoinsPanel'
 import { PaymentQr } from '../components/PaymentQr'
 import { PayOnlineButton, usePublicConfig } from './PayOnline'
 import { TariffPicker } from './TariffPicker'
 
-function StateBlock({ icon, title, children }: { icon: ReactNode; title: string; children?: ReactNode }) {
+function StateBlock({ icon, title, children }: { icon?: ReactNode; title: string; children?: ReactNode }) {
   return (
     <div className="flex gap-4">
-      <div className="mt-0.5 shrink-0">{icon}</div>
-      <div className="min-w-0">
-        <h2 className="text-[19px] font-extrabold tracking-tight text-ink">{title}</h2>
+      {icon && <div className="mt-0.5 shrink-0">{icon}</div>}
+      <div className="min-w-0 flex-1">
+        <h2 className="text-[20px] font-extrabold tracking-[-0.015em] text-ink">{title}</h2>
         <div className="mt-1.5 text-[14.5px] text-ink-2">{children}</div>
       </div>
     </div>
@@ -225,8 +226,8 @@ function StatusView({ me, reload, setMe }: { me: ClientMe; reload: () => void; s
   switch (me.status) {
     case 'verified':
       return (
-        <StateBlock icon={<Hourglass className={`${icon} text-accent`} />} title="Выберите тариф">
-          <p className="mb-4">E-mail подтверждён. Выберите тариф и способ оплаты — или подключите бесплатный тест.</p>
+        <StateBlock title="Выберите тариф">
+          <p className="mb-5">E-mail подтверждён. Выберите тариф и способ оплаты или начните с бесплатного теста.</p>
           <TariffPicker onChosen={setMe} />
         </StateBlock>
       )
@@ -340,13 +341,23 @@ export function Cabinet() {
       {error && <Alert>{error}</Alert>}
       {me && (
         <div className="flex flex-col gap-5">
-          <Card className="p-6">
-            <StatusView me={me} reload={load} setMe={setMe} />
+          <Card className="overflow-hidden">
+            {(() => {
+              const steps = stepsFor(me.status, me.tariff === FREE_CODE)
+              return steps ? (
+                <div className="border-b border-line bg-sunken/60 px-6 py-4">
+                  <Steps {...steps} />
+                </div>
+              ) : null
+            })()}
+            <div className="p-6">
+              <StatusView me={me} reload={load} setMe={setMe} />
+            </div>
           </Card>
           {me.llm_enabled && !['removed', 'rejected'].includes(me.status) && <CoinsPanel />}
           <Card className="p-6">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-[15px] font-bold text-ink">Заявка</h2>
+              <h2 className="text-[16px] font-bold text-ink">Данные заявки</h2>
               <StatusBadge status={me.status} />
             </div>
             <dl className="mt-4 grid gap-x-6 gap-y-3 text-[14px] sm:grid-cols-2">

@@ -75,14 +75,59 @@ export function Shell({ children, subtitle, home = '/', user, onLogout, wide }: 
   )
 }
 
-/** Narrow centered card for auth pages. */
-export function AuthCard({ title, lead, children }: { title: string; lead?: ReactNode; children: ReactNode }) {
+const STEPS: [string, string][] = [
+  ['Заявка', 'Компания, контакты и адрес бота. Подтверждаете e-mail кодом из письма.'],
+  ['Тариф или бесплатный тест', 'Тест подключается сразу и без оплаты. Платный тариф оплачивается по счёту.'],
+  ['Бот на вашем адресе', 'Панель на имя.noxsw.kz: подключаете номер WhatsApp, вносите услуги и цены — бот отвечает клиентам.'],
+]
+
+/** What the visitor gets: shown beside the auth form on wide screens. */
+function AuthAside() {
   return (
-    <Shell>
-      <div className="mx-auto w-full max-w-[460px]">
-        <div className="rounded-nx border border-line bg-surface p-6 sm:p-7">
-          <h1 className="text-[21px] font-extrabold tracking-tight text-ink">{title}</h1>
-          {lead && <div className="mt-1.5 text-[14px] text-ink-2">{lead}</div>}
+    <aside className="hidden lg:block">
+      <h2 className="max-w-[24ch] text-[30px] leading-[1.15] font-extrabold tracking-[-0.02em] text-ink">
+        ИИ-ассистент для WhatsApp, который отвечает вашим клиентам
+      </h2>
+      <p className="mt-3 max-w-[46ch] text-[15px] text-ink-2">
+        Цены, запись, адрес и график — бот отвечает сам, сложные вопросы передаёт вашим операторам.
+      </p>
+      <ol className="mt-8 flex flex-col gap-5">
+        {STEPS.map(([title, text], i) => (
+          <li key={title} className="flex gap-3.5">
+            <span className="grid size-7 flex-none place-items-center rounded-full border border-line-strong bg-surface text-[13px] font-bold text-ink-2 tabular-nums">
+              {i + 1}
+            </span>
+            <span className="pt-0.5">
+              <span className="block text-[15px] font-bold text-ink">{title}</span>
+              <span className="mt-0.5 block max-w-[44ch] text-[14px] text-ink-3">{text}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+      <p className="mt-8 text-[13.5px] text-ink-3">
+        Вопросы —{' '}
+        <a href="mailto:info@noxsw.kz" className="font-semibold text-ink-2 hover:text-accent">
+          info@noxsw.kz
+        </a>
+      </p>
+    </aside>
+  )
+}
+
+/** Auth pages: the form card, with the "what you get" panel beside it on wide screens. */
+export function AuthCard({ title, lead, children, aside = true }: { title: string; lead?: ReactNode; children: ReactNode; aside?: boolean }) {
+  return (
+    <Shell wide>
+      <div
+        className={cx(
+          'mx-auto grid w-full max-w-[460px] items-center gap-12 lg:py-6',
+          aside && 'lg:max-w-none lg:grid-cols-[minmax(0,1fr)_460px]',
+        )}
+      >
+        {aside && <AuthAside />}
+        <div className="rounded-nx border border-line bg-surface p-6 shadow-[0_1px_2px_rgb(0_0_0/0.04),0_12px_32px_-18px_rgb(0_0_0/0.25)] sm:p-8">
+          <h1 className="text-[22px] font-extrabold tracking-[-0.015em] text-ink">{title}</h1>
+          {lead && <div className="mt-1.5 text-[14.5px] text-ink-2">{lead}</div>}
           <div className="mt-6">{children}</div>
         </div>
       </div>

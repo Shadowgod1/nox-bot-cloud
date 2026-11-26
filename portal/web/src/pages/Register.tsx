@@ -98,7 +98,7 @@ export function Register() {
   return (
     <AuthCard
       title="Подключить Nox Bot"
-      lead="WhatsApp-ассистент для вашей компании. Заполните заявку — мы проверим её и создадим бота."
+      lead="Заполните заявку и подтвердите e-mail, затем выберите тариф или бесплатный тест."
     >
       <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
         <Field label="Название компании">

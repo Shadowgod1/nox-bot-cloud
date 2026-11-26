@@ -26,7 +26,7 @@ export function StaffLogin() {
   }
 
   return (
-    <AuthCard title="Вход для сотрудников Nox" lead="Рассмотрение заявок и управление ботами клиентов.">
+    <AuthCard aside={false} title="Вход для сотрудников Nox" lead="Рассмотрение заявок и управление ботами клиентов.">
       <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
         <Field label="E-mail">
           <Input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />

@@ -53,6 +53,8 @@ export function Applications() {
       <div className="mt-4 flex flex-wrap gap-1.5" role="tablist" aria-label="Фильтр по статусу">
         {FILTERS.map((f) => {
           const n = f === 'all' ? total : counts[f] ?? 0
+          // empty statuses only add noise: show a chip when it has applications or is the current filter
+          if (f !== 'all' && n === 0 && filter !== f) return null
           return (
             <button
               key={f}
@@ -82,7 +84,7 @@ export function Applications() {
       <Card className="mt-4 overflow-x-auto">
         <table className="w-full min-w-[760px] text-left text-[14px]">
           <thead>
-            <tr className="border-b border-line text-[12.5px] font-semibold text-ink-3">
+            <tr className="border-b border-line bg-sunken/60 text-[12.5px] font-semibold text-ink-3">
               <th className="px-4 py-2.5">Компания</th>
               <th className="px-4 py-2.5">Контакт</th>
               <th className="px-4 py-2.5">Адрес</th>
@@ -92,7 +94,7 @@ export function Applications() {
           </thead>
           <tbody>
             {rows?.map((r) => (
-              <tr key={r.id} className="border-b border-line last:border-0 hover:bg-sunken">
+              <tr key={r.id} className="border-b border-line transition-colors last:border-0 hover:bg-sunken">
                 <td className="px-4 py-2.5">
                   <Link to={`/staff/applications/${r.id}`} className="font-semibold text-ink hover:text-accent">
                     {r.company}
@@ -109,6 +111,13 @@ export function Applications() {
                 <td className="px-4 py-2.5 text-ink-3 tabular-nums">{formatDate(r.created_at)}</td>
               </tr>
             ))}
+            {!rows && !error && (
+              <tr>
+                <td colSpan={5} className="px-4 py-10 text-center text-ink-3">
+                  Загружаем заявки…
+                </td>
+              </tr>
+            )}
             {rows && rows.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-10 text-center text-ink-3">

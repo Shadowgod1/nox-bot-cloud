@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Check, CreditCard, FileText } from 'lucide-react'
+import { Coins, CreditCard, FileText, FlaskConical, QrCode } from 'lucide-react'
 import { api, FREE_CODE, goToCheckout, loadPublicConfig, money, type ClientMe, type PublicConfig, type Tariff } from '../api'
 import { Alert, Button, cx } from '../components/ui'
 
@@ -68,9 +68,11 @@ export function TariffPicker({ current, onChosen, upgrade = false }: Props) {
           ? 'Сменить тариф'
           : 'Запросить счёт у менеджера'
 
+  const chosen = paid.find((t) => t.code === selected)
+
   return (
     <div>
-      <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label="Тариф">
+      <div className="grid gap-3 md:grid-cols-3" role="radiogroup" aria-label="Тариф">
         {paid.map((t) => {
           const active = selected === t.code
           return (
@@ -80,19 +82,21 @@ export function TariffPicker({ current, onChosen, upgrade = false }: Props) {
               role="radio"
               aria-checked={active}
               onClick={() => setSelected(t.code)}
-              className={cx(
-                'flex flex-col rounded-nx border p-4 text-left transition-colors',
-                active ? 'border-accent bg-accent-soft' : 'border-line-strong bg-raised hover:border-accent',
-              )}
+              className="nx-choice flex flex-col p-3.5 text-left md:p-4"
             >
-              <span className="flex items-center justify-between">
+              <span className="flex items-center justify-between gap-2">
                 <span className="text-[15px] font-extrabold text-ink">{t.name}</span>
-                {active && <Check className="size-4 text-accent" aria-hidden />}
+                <span className="nx-dot" aria-hidden />
               </span>
-              <span className="mt-2 text-[20px] font-extrabold text-ink tabular-nums">{money(t.price_kzt)}</span>
-              <span className="text-[12.5px] text-ink-3">в месяц</span>
-              <span className="mt-2 text-[13px] font-semibold text-ink-2">{t.coins.toLocaleString('ru-RU')} коинов</span>
-              <span className="mt-1 text-[12.5px] text-ink-3">{t.description}</span>
+              <span className="mt-1.5 flex items-baseline gap-1.5 md:mt-3">
+                <span className="text-[21px] leading-none font-extrabold md:text-[24px] tracking-[-0.02em] text-ink tabular-nums">{money(t.price_kzt)}</span>
+                <span className="text-[13px] text-ink-3">в месяц</span>
+              </span>
+              <span className="mt-2 inline-flex items-center gap-1.5 text-[13.5px] font-semibold text-ink-2 md:mt-3">
+                <Coins className="size-4 text-accent" aria-hidden />
+                <span className="tabular-nums">{t.coins.toLocaleString('ru-RU')}</span> коинов в месяц
+              </span>
+              {t.description && <span className="mt-2 border-t border-line pt-2 text-[13px] leading-snug text-ink-3">{t.description}</span>}
             </button>
           )
         })}
@@ -105,31 +109,37 @@ export function TariffPicker({ current, onChosen, upgrade = false }: Props) {
           aria-label={`${free.name}: бесплатно`}
           disabled={free.available === false}
           onClick={() => setSelected(FREE_CODE)}
-          className={cx(
-            'mt-3 flex w-full flex-wrap items-baseline gap-x-3 gap-y-1 rounded-nx border border-dashed px-4 py-3 text-left transition-colors',
-            'disabled:cursor-not-allowed disabled:opacity-70',
-            isFree ? 'border-accent bg-accent-soft' : 'border-line bg-sunken hover:border-line-strong',
-          )}
+          className="nx-choice mt-3 flex w-full items-center gap-3.5 border-dashed px-4 py-3.5 text-left disabled:cursor-not-allowed disabled:opacity-60 aria-checked:border-solid"
         >
-          <span className="text-[14px] font-bold text-ink-2">{free.name}</span>
-          <span className="text-[13px] font-semibold text-ink-3 tabular-nums">0 ₸ · {free.coins.toLocaleString('ru-RU')} коинов</span>
-          <span className="text-[12.5px] text-ink-3">
-            {free.available === false
-              ? FREE_FULL
-              : `${free.description}: для теста, бот подключается сразу${config?.free_days ? `, ${config.free_days} дней` : ''}`}
+          <span className="grid size-9 flex-none place-items-center rounded-nx bg-ok-soft text-ok">
+            <FlaskConical className="size-[18px]" aria-hidden />
           </span>
+          <span className="min-w-0 flex-1">
+            <span className="flex flex-wrap items-baseline gap-x-2">
+              <span className="text-[14.5px] font-bold text-ink">{free.name}</span>
+              <span className="text-[13px] font-semibold text-ok">
+                бесплатно{config?.free_days ? ` · ${config.free_days} дней` : ''}
+              </span>
+            </span>
+            <span className="mt-0.5 block text-[13px] text-ink-3">
+              {free.available === false
+                ? FREE_FULL
+                : `Бот подключается сразу, без оплаты. ${free.coins.toLocaleString('ru-RU')} коинов на весь тест.`}
+            </span>
+          </span>
+          <span className="nx-dot" aria-hidden />
         </button>
       )}
 
       {selected && !isFree && (
-        <fieldset className="mt-4">
-          <legend className="text-[13px] font-semibold text-ink-2">Способ оплаты</legend>
-          <div className="mt-1.5 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Способ оплаты">
+        <fieldset className="mt-6">
+          <legend className="text-[14px] font-bold text-ink">Способ оплаты</legend>
+          <div className="mt-2.5 grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Способ оплаты">
             {online && (
               <MethodCard
                 active={chosenMethod === 'online'}
                 onClick={() => setMethod('online')}
-                icon={<CreditCard className="size-5" aria-hidden />}
+                icon={config?.online_mode === 'qr' ? <QrCode className="size-5" aria-hidden /> : <CreditCard className="size-5" aria-hidden />}
                 title="Оплатить онлайн"
                 text={
                   config?.online_mode === 'qr'
@@ -152,34 +162,35 @@ export function TariffPicker({ current, onChosen, upgrade = false }: Props) {
       )}
 
       {error && (
-        <div className="mt-3">
+        <div className="mt-4">
           <Alert>{error}</Alert>
         </div>
       )}
-      <Button className="mt-4" variant="primary" loading={busy} disabled={!selected} onClick={submit}>
-        {label}
-      </Button>
+      <div className="mt-6 flex flex-col gap-3 border-t border-line pt-5 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-[13.5px] text-ink-3" aria-live="polite">
+          {isFree && free
+            ? `${free.name}: 0 ₸`
+            : chosen
+              ? <>Тариф «{chosen.name}»: <span className="font-bold text-ink tabular-nums">{money(chosen.price_kzt)}</span> в месяц</>
+              : 'Выберите тариф, чтобы продолжить'}
+        </p>
+        <Button variant="primary" loading={busy} disabled={!selected} onClick={submit} className="w-full sm:w-auto">
+          {label}
+        </Button>
+      </div>
     </div>
   )
 }
 
 function MethodCard({ active, onClick, icon, title, text }: { active: boolean; onClick: () => void; icon: ReactNode; title: string; text: string }) {
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      onClick={onClick}
-      className={cx(
-        'flex gap-3 rounded-nx border p-3 text-left transition-colors',
-        active ? 'border-accent bg-accent-soft' : 'border-line-strong bg-raised hover:border-accent',
-      )}
-    >
-      <span className={active ? 'text-accent' : 'text-ink-3'}>{icon}</span>
-      <span>
+    <button type="button" role="radio" aria-checked={active} onClick={onClick} className="nx-choice flex gap-3 p-3.5 text-left">
+      <span className={cx('mt-0.5 transition-colors', active ? 'text-accent' : 'text-ink-3')}>{icon}</span>
+      <span className="min-w-0 flex-1">
         <span className="block text-[14px] font-bold text-ink">{title}</span>
-        <span className="block text-[12.5px] text-ink-3">{text}</span>
+        <span className="mt-0.5 block text-[13px] leading-snug text-ink-3">{text}</span>
       </span>
+      <span className="nx-dot mt-0.5" aria-hidden />
     </button>
   )
 }

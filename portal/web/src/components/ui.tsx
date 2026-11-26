@@ -17,7 +17,7 @@ export function cx(...parts: (string | false | null | undefined)[]) {
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
 
 const variants: Record<Variant, string> = {
-  primary: 'bg-accent text-white hover:bg-accent-hover border border-transparent',
+  primary: 'bg-accent text-white hover:bg-accent-hover border border-transparent shadow-[0_1px_2px_rgb(0_0_0/0.12)]',
   secondary: 'bg-raised text-ink border border-line-strong hover:bg-sunken',
   ghost: 'bg-transparent text-ink-2 hover:bg-sunken hover:text-ink border border-transparent',
   danger: 'bg-danger text-white hover:brightness-95 border border-transparent',
@@ -48,9 +48,9 @@ export function Button({
       aria-busy={loading || undefined}
       className={cx(
         'inline-flex items-center justify-center gap-1.5 rounded-nx font-semibold whitespace-nowrap',
-        'transition-[background-color,color,filter] duration-150 ease-out',
+        'transition-[background-color,color,filter,transform] duration-150 ease-out active:translate-y-px',
         'disabled:cursor-not-allowed disabled:opacity-55',
-        size === 'sm' ? 'h-8 px-2.5 text-[13px]' : 'h-10 px-4 text-sm',
+        size === 'sm' ? 'h-8 px-2.5 text-[13px]' : 'h-11 px-4 text-sm sm:h-10',
         variants[variant],
         className,
       )}
@@ -100,7 +100,8 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
   return (
     <input
       className={cx(
-        'h-10 w-full rounded-nx border border-line-strong bg-raised px-3 text-[15px] text-ink',
+        'h-11 w-full rounded-nx border border-line-strong bg-raised px-3 text-[15px] text-ink sm:h-10',
+        'transition-[border-color,box-shadow] duration-150 ease-out hover:border-ink-3/60',
         'placeholder:text-ink-3 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft',
         'aria-[invalid=true]:border-danger',
         className,
