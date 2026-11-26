@@ -224,8 +224,8 @@ async def test_openai_responses_stream_and_unknown_model_price(client, pool, ups
         await settled()
     [row] = await _usage(pool)
     assert (row["input_tokens"], row["output_tokens"]) == (120, 30)
-    # no OpenAI price in the table (like the core): fallback 2/10 $/Mtok, never 0, flagged
-    assert row["priced"] is False and row["coins"] == Decimal("0.540")
+    # gpt-5.4-mini is priced 0.75/4.5 $/Mtok: (120*0.75 + 30*4.5) / 1e6 $ = 0.225 coins
+    assert row["priced"] is True and row["coins"] == Decimal("0.225")
 
 
 async def test_gemini_json_and_sse_stream(client, pool, upstream):

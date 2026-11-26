@@ -90,10 +90,13 @@ def test_prices_mirror_core_and_unknown_models(monkeypatch, caplog):
         price, priced = prices.price_for("anthropic", "claude-opus-9")
     assert not priced and (price.input, price.output) == (2.0, 10.0)  # top Claude rate
     assert "claude-opus-9" in caplog.text
-    for provider, model in (("openai", "gpt-5.4-mini"), ("gemini", "gemini-3.8-flash")):
+    for provider, model, known in (("openai", "gpt-5.4-mini", (0.75, 4.5)), ("gemini", "gemini-3.8-flash", (0.75, 3.75))):
         price, priced = prices.price_for(provider, model)
-        assert not priced and (price.input, price.output) == prices.FALLBACK_PRICE
-        assert prices.coins(price, Tokens(input=1, output=1)) > 0  # never 0
+        assert priced and (price.input, price.output) == known
+        # an unknown model of the same provider is billed at that provider's top known rate, never 0
+        price, priced = prices.price_for(provider, model.split("-")[0] + "-9-unknown")
+        assert not priced and (price.input, price.output) == known
+        assert prices.coins(price, Tokens(input=1, output=1)) > 0
 
 
 def test_price_override_same_format_as_core(monkeypatch):

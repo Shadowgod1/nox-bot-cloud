@@ -21,10 +21,13 @@ from nox_portal.config import get_settings
 log = logging.getLogger("nox_portal.prices")
 
 COIN_USD = Decimal("0.001")
-# same numbers as core/iler/usage.py DEFAULT_PRICES / FALLBACK_PRICE
+# Claude: same numbers as core/iler/usage.py DEFAULT_PRICES / FALLBACK_PRICE. GPT / Gemini: the models of
+# the admin UI, same as DEFAULT_PRICES in deploy/cloud/iler-client.sh (ILER_MODEL_PRICES of cloud clients).
 DEFAULT_PRICES: dict[str, tuple[float, float]] = {
     "claude-sonnet-5-5": (2.0, 10.0),
     "claude-haiku-5-5": (0.10, 0.50),
+    "gpt-5.4-mini": (0.75, 4.5),
+    "gemini-3.8-flash": (0.75, 3.75),
 }
 FALLBACK_PRICE = (2.0, 10.0)
 # Anthropic prompt caching relative to the input price: 5-minute cache write and cache read
