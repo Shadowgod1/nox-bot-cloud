@@ -1,6 +1,7 @@
 """Overview screen data (spec section 6.3). "Today" uses the club's time zone (ILER_TZ) day boundaries."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
@@ -9,9 +10,9 @@ from pydantic import BaseModel
 from iler import settings_store, usage
 from iler.auth.deps import User, current_user
 from iler.backup import status as backup_status
-from iler.config import get_settings
+from iler.config import gateway_mode, get_settings, topup_url
 from iler.db.pool import get_pool
-from iler.settings_models import BotSettings
+from iler.settings_models import NO_COINS_MESSAGE_DEFAULT, BotSettings
 from iler.whatsapp import monitor
 
 # the fixed "passing you to an administrator" reply (kept in sync with iler.engine.turn.HANDOVER_REPLY;
@@ -80,6 +81,15 @@ class Coins(BaseModel):
     days: list[CoinDay]
     by_model: list[CoinModel]
     unpriced_models: list[str]  # used this month with no price entry: billed at the highest tariff
+    # "local": the monthly limit of this install (ILER_MONTHLY_COINS); "gateway": limit / remaining / spent
+    # come from the LLM gateway balance (days / by_model stay the local per-model stats)
+    source: Literal["local", "gateway"] = "local"
+    period_end: str | None = None  # gateway: end of the paid period
+    stale: bool = False  # gateway: the balance could not be read just now; the last known value is shown
+    balance_at: str | None = None  # gateway: ISO-8601 time the shown balance was read
+    # gateway: "insufficient_coins" / "key_revoked" while the bot hands every conversation to the operator
+    blocked: str | None = None
+    topup_url: str | None = None  # where the owner tops up coins (ILER_TOPUP_URL), if set
 
 
 class Dashboard(BaseModel):
@@ -110,6 +120,7 @@ async def get_dashboard(_user: User = Depends(current_user)):
     start, end = today_bounds(now, get_settings().tz)
     since = now - timedelta(hours=24)
     pool = get_pool()
+    bot = await settings_store.get("bot", BotSettings)
     row = await pool.fetchrow(
         """
         SELECT
@@ -143,12 +154,11 @@ async def get_dashboard(_user: User = Depends(current_user)):
              WHERE m.author = 'client' AND m.created_at >= $1 AND m.created_at < $2
                AND EXISTS (SELECT 1 FROM messages b WHERE b.conversation_id = m.conversation_id
                            AND b.author = 'bot' AND b.created_at >= $1 AND b.created_at < $2
-                           AND b.text <> $4)) AS answered_convs
+                           AND b.text <> ALL($4::text[]))) AS answered_convs
         """,
-        start, end, since, HANDOVER_REPLY,
+        start, end, since, _handover_texts(bot),
     )
     wa = await monitor.get_status()
-    bot = await settings_store.get("bot", BotSettings)
     return {
         "whatsapp": {"status": wa["status"], "phone": wa.get("phone")},
         "bot_enabled": bot.enabled,
@@ -177,9 +187,15 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+def _handover_texts(bot: BotSettings) -> list[str]:
+    """Bot replies that are not answers: the "passing you to an administrator" reply and the holding
+    reply sent when the coins are used up (engine.turn.no_coins_message)."""
+    return [HANDOVER_REPLY, (bot.no_coins_message or "").strip() or NO_COINS_MESSAGE_DEFAULT]
+
+
 async def _coins(now: datetime) -> dict:
     u = await usage.month_usage(now)
-    return {
+    coins = {
         "limit": u.limit,
         "spent": u.spent,
         "remaining": round(u.remaining, 2) if u.remaining is not None else None,
@@ -192,4 +208,55 @@ async def _coins(now: datetime) -> dict:
         "days": [{"date": d.isoformat(), "coins": c} for d, c in u.days],
         "by_model": [{"model": m, "coins": c} for m, c in u.by_model],
         "unpriced_models": u.unpriced_models,
+        "topup_url": topup_url(),
     }
+    if gateway_mode():
+        coins.update(await _gateway_coins(now, u))
+    return coins
+
+
+async def _gateway_coins(now: datetime, u: usage.MonthUsage) -> dict:
+    """Gateway mode: the gateway balance replaces the local limit (cached, never raises)."""
+    from iler.llm import gateway
+
+    view = await gateway.balance()
+    out: dict = {"source": "gateway", "stale": view.stale, "blocked": view.blocked,
+                 "balance_at": _iso(view.fetched_at), "runs_out_on": None}
+    b = view.balance
+    if b is None:  # never read: no limit to show, only the local spend
+        out.update({"limit": 0, "remaining": None, "percent": None, "exhausted": view.blocked is not None,
+                    "period_end": None})
+        return out
+    limit = max(b.monthly_limit, 0.0)
+    left = max(b.coins_left, 0.0)
+    if view.blocked == gateway.INSUFFICIENT_COINS:
+        left = 0.0  # the gateway said 402 after this balance was read
+    spent = max(limit - left, 0.0)
+    out.update({
+        "limit": int(round(limit)),
+        "spent": round(spent, 2),
+        "remaining": round(left, 2),
+        "percent": round(spent / limit * 100, 1) if limit else None,
+        "exhausted": left <= 0 or view.blocked is not None,
+        "period_end": b.period_end,
+    })
+    # forecast from the local pace of this month (the gateway has no history API)
+    end = _parse_time(b.period_end)
+    if end is not None and end > now:
+        days_left = (end - now).total_seconds() / 86400
+        out["projected_month"] = round(spent + u.avg_per_day * days_left, 2)
+        if left > 0 and u.avg_per_day > 0:
+            when = now + timedelta(days=left / u.avg_per_day)
+            if when < end:
+                out["runs_out_on"] = when.astimezone(ZoneInfo(get_settings().tz)).date().isoformat()
+    return out
+
+
+def _parse_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)

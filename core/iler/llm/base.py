@@ -35,9 +35,27 @@ class LlmResponse:
 
 
 class LlmError(Exception):
-    def __init__(self, message: str, retryable: bool = True):
+    """A failed LLM call. ``status`` is the HTTP status and ``error_type`` the ``error.type`` of the
+    response body when the provider (or the LLM gateway) answered with an error."""
+
+    def __init__(self, message: str, retryable: bool = True, *, status: int | None = None,
+                 error_type: str | None = None):
         super().__init__(message)
         self.retryable = retryable
+        self.status = status
+        self.error_type = error_type
+
+
+def body_error_type(body: object) -> str | None:
+    """``error.type`` of an error body, whether the SDK kept the envelope (``{"error": {"type": ...}}``)
+    or already unwrapped it (``{"type": ...}``)."""
+    if isinstance(body, dict):
+        inner = body.get("error")
+        if isinstance(inner, dict) and isinstance(inner.get("type"), str):
+            return inner["type"]
+        if isinstance(body.get("type"), str):
+            return body["type"]
+    return None
 
 
 class LlmProvider(Protocol):

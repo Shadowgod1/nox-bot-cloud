@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from iler import config, usage
+from iler.llm import gateway
 from iler.llm.base import ChatMessage, LlmError, LlmProvider, LlmResponse
 from iler.llm.fake import FakeLLM
 from iler.settings_models import LlmSettings
@@ -33,7 +34,7 @@ class TurnResult:
 
 
 _factory_override: ProviderFactory | None = None
-_provider_cache: dict[tuple[str, str], LlmProvider] = {}
+_provider_cache: dict[tuple[str, str, str], LlmProvider] = {}
 _fake_provider = FakeLLM(default=FAKE_REPLY)
 
 
@@ -48,12 +49,26 @@ _MODEL_FIELDS = {"openai": "openai_model", "gemini": "gemini_model", "anthropic"
 
 
 def vendor_key(name: str) -> str:
-    """ILER's API key for a provider (environment, set by the technician); "" when not configured."""
-    return getattr(config.get_settings(), f"{name}_key", "") if name in PROVIDERS else ""
+    """The API key the bot sends to a provider: the gateway's virtual key in gateway mode, else ILER's own
+    key (environment, set by the technician); "" when not configured."""
+    if name not in PROVIDERS:
+        return ""
+    if gateway.enabled():
+        return gateway.key()
+    return getattr(config.get_settings(), f"{name}_key", "")
+
+
+def provider_base_url(name: str) -> str | None:
+    """Base URL of a provider client: the gateway route in gateway mode, else the optional
+    ILER_<PROVIDER>_BASE_URL override; None = the SDK default."""
+    if gateway.enabled():
+        return gateway.base_url(name)
+    return getattr(config.get_settings(), f"{name}_base_url", "").strip() or None
 
 
 def available_providers() -> list[str]:
-    """Providers the owner can choose: those with an ILER key (all of them in fake mode)."""
+    """Providers the owner can choose: those with a key (all of them in fake mode, and all of them in
+    gateway mode once the virtual key is set)."""
     if config.get_settings().llm_fake:
         return list(PROVIDERS)
     return [p for p in PROVIDERS if vendor_key(p)]
@@ -65,21 +80,23 @@ def _default_factory(name: str, settings: LlmSettings) -> LlmProvider:
     key = vendor_key(name)
     if not key:
         raise LlmError(f"{name}: ключ {config.brand_name()} не настроен (обратитесь в поддержку {config.brand_company()})", retryable=False)
-    provider = _provider_cache.get((name, key))
+    base_url = provider_base_url(name)
+    provider = _provider_cache.get((name, key, base_url or ""))
     if provider is None:
         if name == "openai":
             from iler.llm.openai_provider import OpenAIProvider
 
-            provider = OpenAIProvider(key)
+            provider = OpenAIProvider(key, base_url=base_url)
         elif name == "gemini":
             from iler.llm.gemini_provider import GeminiProvider
 
-            provider = GeminiProvider(key)
+            provider = GeminiProvider(key, base_url=base_url,
+                                      api_version=gateway.GEMINI_API_VERSION if gateway.enabled() else None)
         else:
             from iler.llm.anthropic_provider import AnthropicProvider
 
-            provider = AnthropicProvider(key)
-        _provider_cache[(name, key)] = provider
+            provider = AnthropicProvider(key, base_url=base_url, native_key_header=gateway.enabled())
+        _provider_cache[(name, key, base_url or "")] = provider
     if name == "anthropic":
         provider.effort = settings.anthropic_effort  # type: ignore[attr-defined]
     return provider
@@ -170,6 +187,8 @@ class _Session:
                 latency = int((time.monotonic() - started) * 1000)
                 await _log_request(self.conversation_id, name, model, None, latency, err)
                 log.warning("LLM attempt failed provider=%s model=%s: %s", name, model, err)
+                if gateway.blocking_error(e):
+                    raise  # every provider goes through the same gateway balance: no point in the fallbacks
                 errors.append(f"{name}/{model}: {err}")
                 self.idx += 1
                 continue
@@ -204,16 +223,35 @@ async def complete_with_tools(
 
     The coin limit is enforced here, so every reply turn (the tool loop) is bounded by it (AD-3); the
     connection checks ``check_key`` / ``list_models`` are deliberately outside the limit. Raises
-    ``usage.CoinsExhausted`` without touching any provider when the monthly limit is used up, and refreshes
+    ``usage.CoinsExhausted`` without touching any provider when the coins are used up, and refreshes
     the coin accounting (``usage.after_spend``) after the turn, whether it succeeded or failed.
     Raises ``LlmError(retryable=False)`` when every provider in the chain failed.
+
+    Without the gateway the local monthly limit (ILER_MONTHLY_COINS) decides. In gateway mode the gateway
+    is the authority: the local limit is ignored, a 402 ``insufficient_coins`` raises ``CoinsExhausted``
+    and a 401 ``key_revoked`` raises ``usage.AccessSuspended``, and later turns raise the same without a
+    call until the gateway balance is back (``gateway.blocked``).
     """
-    if await usage.limit_reached():
+    if gateway.enabled():
+        kind = await gateway.blocked()
+        if kind:
+            raise _exhausted(kind)
+    elif await usage.limit_reached():
         raise usage.CoinsExhausted()
     try:
         return await _complete_with_tools(messages, tools, ctx, settings)
+    except LlmError as e:
+        kind = gateway.blocking_error(e)
+        if not kind:
+            raise
+        gateway.mark_blocked(kind)
+        raise _exhausted(kind) from None
     finally:
         await usage.after_spend()
+
+
+def _exhausted(kind: str) -> usage.CoinsExhausted:
+    return usage.AccessSuspended() if kind == gateway.KEY_REVOKED else usage.CoinsExhausted()
 
 
 async def _complete_with_tools(
