@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from iler.auth import preset_owner
 from iler.config import VERSION, get_settings
 from iler.db import migrate
 from iler.db.pool import close_pool, init_pool
@@ -45,6 +46,11 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     pool = await init_pool(settings.database_url)
     await migrate.run(pool)
+    try:
+        # cloud: the owner from the Nox portal (ILER_OWNER_*), before the first request can reach /setup
+        await preset_owner.ensure_preset_owner(pool)
+    except Exception:  # noqa: BLE001 - never block the start; the setup link still works
+        log.exception("could not create the owner from the portal data")
     for hook in HOOKS:
         importlib.import_module(hook).install()
     tasks: list[asyncio.Task] = []

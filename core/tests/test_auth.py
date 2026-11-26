@@ -30,9 +30,9 @@ def _set_cookie(r, name: str) -> str | None:
 async def test_setup_state_true_when_no_users(client):
     r = await client.get("/api/setup/state")
     assert r.status_code == 200
-    assert r.json() == {"needs_setup": True}
+    assert r.json() == {"needs_setup": True, "wizard_pending": False}
     await setup_owner(client)
-    assert (await client.get("/api/setup/state")).json() == {"needs_setup": False}
+    assert (await client.get("/api/setup/state")).json() == {"needs_setup": False, "wizard_pending": False}
 
 
 async def test_setup_owner_only_once(client):
@@ -50,7 +50,7 @@ async def test_setup_owner_requires_token_header(client):
     r = await client.post("/api/setup/owner", json=OWNER, headers={"X-ILER-Setup-Token": "wrong"})
     assert r.status_code == 403
     assert r.json()["error"]["code"] == "setup_token_invalid"
-    assert (await client.get("/api/setup/state")).json() == {"needs_setup": True}
+    assert (await client.get("/api/setup/state")).json() == {"needs_setup": True, "wizard_pending": False}
 
 
 async def test_setup_owner_fails_closed_without_configured_token(client, monkeypatch):
@@ -69,7 +69,7 @@ async def test_setup_owner_fails_closed_without_configured_token(client, monkeyp
 async def test_setup_owner_rejects_short_password(client):
     r = await client.post("/api/setup/owner", json={**OWNER, "password": "short"}, headers=SETUP)
     assert r.status_code == 422
-    assert (await client.get("/api/setup/state")).json() == {"needs_setup": True}
+    assert (await client.get("/api/setup/state")).json() == {"needs_setup": True, "wizard_pending": False}
 
 
 async def test_login_sets_httponly_strict_cookie(client):
