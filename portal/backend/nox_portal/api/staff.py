@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 
 from dataclasses import asdict
 
-from nox_portal import billing, jobs, letters, mailer, ratelimit, renewal, security, tariffs, wallet
+from nox_portal import billing, fulfil, jobs, letters, mailer, payments, ratelimit, security, tariffs, wallet
 from nox_portal.config import get_settings
 from nox_portal.db import get_pool
 from nox_portal.deps import (
@@ -15,9 +15,9 @@ from nox_portal.deps import (
 )
 from nox_portal.errors import ApiError
 from nox_portal.schemas import (
-    ApplicationDetail, ApplicationListItem, Approve, AuditOut, Credentials, Invoice, JobOut, KeyIssued, KeyOut,
-    LlmBalance, LocalAccount, LocalAccountCreated, MarkInvoicePaid, MarkPaid, Ok, Reject, RemoveConfirm, StaffConfig,
-    StaffMe, Status, TariffOut,
+    ApplicationDetail, ApplicationListItem, Approve, AuditOut, Credentials, Invoice, IssuedInvoice, IssueInvoice, JobOut,
+    KeyIssued, KeyOut, LlmBalance, LocalAccount, LocalAccountCreated, MarkInvoicePaid, MarkPaid, Ok, OnlinePaymentOut,
+    Reject, RemoveConfirm, StaffConfig, StaffMe, Status, TariffOut,
 )
 
 router = APIRouter(tags=["staff"])
@@ -75,9 +75,10 @@ async def get_staff_config():
         sealing = True
     except security.SealingUnavailable:
         sealing = False
-    return StaffConfig(tariffs=tariffs.as_dicts(), coin_presets=COIN_PRESETS, instance_domain=get_settings().instance_domain,
-                       custom_key_supported=sealing, topup=TariffOut(**asdict(tariffs.TOPUP)),
-                       gateway_url=get_settings().public_url.rstrip("/"))
+    return StaffConfig(tariffs=tariffs.as_dicts(include_free=True), coin_presets=COIN_PRESETS,
+                       instance_domain=get_settings().instance_domain, custom_key_supported=sealing,
+                       topup=TariffOut(**asdict(tariffs.TOPUP)), gateway_url=get_settings().public_url.rstrip("/"),
+                       online_payments=payments.get_provider() is not None)
 
 
 # ---- applications ---------------------------------------------------------------------------
@@ -127,12 +128,23 @@ async def get_application(account_id: int):
     pool = get_pool()
     row = await pool.fetchrow(
         f"SELECT {_LIST_COLS}, admin_url, port, reject_reason, last_error, email_verified_at, register_ip,"
-        " invoice_no, invoice_amount, invoice_issued_at, local_install, period_start"
+        " invoice_no, invoice_amount, invoice_issued_at, local_install, period_start, pay_method, invoice_note,"
+        " free_until, suspend_reason, upgrade_tariff, period_end,"
+        " (period_end IS NOT NULL AND coalesce(tariff, '') <> 'free'"
+        "  AND status IN ('approved','provisioning','active','suspended')"
+        "  AND period_end - make_interval(days => $2) <= now()"
+        "  AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.account_id = accounts.id AND i.kind = 'renewal'"
+        "                  AND i.period_start = accounts.period_end)) AS renewal_due,"
+        " (SELECT created_at FROM topup_requests r WHERE r.account_id = accounts.id AND r.closed_at IS NULL"
+        "  LIMIT 1) AS topup_requested_at"
         " FROM accounts WHERE id = $1",
-        account_id,
+        account_id, get_settings().renewal_invoice_days,
     )
     if row is None:
         raise ApiError(404, "not_found", "Заявка не найдена")
+    online_rows = await pool.fetch(
+        "SELECT id, purpose, amount_kzt, provider, provider_payment_id, status, invoice_no, created_at, updated_at"
+        " FROM online_payments WHERE account_id = $1 ORDER BY created_at DESC, id DESC LIMIT 20", account_id)
     job_rows = await pool.fetch(
         "SELECT id, kind, status, slug, coins, llm_key_sealed IS NOT NULL AS has_custom_key,"
         " gateway_key_sealed IS NOT NULL AS has_gateway_key, error, created_at,"
@@ -148,20 +160,14 @@ async def get_application(account_id: int):
         **data, bot_host=f"{row['slug']}.{get_settings().instance_domain}",
         llm=await llm_balance(pool, account_id) if row["period_start"] else None, keys=keys,
         invoices=await billing.invoices_of(pool, account_id),
+        online_payments=[OnlinePaymentOut(**dict(r)) for r in online_rows],
         payments=await billing.payments_of(pool, account_id),
         jobs=[_job_out(r) for r in job_rows], audit=await _audit_rows(pool, account_id, 100),
     )
 
 
 async def _lock_account(conn, account_id: int) -> asyncpg.Record:
-    row = await conn.fetchrow(
-        "SELECT id, email, contact_name, slug, status, coins_limit, tariff, invoice_no, invoice_amount"
-        " FROM accounts WHERE id = $1 FOR UPDATE",
-        account_id,
-    )
-    if row is None:
-        raise ApiError(404, "not_found", "Заявка не найдена")
-    return row
+    return await fulfil.lock_account(conn, account_id)
 
 
 def _require_status(row: asyncpg.Record, *allowed: str) -> None:
@@ -189,47 +195,23 @@ async def llm_balance(conn, account_id: int) -> LlmBalance:
                       period_end=bal.period_end, status=status)
 
 
-async def _approve(conn, row: asyncpg.Record, body: Approve, coins: int, sealed: str | None, staff: Principal,
-                   request: Request, payment_id: int | None) -> None:
-    """Queue the create job (shared by approve and mark-paid; the caller holds the row lock).
-
-    Without a per-client Anthropic key the account gets an LLM gateway virtual key (sealed into the job for the
-    provisioner) and its first billing period starts now with `coins` monthly coins. With a per-client key the
-    bot talks to Anthropic directly and the gateway is not used."""
-    account_id = row["id"]
-    slug = row["slug"]
-    if body.slug and body.slug != slug:
-        if await conn.fetchval("SELECT EXISTS (SELECT 1 FROM accounts WHERE slug = $1)", body.slug):
-            raise ApiError(409, "slug_taken", "Этот адрес уже занят")
-        slug = body.slug
-    await conn.execute(
-        "UPDATE accounts SET status = 'approved', slug = $2, coins_limit = $3, reject_reason = NULL,"
-        " last_error = NULL, updated_at = now() WHERE id = $1",
-        account_id, slug, coins,
-    )
-    gateway_sealed, key_id = None, None
-    if sealed is None:
-        await wallet.revoke_keys(conn, account_id, "superseded by a new approval")
-        key, key_id = await wallet.issue_key(conn, account_id, staff.id)
-        gateway_sealed = wallet.seal_key(key)
-        del key
-        await wallet.start_period(conn, account_id, coins, staff_id=staff.id, note="first period")
-    job_id = await jobs.enqueue(conn, account_id, "create", slug, coins=coins, llm_key_sealed=sealed, staff_id=staff.id,
-                                gateway_key_sealed=gateway_sealed, key_id=key_id)
-    await audit(conn, "staff.approve", staff_id=staff.id, account_id=account_id, ip=ratelimit.client_ip(request),
-                details={"job": job_id, "coins": coins, "slug": slug, "slug_changed": slug != row["slug"],
-                         "custom_key": sealed is not None, "payment": payment_id, "gateway_key": key_id})
-
-
 @router.post("/api/staff/applications/{account_id}/approve", response_model=Ok, dependencies=staff_mutation)
 async def post_approve(account_id: int, body: Approve, request: Request, staff: Principal = Depends(current_staff)):
-    """Approve without a recorded payment (trial, partner, paid elsewhere); audited with payment = null."""
+    """Approve without a recorded payment (partner, paid elsewhere, Free assigned by staff); audited with
+    payment = null. Coins default to the tariff's (body.tariff, else the client's choice)."""
     sealed = _seal(body.anthropic_key)
+    if body.tariff is not None and tariffs.get(body.tariff) is None:
+        raise ApiError(422, "validation_error", "tariff: неизвестный тариф")
     pool = get_pool()
     async with pool.acquire() as conn, conn.transaction():
         row = await _lock_account(conn, account_id)
-        _require_status(row, "verified", "awaiting_payment", "rejected")
-        await _approve(conn, row, body, body.coins, sealed, staff, request, None)
+        _require_status(row, *fulfil.PAYABLE, "rejected")
+        tariff = tariffs.get(body.tariff or row["tariff"])
+        coins = body.coins if body.coins is not None else (tariff.coins if tariff else None)
+        if coins is None:
+            raise ApiError(422, "validation_error", "coins: укажите лимит коинов")
+        await fulfil.approve(conn, row, coins=coins, sealed=sealed, slug=body.slug, tariff=body.tariff,
+                             staff_id=staff.id, ip=ratelimit.client_ip(request), payment_id=None)
     return Ok()
 
 
@@ -242,26 +224,85 @@ async def post_mark_paid(account_id: int, body: MarkPaid, request: Request, staf
     async with pool.acquire() as conn, conn.transaction():
         row = await _lock_account(conn, account_id)
         _require_status(row, "awaiting_payment")
-        tariff = tariffs.get(row["tariff"])
-        coins = body.coins if body.coins is not None else (tariff.coins if tariff else None)
-        if coins is None:
-            raise ApiError(422, "validation_error", "coins: укажите лимит коинов")
-        payment_id = await billing.record_payment(
-            conn, account_id, invoice_no=row["invoice_no"], tariff=row["tariff"], amount_kzt=body.amount_kzt,
-            reference=body.reference, note=body.note, staff_id=staff.id,
-        )
-        await audit(conn, "staff.mark_paid", staff_id=staff.id, account_id=account_id, ip=ratelimit.client_ip(request),
-                    details={"payment": payment_id, "invoice": row["invoice_no"], "amount": body.amount_kzt,
-                             "invoice_amount": row["invoice_amount"], "reference": body.reference.strip()})
-        await _approve(conn, row, body, coins, sealed, staff, request, payment_id)
+        await fulfil.pay_subscription(conn, row, amount_kzt=body.amount_kzt, reference=body.reference, note=body.note,
+                                      staff_id=staff.id, method="invoice", ip=ratelimit.client_ip(request),
+                                      coins=body.coins, slug=body.slug, sealed=sealed)
     return Ok()
+
+
+@router.post("/api/staff/applications/{account_id}/issue-invoice", response_model=IssuedInvoice,
+             dependencies=staff_mutation)
+async def post_issue_invoice(account_id: int, body: IssueInvoice, request: Request,
+                             staff: Principal = Depends(current_staff)):
+    """«Выставить счёт»: the first invoice (awaiting_invoice and other unpaid states; re-issue keeps the number),
+    an upgrade (Free -> paid), a renewal (next period) or a top-up pack. Amount defaults to the price, the
+    comment is printed on the invoice; the client gets the invoice letter."""
+    pool = get_pool()
+    s = get_settings()
+    async with pool.acquire() as conn, conn.transaction():
+        row = await _lock_account(conn, account_id)
+        comment = body.comment.strip()
+        if body.kind == "subscription":
+            _require_status(row, *fulfil.PAYABLE)
+            t = tariffs.get(body.tariff or row["tariff"])
+            if t is None or tariffs.is_free(t.code):
+                raise ApiError(422, "validation_error", "tariff: выберите платный тариф")
+            amount = body.amount_kzt or t.price_kzt
+            acc = await billing.issue_subscription_invoice(conn, account_id, t.code, amount, comment)
+            number = acc["invoice_no"]
+            mail = letters.invoice(row["contact_name"], number, t.name, tariffs.money(amount), s.invoice_due_days,
+                                   comment)
+        elif body.kind == "upgrade":
+            if not tariffs.is_free(row["tariff"]) or row["status"] not in fulfil.UPGRADABLE:
+                raise ApiError(409, "wrong_status", "Счёт на переход выставляется аккаунту на тарифе Free")
+            t = tariffs.get(body.tariff or row["upgrade_tariff"])
+            if t is None or tariffs.is_free(t.code):
+                raise ApiError(422, "validation_error", "tariff: выберите платный тариф")
+            amount = body.amount_kzt or t.price_kzt
+            inv = await billing.insert_invoice(conn, account_id, "upgrade", t.code, amount, t.coins, note=comment,
+                                               staff_id=staff.id)
+            await conn.execute("UPDATE accounts SET upgrade_tariff = NULL WHERE id = $1", account_id)
+            number = inv["number"]
+            mail = letters.upgrade_invoice(row["contact_name"], number, t.name, tariffs.money(amount), comment)
+        elif body.kind == "renewal":
+            if row["period_end"] is None or tariffs.is_free(row["tariff"]):
+                raise ApiError(409, "wrong_status", "Продление выставляется подключённому платному аккаунту")
+            _require_status(row, "approved", "provisioning", "active", "suspended")
+            t = tariffs.get(row["tariff"]) or tariffs.TARIFFS[0]
+            amount = body.amount_kzt or t.price_kzt
+            coins = row["coins_limit"] if row["coins_limit"] is not None else t.coins
+            inv = await billing.insert_invoice(conn, account_id, "renewal", t.code, amount, coins,
+                                               period_start=row["period_end"], note=comment, staff_id=staff.id)
+            if inv is None:
+                raise ApiError(409, "already_issued", "Счёт на продление за этот период уже выставлен")
+            number = inv["number"]
+            mail = letters.renewal_invoice(row["contact_name"], number, t.name, tariffs.money(amount),
+                                           inv["period_start"], s.grace_days, comment)
+        else:  # topup
+            if row["period_start"] is None or row["status"] in ("removed", "rejected"):
+                raise ApiError(409, "llm_disabled", "Пополнение доступно после подключения бота")
+            pack = tariffs.TOPUP
+            amount = body.amount_kzt or pack.price_kzt
+            coins = body.coins or pack.coins
+            inv = await billing.insert_invoice(conn, account_id, "topup", pack.code, amount, coins, note=comment,
+                                               staff_id=staff.id)
+            await conn.execute("UPDATE topup_requests SET invoice_id = $2, closed_at = now() WHERE account_id = $1"
+                               " AND closed_at IS NULL", account_id, inv["id"])
+            number = inv["number"]
+            mail = letters.topup_invoice(row["contact_name"], number, tariffs.money(amount), coins, comment)
+        await audit(conn, "staff.invoice_issued", staff_id=staff.id, account_id=account_id,
+                    ip=ratelimit.client_ip(request),
+                    details={"kind": body.kind, "invoice": number, "amount": amount, "comment": comment})
+    await mailer.send_quiet(row["email"], *mail)
+    return IssuedInvoice(number=number, amount_kzt=amount)
 
 
 @router.get("/api/staff/applications/{account_id}/invoice", response_model=Invoice, dependencies=staff_only)
 async def get_application_invoice(account_id: int):
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT id, email, contact_name, company, phone, slug, tariff, invoice_no, invoice_amount, invoice_issued_at"
+        "SELECT id, email, contact_name, company, phone, slug, tariff, invoice_no, invoice_amount, invoice_issued_at,"
+        " invoice_note"
         " FROM accounts WHERE id = $1",
         account_id,
     )
@@ -276,7 +317,7 @@ async def post_reject(account_id: int, body: Reject, request: Request, staff: Pr
     pool = get_pool()
     async with pool.acquire() as conn, conn.transaction():
         row = await _lock_account(conn, account_id)
-        _require_status(row, "verified", "awaiting_payment", "approved", "failed")
+        _require_status(row, *fulfil.PAYABLE, "approved", "failed")
         if await conn.fetchval("SELECT EXISTS (SELECT 1 FROM jobs WHERE account_id = $1 AND status = 'claimed')",
                                account_id):
             raise ApiError(409, "job_in_progress", "Бот уже создаётся; дождитесь результата")
@@ -421,38 +462,20 @@ async def get_account_invoice(account_id: int, number: str):
 @router.post("/api/staff/invoices/{invoice_id}/mark-paid", response_model=Ok, dependencies=staff_mutation)
 async def post_invoice_paid(invoice_id: int, body: MarkInvoicePaid, request: Request,
                             staff: Principal = Depends(current_staff)):
-    """Payment of a top-up invoice (coins are added at once) or a renewal invoice (the period rolls over when
-    it has ended; an account suspended for non-payment is renewed and resumed)."""
+    """Payment of a top-up invoice (coins are added at once), a renewal invoice (the period rolls over when it
+    has ended; an account suspended for non-payment is renewed and resumed) or an upgrade (Free -> paid)."""
     pool = get_pool()
-    notify = None
     async with pool.acquire() as conn, conn.transaction():
         inv = await conn.fetchrow(f"SELECT {billing.INVOICE_COLS} FROM invoices WHERE id = $1 FOR UPDATE", invoice_id)
         if inv is None:
             raise ApiError(404, "not_found", "Счёт не найден")
         if inv["paid_at"] is not None:
             raise ApiError(409, "already_paid", "Счёт уже отмечен как оплаченный")
-        account = await conn.fetchrow("SELECT id, email, contact_name FROM accounts WHERE id = $1 FOR UPDATE",
-                                      inv["account_id"])
-        payment_id = await billing.record_payment(
-            conn, inv["account_id"], invoice_no=inv["number"], tariff=inv["tariff"], amount_kzt=body.amount_kzt,
-            reference=body.reference, note=body.note, staff_id=staff.id,
-        )
-        await conn.execute("UPDATE invoices SET paid_at = now(), payment_id = $2 WHERE id = $1", invoice_id, payment_id)
-        details = {"invoice": inv["number"], "kind": inv["kind"], "payment": payment_id, "amount": body.amount_kzt,
-                   "invoice_amount": inv["amount_kzt"], "reference": body.reference.strip()}
-        if inv["kind"] == "topup":
-            await conn.execute(
-                "INSERT INTO coin_grants(account_id, kind, coins, invoice_no, payment_id, staff_id, note)"
-                " VALUES ($1, 'topup', $2, $3, $4, $5, $6)",
-                inv["account_id"], inv["coins"], inv["number"], payment_id, staff.id, body.note.strip(),
-            )
-            notify = (account["email"], letters.coins_added(account["contact_name"], inv["coins"]))
-        else:
-            details["renewal"] = await renewal.renew_if_due(conn, inv["account_id"])
-        await audit(conn, "staff.invoice_paid", staff_id=staff.id, account_id=inv["account_id"],
-                    ip=ratelimit.client_ip(request), details=details)
-    if notify:
-        await mailer.send_quiet(notify[0], *notify[1])
+        mails = await fulfil.pay_invoice(conn, inv, amount_kzt=body.amount_kzt, reference=body.reference,
+                                         note=body.note, staff_id=staff.id, method="invoice",
+                                         ip=ratelimit.client_ip(request))
+    for to, mail in mails:
+        await mailer.send_quiet(to, *mail)
     return Ok()
 
 
@@ -478,6 +501,10 @@ async def post_local_account(body: LocalAccount, request: Request, staff: Princi
         except asyncpg.UniqueViolationError:
             raise ApiError(409, "already_exists", "Аккаунт с этим e-mail или адресом уже есть") from None
         await wallet.start_period(conn, account_id, coins, staff_id=staff.id, note="local install")
+        if tariffs.is_free(tariff.code):
+            await conn.execute("UPDATE accounts SET pay_method = 'free',"
+                               " free_until = now() + make_interval(days => $2) WHERE id = $1",
+                               account_id, get_settings().free_days)
         key, key_id = await wallet.issue_key(conn, account_id, staff.id)
         await audit(conn, "staff.local_account", staff_id=staff.id, account_id=account_id,
                     ip=ratelimit.client_ip(request), details={"tariff": tariff.code, "coins": coins, "key": key_id})

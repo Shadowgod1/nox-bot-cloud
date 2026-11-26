@@ -115,8 +115,10 @@ class SlugCheck(BaseModel):
     message: str | None = None
 
 
-Status = Literal["new", "verified", "awaiting_payment", "approved", "provisioning", "active", "failed",
-                 "rejected", "suspended", "removed"]
+Status = Literal["new", "verified", "awaiting_invoice", "payment_pending", "awaiting_payment", "approved",
+                 "provisioning", "active", "failed", "rejected", "suspended", "removed"]
+PayMethod = Literal["invoice", "online"]
+InvoiceKind = Literal["subscription", "renewal", "topup", "upgrade"]
 
 
 class ClientMe(BaseModel):
@@ -138,6 +140,16 @@ class ClientMe(BaseModel):
     # the bot uses the Nox LLM gateway: balance, usage and top-ups are shown in the cabinet
     llm_enabled: bool = False
     local_install: bool = False
+    # invoice | online | free | None (chosen before this field existed)
+    pay_method: str | None = None
+    # checkout page of the latest pending online payment for the subscription / upgrade
+    payment_url: str | None = None
+    # Free trial: suspended at this moment unless moved to a paid tariff
+    free_until: datetime | None = None
+    # unpaid (renewal overdue) | trial_ended | None
+    suspend_reason: str | None = None
+    # a Free account asked a manager for an invoice for this paid tariff
+    upgrade_tariff: str | None = None
 
 
 class SetupLink(BaseModel):
@@ -152,15 +164,17 @@ class StaffMe(BaseModel):
 
 
 class Approve(BaseModel):
-    coins: int = Field(ge=0, le=999_999_999)
+    # None: the tariff's coins
+    coins: int | None = Field(None, ge=0, le=999_999_999)
     slug: Slug | None = None
+    # staff may set the tariff on approval (e.g. Free even when it is hidden from clients)
+    tariff: str | None = Field(None, max_length=32)
     # write-only: sealed for the provisioner immediately, never stored in clear or returned
     anthropic_key: Annotated[str | None, Field(max_length=256), AfterValidator(_llm_key)] = None
 
 
 class MarkPaid(Approve):
     """Record a payment (ledger row) and approve in the same transaction; coins default to the tariff's."""
-    coins: int | None = Field(None, ge=0, le=999_999_999)  # type: ignore[assignment]
     amount_kzt: int = Field(gt=0, le=1_000_000_000)
     reference: str = Field("", max_length=200)
     note: str = Field("", max_length=1000)
@@ -225,6 +239,17 @@ class ApplicationDetail(ApplicationListItem):
     invoice_amount: int | None
     invoice_issued_at: datetime | None
     local_install: bool = False
+    pay_method: str | None = None
+    invoice_note: str = ""
+    free_until: datetime | None = None
+    suspend_reason: str | None = None
+    upgrade_tariff: str | None = None
+    period_end: datetime | None = None
+    # the period ends within NOX_RENEWAL_INVOICE_DAYS (or has ended) and no renewal invoice is issued yet
+    renewal_due: bool = False
+    # "Пополнить через менеджера": open request (created_at) waiting for a top-up invoice
+    topup_requested_at: datetime | None = None
+    online_payments: list["OnlinePaymentOut"] = []
     llm: "LlmBalance | None" = None
     keys: list["KeyOut"] = []
     invoices: list["InvoiceListItem"] = []
@@ -239,10 +264,63 @@ class TariffOut(BaseModel):
     price_kzt: int
     coins: int
     description: str
+    # Free: false when every test place is taken (NOX_FREE_MAX_ACTIVE)
+    available: bool = True
 
 
 class TariffChoice(BaseModel):
     tariff: str = Field(max_length=32)
+    # paid tariffs: invoice (a manager issues it) or online (only when a provider is configured)
+    method: PayMethod = "invoice"
+
+
+class TopupChoice(BaseModel):
+    method: PayMethod = "invoice"
+
+
+class TopupOut(BaseModel):
+    # request: a manager will issue the invoice; invoice: an unpaid top-up invoice exists; online: go to redirect_url
+    kind: Literal["request", "invoice", "online"]
+    invoice_number: str | None = None
+    redirect_url: str | None = None
+
+
+class CheckoutOut(BaseModel):
+    redirect_url: str | None = None
+    qr_payload: str | None = None
+
+
+class IssueInvoice(BaseModel):
+    kind: InvoiceKind
+    # subscription / upgrade: tariff (default: the client's choice); renewal: the account's tariff
+    tariff: str | None = Field(None, max_length=32)
+    # default: the tariff price (top-up: the pack price)
+    amount_kzt: int | None = Field(None, gt=0, le=1_000_000_000)
+    # top-up only: coins of the pack (default tariffs.TOPUP)
+    coins: int | None = Field(None, gt=0, le=999_999_999)
+    comment: str = Field("", max_length=500)
+
+
+class IssuedInvoice(BaseModel):
+    ok: bool = True
+    number: str
+    amount_kzt: int
+
+
+class OnlinePaymentOut(BaseModel):
+    id: int
+    purpose: str
+    amount_kzt: int
+    provider: str
+    provider_payment_id: str | None
+    status: str
+    invoice_no: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MockResult(BaseModel):
+    result: Literal["succeeded", "failed"]
 
 
 class Seller(BaseModel):
@@ -269,8 +347,9 @@ class Invoice(BaseModel):
     bot_host: str
     seller: Seller
     paid: bool
-    # subscription: the first invoice; renewal: next month; topup: coin pack
-    kind: Literal["subscription", "renewal", "topup"] = "subscription"
+    # subscription: the first invoice; renewal: next month; topup: coin pack; upgrade: Free -> paid tariff
+    kind: InvoiceKind = "subscription"
+    comment: str = ""
     period_start: datetime | None = None
     period_end: datetime | None = None
 
@@ -294,6 +373,7 @@ class StaffConfig(BaseModel):
     custom_key_supported: bool
     topup: TariffOut | None = None
     gateway_url: str = ""
+    online_payments: bool = False
 
 
 # ---- LLM gateway: balance, usage, keys, invoices ----------------------------------------------
@@ -342,7 +422,7 @@ class KeyOut(BaseModel):
 class InvoiceListItem(BaseModel):
     id: int | None
     number: str
-    kind: Literal["subscription", "renewal", "topup"]
+    kind: InvoiceKind
     tariff: str | None
     amount_kzt: int
     coins: int | None

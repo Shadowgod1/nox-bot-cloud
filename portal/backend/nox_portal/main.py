@@ -8,8 +8,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from nox_portal import alerts, db, gateway, renewal
-from nox_portal.api import client, internal, staff
+from nox_portal import alerts, db, gateway, payments, renewal
+from nox_portal.api import client, internal, payments as payments_api, staff
 from nox_portal.config import VERSION, get_settings
 from nox_portal.errors import install_error_handlers
 
@@ -32,6 +32,7 @@ def _check_settings() -> None:
         raise RuntimeError("NOX_SMTP_SECURITY must be starttls, ssl or none")
     if not any((s.upstream_anthropic_key, s.upstream_openai_key, s.upstream_gemini_key)):
         log.warning("LLM gateway: no NOX_UPSTREAM_*_KEY is set; /llm/... answers 503 until one is")
+    payments.check_settings()
 
 
 @asynccontextmanager
@@ -80,6 +81,7 @@ def create_app() -> FastAPI:
     app = _base("Nox portal", with_lifespan=True)
     app.include_router(client.router)
     app.include_router(staff.router)
+    app.include_router(payments_api.router)
     app.include_router(gateway.router)
     return app
 

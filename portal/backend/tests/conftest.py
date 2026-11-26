@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 ADMIN_DSN = os.environ.get("NOX_TEST_DATABASE_URL", "postgresql://postgres:test@127.0.0.1:55432/postgres")
-TEST_DB = "nox_portal_test"
+TEST_DB = os.environ.get("NOX_TEST_DB_NAME", "nox_portal_test")
 _base, _ = ADMIN_DSN.rsplit("/", 1)
 PROVISIONER_TOKEN = "test-provisioner-token-0123456789"
 
@@ -126,7 +126,7 @@ async def clean_db(request):
 
     await gateway.drain()
     await alerts.drain()
-    ledgers = ("payments", "coin_grants", "llm_usage")
+    ledgers = ("payments", "coin_grants", "llm_usage", "payment_events")
     async with p.acquire() as conn, conn.transaction():
         for t in ledgers:
             await conn.execute(f"ALTER TABLE {t} DISABLE TRIGGER {t}_no_truncate")

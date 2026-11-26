@@ -1,11 +1,12 @@
-"""Client flows: register -> e-mail code -> tariff + invoice -> staff marks paid -> bot ready; login, reset."""
+"""Client flows: register -> e-mail code -> tariff (Free at once | invoice via a manager | online) -> bot ready;
+login, reset, top-ups, paying invoices online."""
 
 import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from nox_portal import billing, codes, letters, mailer, ratelimit, security, slugs, tariffs, wallet
+from nox_portal import billing, codes, fulfil, letters, mailer, payments, ratelimit, security, slugs, tariffs, wallet
 from nox_portal.config import get_settings
 from nox_portal.db import get_pool
 from nox_portal.deps import (
@@ -13,9 +14,10 @@ from nox_portal.deps import (
     register_success, set_session_cookies,
 )
 from nox_portal.errors import ApiError
+from nox_portal.payments import service as online
 from nox_portal.schemas import (
-    ClientMe, Credentials, EmailOnly, Invoice, InvoiceListItem, LlmBalance, Ok, Register, ResetConfirm, SetupLink,
-    SlugCheck, TariffChoice, TariffOut, UsageDay, UsageModel, UsageOut, Verify,
+    CheckoutOut, ClientMe, Credentials, EmailOnly, Invoice, InvoiceListItem, LlmBalance, Ok, Register, ResetConfirm,
+    SetupLink, SlugCheck, TariffChoice, TariffOut, TopupChoice, TopupOut, UsageDay, UsageModel, UsageOut, Verify,
 )
 
 log = logging.getLogger("nox_portal.client")
@@ -23,13 +25,13 @@ router = APIRouter(tags=["client"])
 
 _ACCOUNT_COLS = ("id, email, password_hash, company, contact_name, phone, slug, status, admin_url, reject_reason,"
                  " setup_link_enc, tariff, invoice_no, invoice_amount, invoice_issued_at, created_at, period_start,"
-                 " local_install")
+                 " local_install, invoice_note, pay_method, free_until, suspend_reason, upgrade_tariff")
 # unverified registrations hold their slug for a day, then disappear
 UNVERIFIED_TTL = "24 hours"
 INVALID_CREDENTIALS = ApiError(401, "invalid_credentials", "Неверный e-mail или пароль")
 
 
-def client_me(row: asyncpg.Record) -> ClientMe:
+def client_me(row: asyncpg.Record, payment_url: str | None = None) -> ClientMe:
     return ClientMe(
         email=row["email"], company=row["company"], contact_name=row["contact_name"], phone=row["phone"],
         slug=row["slug"], bot_host=f"{row['slug']}.{get_settings().instance_domain}", status=row["status"],
@@ -37,7 +39,22 @@ def client_me(row: asyncpg.Record) -> ClientMe:
         setup_link_available=bool(row["setup_link_enc"]), tariff=row["tariff"], invoice_no=row["invoice_no"],
         invoice_amount=row["invoice_amount"], created_at=row["created_at"],
         llm_enabled=row["period_start"] is not None, local_install=row["local_install"],
+        pay_method=row["pay_method"], payment_url=payment_url, free_until=row["free_until"],
+        suspend_reason=row["suspend_reason"], upgrade_tariff=row["upgrade_tariff"],
     )
+
+
+async def _payment_url(conn, account_id: int) -> str | None:
+    """Checkout page of the latest pending online payment for the subscription / upgrade (cabinet button)."""
+    return await conn.fetchval(
+        "SELECT redirect_url FROM online_payments WHERE account_id = $1 AND status = 'pending'"
+        " AND purpose IN ('subscription','upgrade') AND redirect_url IS NOT NULL"
+        " ORDER BY created_at DESC, id DESC LIMIT 1", account_id)
+
+
+async def _me(conn, account_id: int) -> ClientMe:
+    row = await conn.fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1", account_id)
+    return client_me(row, await _payment_url(conn, account_id))
 
 
 async def _send_code(to: str, name: str, purpose: str, code: str) -> None:
@@ -51,7 +68,9 @@ async def _send_code(to: str, name: str, purpose: str, code: str) -> None:
 
 @router.get("/api/public-config")
 async def get_public_config():
-    return {"instance_domain": get_settings().instance_domain}
+    provider = payments.get_provider()
+    return {"instance_domain": get_settings().instance_domain, "online_payments": provider is not None,
+            "online_methods": sorted(provider.supports) if provider else []}
 
 
 @router.get("/api/slug-check", response_model=SlugCheck)
@@ -228,8 +247,7 @@ async def post_reset_confirm(body: ResetConfirm, request: Request, response: Res
 
 @router.get("/api/me", response_model=ClientMe)
 async def get_me(client: Principal = Depends(current_client)):
-    row = await get_pool().fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1", client.id)
-    return client_me(row)
+    return await _me(get_pool(), client.id)
 
 
 @router.post("/api/me/setup-link", response_model=SetupLink, dependencies=[Depends(current_client), Depends(csrf_protect)])
@@ -251,30 +269,116 @@ async def post_reveal_setup_link(request: Request, client: Principal = Depends(c
 # ---- tariff and invoice ---------------------------------------------------------------------
 
 
+FREE_FULL = "Тестовые места закончились, выберите тариф или напишите менеджеру"
+FREE_USED = "Тестовый период уже использован для этого e-mail или телефона. Выберите платный тариф."
+# an issued but unpaid subscription invoice is withdrawn when the client changes the choice (the number stays
+# reserved and is reused when a manager issues the next one)
+VOID_INVOICE = " invoice_amount = NULL, invoice_issued_at = NULL, invoice_note = '',"
+
+
+def phone_digits(phone: str) -> str:
+    """+7 701 000-00-00 / 8 701 000 00 00 -> 77010000000 (one Free trial per phone)."""
+    digits = "".join(c for c in phone if c.isdigit())
+    if len(digits) == 11 and digits[0] == "8":
+        digits = "7" + digits[1:]
+    return digits
+
+
+async def free_slots_left(conn) -> int:
+    used = await conn.fetchval("SELECT count(*) FROM accounts WHERE tariff = 'free'"
+                               " AND status IN ('approved','provisioning','active')")
+    return max(get_settings().free_max_active - used, 0)
+
+
 @router.get("/api/tariffs", response_model=list[TariffOut])
 async def get_tariffs():
-    return tariffs.as_dicts()
+    """Paid tariffs, then Free (test) when NOX_FREE_TARIFF_PUBLIC; available=false when every test place is taken."""
+    out = [TariffOut(**t) for t in tariffs.as_dicts()]
+    if get_settings().free_tariff_public:
+        f = tariffs.FREE
+        out.append(TariffOut(code=f.code, name=f.name, price_kzt=f.price_kzt, coins=f.coins, description=f.description,
+                             available=await free_slots_left(get_pool()) > 0))
+    return out
+
+
+async def _start_free(conn, row, ip: str) -> list:
+    """Free (test): approved at once — global cap, one trial per e-mail / phone ever."""
+    if not get_settings().free_tariff_public:
+        raise ApiError(422, "validation_error", "tariff: неизвестный тариф")
+    await conn.execute("SELECT pg_advisory_xact_lock(hashtext('nox_portal_free'))")
+    if await free_slots_left(conn) <= 0:
+        raise ApiError(409, "free_full", FREE_FULL)
+    phone = phone_digits(row["phone"])
+    if await conn.fetchval("SELECT EXISTS (SELECT 1 FROM free_trials WHERE email = $1 OR phone = $2)",
+                           row["email"], phone):
+        raise ApiError(409, "free_used", FREE_USED)
+    await conn.execute("INSERT INTO free_trials(account_id, email, phone) VALUES ($1, $2, $3)",
+                       row["id"], row["email"], phone)
+    await conn.execute(f"UPDATE accounts SET{VOID_INVOICE} pay_method = 'free' WHERE id = $1", row["id"])
+    await fulfil.approve(conn, row, coins=tariffs.FREE.coins, tariff=tariffs.FREE.code, staff_id=None, ip=ip,
+                         payment_id=None, action="client.auto_free")
+    return [(to, letters.staff_free_started(row["company"], row["email"], row["slug"]))
+            for to in mailer.staff_recipients()]
 
 
 @router.post("/api/me/tariff", response_model=ClientMe, dependencies=[Depends(current_client), Depends(csrf_protect)])
 async def post_choose_tariff(body: TariffChoice, request: Request, client: Principal = Depends(current_client)):
-    """Pick a tariff after verification: the invoice is issued (or re-issued for another tariff while unpaid)
-    and e-mailed; the application waits for payment."""
+    """After verification: Free -> approved at once; a paid tariff -> awaiting_invoice (a manager issues the invoice)
+    or payment_pending (online checkout). A Free account with a bot chooses a paid tariff here to upgrade: by
+    invoice (request to the manager) or online (upgrade invoice paid at once). Choices can change until paid."""
+    tariff = tariffs.get(body.tariff)
+    if tariff is None:
+        raise ApiError(422, "validation_error", "tariff: неизвестный тариф")
+    free = tariffs.is_free(tariff.code)
+    if body.method == "online" and not free and payments.get_provider() is None:
+        raise online.disabled()
+    ip = ratelimit.client_ip(request)
     pool = get_pool()
+    mails: list = []
+    checkout: dict | None = None
     async with pool.acquire() as conn, conn.transaction():
-        row = await billing.choose_tariff(conn, client.id, body.tariff)
-        await audit(conn, "client.tariff_chosen", account_id=client.id, ip=ratelimit.client_ip(request),
-                    details={"tariff": row["tariff"], "invoice": row["invoice_no"], "amount": row["invoice_amount"]})
-    tariff = tariffs.get(row["tariff"])
-    assert tariff is not None
-    amount = tariffs.money(row["invoice_amount"])
-    await mailer.send_quiet(row["email"], *letters.invoice(row["contact_name"], row["invoice_no"], tariff.name, amount,
-                                                           get_settings().invoice_due_days))
-    subject, text = letters.staff_tariff_chosen(row["company"], row["invoice_no"], tariff.name, amount)
-    for to in mailer.staff_recipients():
-        await mailer.send_quiet(to, subject, text)
-    me = await pool.fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1", client.id)
-    return client_me(me)
+        row = await fulfil.lock_account(conn, client.id)
+        amount = tariffs.money(tariff.price_kzt)
+        if row["status"] in fulfil.PAYABLE:
+            if free:
+                mails = await _start_free(conn, row, ip)
+            elif body.method == "online":
+                await conn.execute(
+                    f"UPDATE accounts SET status = 'payment_pending', tariff = $2, pay_method = 'online',"
+                    f"{VOID_INVOICE} updated_at = now() WHERE id = $1", client.id, tariff.code)
+                checkout = {"purpose": "subscription", "amount_kzt": tariff.price_kzt, "tariff": tariff.code,
+                            "coins": tariff.coins, "description": f"Nox Bot, тариф «{tariff.name}», 1 месяц"}
+            else:
+                await conn.execute(
+                    f"UPDATE accounts SET status = 'awaiting_invoice', tariff = $2, pay_method = 'invoice',"
+                    f"{VOID_INVOICE} updated_at = now() WHERE id = $1", client.id, tariff.code)
+                mails = [(to, letters.staff_invoice_requested(row["company"], tariff.name, amount, client.id))
+                         for to in mailer.staff_recipients()]
+        elif tariffs.is_free(row["tariff"]) and row["status"] in fulfil.UPGRADABLE and not free:
+            if body.method == "online":
+                inv = await billing.open_invoice(conn, client.id, "upgrade")
+                if inv is None or inv["tariff"] != tariff.code:
+                    inv = await billing.insert_invoice(conn, client.id, "upgrade", tariff.code, tariff.price_kzt,
+                                                       tariff.coins, note="онлайн-оплата")
+                await conn.execute("UPDATE accounts SET upgrade_tariff = NULL WHERE id = $1", client.id)
+                checkout = {"purpose": "upgrade", "amount_kzt": inv["amount_kzt"], "tariff": tariff.code,
+                            "coins": inv["coins"], "invoice_no": inv["number"],
+                            "description": f"Nox Bot, переход на тариф «{tariff.name}», 1 месяц"}
+            else:
+                await conn.execute("UPDATE accounts SET upgrade_tariff = $2, updated_at = now() WHERE id = $1",
+                                   client.id, tariff.code)
+                mails = [(to, letters.staff_upgrade_requested(row["company"], tariff.name, amount, client.id))
+                         for to in mailer.staff_recipients()]
+        else:
+            raise ApiError(409, "wrong_status", "Тариф сейчас сменить нельзя: напишите менеджеру")
+        await audit(conn, "client.tariff_chosen", account_id=client.id, ip=ip,
+                    details={"tariff": tariff.code, "method": "free" if free else body.method,
+                             "status": row["status"]})
+    for to, mail in mails:
+        await mailer.send_quiet(to, *mail)
+    if checkout is not None:
+        await online.start(pool, client.id, **checkout)
+    return await _me(pool, client.id)
 
 
 @router.get("/api/me/invoice", response_model=Invoice)
@@ -282,6 +386,34 @@ async def get_invoice(client: Principal = Depends(current_client)):
     pool = get_pool()
     row = await pool.fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1", client.id)
     return billing.invoice_from_row(row, await billing.is_paid(pool, client.id, row["invoice_no"]))
+
+
+@router.post("/api/me/invoices/{number}/pay-online", response_model=CheckoutOut,
+             dependencies=[Depends(current_client), Depends(csrf_protect)])
+async def post_pay_invoice_online(number: str, client: Principal = Depends(current_client)):
+    """Pay an issued unpaid invoice (subscription, renewal, top-up, upgrade) online instead of a bank transfer."""
+    if payments.get_provider() is None:
+        raise online.disabled()
+    pool = get_pool()
+    acc = await pool.fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1", client.id)
+    if number == acc["invoice_no"] and acc["invoice_amount"] is not None:
+        if acc["status"] != "awaiting_payment" or await billing.is_paid(pool, client.id, number):
+            raise ApiError(409, "already_paid", "Этот счёт уже оплачен или больше не действует")
+        tariff = tariffs.get(acc["tariff"])
+        created = await online.start(pool, client.id, purpose="subscription", amount_kzt=acc["invoice_amount"],
+                                     tariff=acc["tariff"], coins=tariff.coins if tariff else None, invoice_no=number,
+                                     description=f"Nox Bot, оплата по счёту {number}")
+        return CheckoutOut(redirect_url=created.redirect_url, qr_payload=created.qr_payload)
+    inv = await pool.fetchrow(f"SELECT {billing.INVOICE_COLS} FROM invoices WHERE account_id = $1 AND number = $2",
+                              client.id, number)
+    if inv is None:
+        raise ApiError(404, "not_found", "Счёт не найден")
+    if inv["paid_at"] is not None:
+        raise ApiError(409, "already_paid", "Этот счёт уже оплачен")
+    created = await online.start(pool, client.id, purpose=inv["kind"], amount_kzt=inv["amount_kzt"],
+                                 tariff=inv["tariff"], coins=inv["coins"], invoice_no=number,
+                                 description=f"Nox Bot, оплата по счёту {number}")
+    return CheckoutOut(redirect_url=created.redirect_url, qr_payload=created.qr_payload)
 
 
 # ---- LLM gateway: balance, usage, top-up, invoices --------------------------------------------
@@ -320,26 +452,35 @@ async def get_usage(client: Principal = Depends(current_client)):
     )
 
 
-@router.post("/api/me/topup", response_model=Invoice, dependencies=[Depends(current_client), Depends(csrf_protect)])
-async def post_topup(request: Request, client: Principal = Depends(current_client)):
-    """Invoice for a coin pack (an unpaid one from the last 30 days is shown again instead of a new one)."""
+@router.post("/api/me/topup", response_model=TopupOut, dependencies=[Depends(current_client), Depends(csrf_protect)])
+async def post_topup(request: Request, body: TopupChoice | None = None, client: Principal = Depends(current_client)):
+    """Coin pack: online checkout, or a request to the manager (who issues the invoice). An unpaid top-up invoice
+    is shown again instead of a new request."""
+    body = body or TopupChoice()
     pool = get_pool()
+    acc = await pool.fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1", client.id)
+    if acc["period_start"] is None or acc["status"] in ("removed", "rejected"):
+        raise ApiError(409, "llm_disabled", "Пополнение доступно после подключения бота")
+    pack = tariffs.TOPUP
+    if body.method == "online":
+        created = await online.start(pool, client.id, purpose="topup", amount_kzt=pack.price_kzt, coins=pack.coins,
+                                     tariff=pack.code, description=f"Nox Bot, пакет {pack.coins} коинов")
+        return TopupOut(kind="online", redirect_url=created.redirect_url)
+    created_request = False
     async with pool.acquire() as conn, conn.transaction():
-        acc = await conn.fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1 FOR UPDATE", client.id)
-        if acc["period_start"] is None or acc["status"] in ("removed", "rejected"):
-            raise ApiError(409, "llm_disabled", "Пополнение доступно после подключения бота")
-        inv, created = await billing.topup_invoice(conn, client.id)
-        if created:
-            await audit(conn, "client.topup_invoice", account_id=client.id, ip=ratelimit.client_ip(request),
-                        details={"invoice": inv["number"], "amount": inv["amount_kzt"], "coins": inv["coins"]})
-    if created:
-        amount = tariffs.money(inv["amount_kzt"])
-        await mailer.send_quiet(acc["email"], *letters.topup_invoice(acc["contact_name"], inv["number"], amount,
-                                                                     inv["coins"]))
+        await conn.execute("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE", client.id)
+        inv = await billing.open_topup_invoice(conn, client.id)
+        if inv is not None:
+            return TopupOut(kind="invoice", invoice_number=inv["number"])
+        if not await conn.fetchval("SELECT EXISTS (SELECT 1 FROM topup_requests WHERE account_id = $1"
+                                   " AND closed_at IS NULL)", client.id):
+            await conn.execute("INSERT INTO topup_requests(account_id) VALUES ($1)", client.id)
+            await audit(conn, "client.topup_requested", account_id=client.id, ip=ratelimit.client_ip(request))
+            created_request = True
+    if created_request:
         for to in mailer.staff_recipients():
-            await mailer.send_quiet(to, *letters.staff_invoice_issued(acc["company"], inv["number"], "Пакет коинов",
-                                                                      amount))
-    return billing.invoice_from_record(acc, inv)
+            await mailer.send_quiet(to, *letters.staff_topup_requested(acc["company"], client.id))
+    return TopupOut(kind="request")
 
 
 @router.get("/api/me/invoices", response_model=list[InvoiceListItem])

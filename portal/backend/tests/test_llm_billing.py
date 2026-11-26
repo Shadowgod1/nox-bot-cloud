@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from nox_portal import mailer, renewal, tariffs, wallet
+from nox_portal import billing, mailer, renewal, tariffs, wallet
 from tests.conftest import REG, csrf, register_verified, staff_login, unseal
 from tests.gw import ANTHROPIC_MSG, login, make_account, settled, upstream  # noqa: F401
 
@@ -22,6 +22,9 @@ async def _paid_cloud(client, other, pool, internal, *, body=None) -> tuple[int,
     assert (await other.post("/api/me/tariff", headers=csrf(other), json={"tariff": "start"})).status_code == 200
     aid = await pool.fetchval("SELECT id FROM accounts")
     await staff_login(client, pool)
+    r = await client.post(f"/api/staff/applications/{aid}/issue-invoice", headers=csrf(client),
+                          json={"kind": "subscription"})
+    assert r.status_code == 200, r.text
     r = await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client),
                           json={"amount_kzt": 70000, **(body or {})})
     assert r.status_code == 200, r.text
@@ -143,6 +146,13 @@ async def _spend(pool, aid, coins):
         aid, coins, f"t{coins}{aid}{datetime.now().timestamp()}")
 
 
+async def _renewal_invoice(pool, aid):
+    """What staff «Выставить счёт на продление» creates (for tests that have no staff session)."""
+    async with pool.acquire() as conn, conn.transaction():
+        end = await conn.fetchval("SELECT period_end FROM accounts WHERE id = $1", aid)
+        return await billing.insert_invoice(conn, aid, "renewal", "start", 70000, 1000, period_start=end)
+
+
 async def test_rollover_on_time_expires_monthly_keeps_topups(client, pool):
     aid, key = await make_account(pool, coins=1000)
     await pool.execute(
@@ -155,11 +165,26 @@ async def test_rollover_on_time_expires_monthly_keeps_topups(client, pool):
     old_end = await pool.fetchval("SELECT period_end FROM accounts WHERE id = $1", aid)
     mailer.OUTBOX.clear()
     out = await renewal.tick()
-    assert out["invoices"] == 1 and out["renewed"] == 0
+    assert out["renewal_notices"] == 1 and out["renewed"] == 0
+    assert await pool.fetchval("SELECT count(*) FROM invoices") == 0, "renewal invoices are a staff action now"
+    staff_mail = next(m for m in mailer.OUTBOX if m.to == "staff@example.kz")
+    assert "Пора выставить счёт на продление" in staff_mail.subject and f"/staff/applications/{aid}" in staff_mail.text
+    client_mail = next(m for m in mailer.OUTBOX if m.to == "owner@example.kz")
+    assert "скоро продление" in client_mail.subject and "/cabinet" in client_mail.text
+    assert (await renewal.tick())["renewal_notices"] == 0, "once per period"
+    await staff_login(client, pool)
+    assert (await client.get(f"/api/staff/applications/{aid}")).json()["renewal_due"] is True
+    mailer.OUTBOX.clear()
+    r = await client.post(f"/api/staff/applications/{aid}/issue-invoice", headers=csrf(client),
+                          json={"kind": "renewal", "comment": "за декабрь"})
+    assert r.status_code == 200, r.text
+    assert (await client.post(f"/api/staff/applications/{aid}/issue-invoice", headers=csrf(client),
+                              json={"kind": "renewal"})).status_code == 409
+    assert "за декабрь" in mailer.OUTBOX[0].text and mailer.OUTBOX[0].to == "owner@example.kz"
+    assert (await client.get(f"/api/staff/applications/{aid}")).json()["renewal_due"] is False
     inv = await pool.fetchrow("SELECT * FROM invoices")
     assert inv["kind"] == "renewal" and inv["period_start"] == old_end and inv["amount_kzt"] == 70000
-    assert {m.to for m in mailer.OUTBOX} == {"owner@example.kz", "staff@example.kz"}
-    await staff_login(client, pool)
+    assert inv["note"] == "за декабрь" and inv["staff_id"] is not None
     r = await client.post(f"/api/staff/invoices/{inv['id']}/mark-paid", headers=csrf(client),
                           json={"amount_kzt": 70000, "reference": "п/п 5"})
     assert r.status_code == 200, r.text
@@ -169,14 +194,14 @@ async def test_rollover_on_time_expires_monthly_keeps_topups(client, pool):
     bal = await wallet.balance(pool, aid)
     assert bal.left == Decimal(10500) and bal.monthly == Decimal(1000)
     assert await pool.fetchval("SELECT count(*) FROM payments WHERE invoice_no = $1", inv["number"]) == 1
-    assert (await renewal.tick())["invoices"] == 0, "next renewal invoice only 5 days before the new end"
+    assert (await renewal.tick())["renewal_notices"] == 0, "next notice only 5 days before the new end"
 
 
 async def test_unused_monthly_does_not_roll_over(pool):
     aid, _ = await make_account(pool, coins=1000)
     await _spend(pool, aid, 100)
     await pool.execute("UPDATE accounts SET period_end = now() - interval '1 minute' WHERE id = $1", aid)
-    await renewal.issue_renewal_invoices()
+    await _renewal_invoice(pool, aid)
     await pool.execute("UPDATE invoices SET paid_at = now()")
     assert await renewal.rollover_due() == 1
     bal = await wallet.balance(pool, aid)
@@ -188,10 +213,10 @@ async def test_grace_then_suspend_then_pay_resumes(client, pool, upstream):
     aid, key = await make_account(pool, local=False)
     await pool.execute("UPDATE accounts SET period_end = now() - interval '2 days' WHERE id = $1", aid)
     out = await renewal.tick()
-    assert out["invoices"] == 1 and out["suspended"] == 0
+    assert out["renewal_notices"] == 1 and out["suspended"] == 0
     assert (await _call(client, key)).status_code == 200, "grace: still working"
     await pool.execute("UPDATE accounts SET period_end = period_end - interval '2 days' WHERE id = $1", aid)
-    await pool.execute("UPDATE invoices SET period_start = period_start - interval '2 days'")
+    await _renewal_invoice(pool, aid)
     mailer.OUTBOX.clear()
     assert (await renewal.tick())["suspended"] == 1
     acc = await pool.fetchrow("SELECT status, suspend_reason FROM accounts")
@@ -219,6 +244,7 @@ async def test_local_account_suspends_without_job(pool):
     out = await renewal.tick()
     assert out["suspended"] == 1
     assert await pool.fetchval("SELECT count(*) FROM jobs") == 0
+    await _renewal_invoice(pool, aid)
     await pool.execute("UPDATE invoices SET paid_at = now()")
     assert await renewal.rollover_due() == 1
     assert await pool.fetchval("SELECT status FROM accounts") == "active"
@@ -238,22 +264,35 @@ async def test_low_balance_mails_once_per_level(pool):
 # ---- top-ups and the cabinet ----------------------------------------------------------------
 
 
-async def test_topup_invoice_and_payment(client, other, pool, upstream):
+async def test_topup_through_manager(client, other, pool, upstream):
     aid, key = await make_account(pool, coins=0)
     await login(other)
     mailer.OUTBOX.clear()
-    r = await other.post("/api/me/topup", headers=csrf(other))
+    r = await other.post("/api/me/topup", headers=csrf(other), json={"method": "invoice"})
     assert r.status_code == 200, r.text
-    inv = r.json()
+    assert r.json() == {"kind": "request", "invoice_number": None, "redirect_url": None}
+    assert await pool.fetchval("SELECT count(*) FROM invoices") == 0
+    assert [m.to for m in mailer.OUTBOX] == ["staff@example.kz"] and "пополнение" in mailer.OUTBOX[0].subject
+    # pressed again: still one open request, no second notice
+    assert (await other.post("/api/me/topup", headers=csrf(other))).json()["kind"] == "request"
+    assert len(mailer.OUTBOX) == 1
+    assert await pool.fetchval("SELECT count(*) FROM topup_requests") == 1
+    await staff_login(client, pool)
+    detail = (await client.get(f"/api/staff/applications/{aid}")).json()
+    assert detail["topup_requested_at"] is not None
+    r = await client.post(f"/api/staff/applications/{aid}/issue-invoice", headers=csrf(client), json={"kind": "topup"})
+    assert r.status_code == 200, r.text
+    number = r.json()["number"]
+    assert r.json()["amount_kzt"] == 9900
+    assert mailer.OUTBOX[-1].to == "owner@example.kz" and number in mailer.OUTBOX[-1].subject
+    assert (await client.get(f"/api/staff/applications/{aid}")).json()["topup_requested_at"] is None
+    # the client now sees the open invoice instead of a new request
+    again = (await other.post("/api/me/topup", headers=csrf(other))).json()
+    assert again == {"kind": "invoice", "invoice_number": number, "redirect_url": None}
+    inv = (await other.get(f"/api/me/invoices/{number}")).json()
     assert inv["kind"] == "topup" and inv["amount_kzt"] == 9900 and inv["tariff"]["coins"] == 10000
     assert not inv["paid"]
-    again = (await other.post("/api/me/topup", headers=csrf(other))).json()
-    assert again["number"] == inv["number"], "an open top-up invoice is reused"
-    assert len(mailer.OUTBOX) == 2  # client + staff, once
-    printable = (await other.get(f"/api/me/invoices/{inv['number']}")).json()
-    assert printable["number"] == inv["number"]
     assert (await _call(client, key)).status_code == 402
-    await staff_login(client, pool)
     inv_id = await pool.fetchval("SELECT id FROM invoices")
     r = await client.post(f"/api/staff/invoices/{inv_id}/mark-paid", headers=csrf(client), json={"amount_kzt": 9900})
     assert r.status_code == 200
@@ -264,8 +303,13 @@ async def test_topup_invoice_and_payment(client, other, pool, upstream):
     lst = (await other.get("/api/me/invoices")).json()
     assert lst[0]["paid"] is True and lst[0]["kind"] == "topup"
     assert "начислено 10 000 коинов" in mailer.OUTBOX[-1].text
-    staff_view = (await client.get(f"/api/staff/applications/{aid}/invoices/{inv['number']}")).json()
+    staff_view = (await client.get(f"/api/staff/applications/{aid}/invoices/{number}")).json()
     assert staff_view["paid"] is True
+    # staff may issue a custom pack without a request
+    r = await client.post(f"/api/staff/applications/{aid}/issue-invoice", headers=csrf(client),
+                          json={"kind": "topup", "amount_kzt": 45000, "coins": 50000})
+    assert r.status_code == 200 and r.json()["amount_kzt"] == 45000
+    assert await pool.fetchval("SELECT coins FROM invoices WHERE number = $1", r.json()["number"]) == 50000
 
 
 async def test_topup_needs_gateway(other, pool):

@@ -44,6 +44,8 @@ LIMITS: dict[str, tuple[int, int]] = {
     "staff-login:email": (20, 600),
     # LLM gateway: requests with a missing / unknown virtual key, per IP
     "llm-badkey:ip": (60, 600),
+    # online payment webhooks per IP (providers retry; a flood is cut here and in nginx)
+    "payhook:ip": (120, 60),
 }
 
 

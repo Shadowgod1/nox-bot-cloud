@@ -139,6 +139,8 @@ async def test_approve_without_key_and_slug_change(client, other, pool):
     ({"coins": 30000, "slug": "admin"}, 422),
     ({"coins": 30000, "anthropic_key": "not-a-key"}, 422),
     ({"coins": 30000, "anthropic_key": "sk-ant-api03-has space inside-xxxxxxxx"}, 422),
+    ({}, 422),  # no tariff chosen: coins are required
+    ({"tariff": "gold"}, 422),
 ])
 async def test_approve_validation(client, other, pool, body, code):
     aid = await _verified_account_id(other, pool)
@@ -193,9 +195,9 @@ async def test_audit_log_records_staff_actions(client, other, pool):
 async def test_staff_config(client, pool):
     await staff_login(client, pool)
     cfg = (await client.get("/api/staff/config")).json()
-    assert len(cfg.pop("tariffs")) == 3
+    assert [t["code"] for t in cfg.pop("tariffs")] == ["start", "business", "pro", "free"]
     assert cfg.pop("topup") == {"code": "topup", "name": "Пакет коинов", "price_kzt": 9900, "coins": 10000,
-                                "description": "10 000 коинов сверх месячного пакета, не сгорают"}
+                                "description": "10 000 коинов сверх месячного пакета, не сгорают", "available": True}
     assert cfg.pop("gateway_url") == "https://bot.example.kz"
     assert cfg == {"coin_presets": [30000, 60000, 120000], "instance_domain": "example.kz",
-                   "custom_key_supported": True}
+                   "custom_key_supported": True, "online_payments": False}

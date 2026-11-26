@@ -55,6 +55,22 @@ class Settings(BaseSettings):
     # days the client has to pay an invoice (shown on it)
     invoice_due_days: int = 5
 
+    # ---- Free test tariff (tariffs.FREE) ----
+    # shown to clients in the tariff picker; false = only staff can assign it
+    free_tariff_public: bool = True
+    # at most this many Free accounts approved / provisioning / active at once
+    free_max_active: int = 5
+    # a Free account is suspended this many days after approval unless it moves to a paid tariff
+    free_days: int = 14
+
+    # ---- online payments (nox_portal/payments) ----
+    # "" / none = online payment is off (only invoices via a manager); mock = fake checkout for tests
+    payment_provider: str = ""
+    # the mock provider works only with NOX_EMAIL_MODE=log or with this explicitly set to true
+    payment_mock_allowed: bool = False
+    # mock only: pretend the provider returns an opaque recurring token
+    payment_mock_recurring: bool = False
+
     # ---- LLM gateway (/llm/<provider>/...) ----
     # Nox company keys of the providers; a provider without a key answers 503. Only in this .env.
     upstream_anthropic_key: str = ""
@@ -74,7 +90,8 @@ class Settings(BaseSettings):
     # ---- billing periods ----
     # days after period_end an unpaid renewal is tolerated before the account is suspended
     grace_days: int = 3
-    # renewal invoices are issued this many days before the period ends
+    # staff are reminded to issue the renewal invoice (and the client gets a reminder) this many days before the
+    # period ends
     renewal_invoice_days: int = 5
     # background billing loop (renewals, rollover, suspension, daily summary); 0 = off (tests)
     billing_tick_seconds: int = 300

@@ -35,11 +35,98 @@ def already_registered(name: str) -> tuple[str, str]:
     )
 
 
-def staff_tariff_chosen(company: str, number: str, tariff_name: str, amount: str) -> tuple[str, str]:
+def _comment(comment: str) -> str:
+    return f"Комментарий менеджера: {comment}\n\n" if comment.strip() else ""
+
+
+def staff_invoice_requested(company: str, tariff_name: str, amount: str, account_id: int) -> tuple[str, str]:
     return (
-        f"Выставлен счёт {number}: {company}",
-        f"Клиент выбрал тариф «{tariff_name}», счёт {number} на {amount}.\n\n"
-        f"После поступления оплаты отметьте её в портале: {_portal()}/staff",
+        f"Клиент выбрал оплату по счёту: {company}",
+        f"Клиент выбрал тариф «{tariff_name}» ({amount} в месяц) и оплату по счёту через менеджера.\n\n"
+        f"Выставите счёт в карточке заявки: {_portal()}/staff/applications/{account_id}",
+    )
+
+
+def staff_upgrade_requested(company: str, tariff_name: str, amount: str, account_id: int) -> tuple[str, str]:
+    return (
+        f"Переход с Free на платный тариф: {company}",
+        f"Клиент на тестовом тарифе хочет перейти на «{tariff_name}» ({amount} в месяц) и оплатить по счёту.\n\n"
+        f"Выставите счёт в карточке заявки: {_portal()}/staff/applications/{account_id}",
+    )
+
+
+def staff_topup_requested(company: str, account_id: int) -> tuple[str, str]:
+    return (
+        f"Запрос на пополнение коинов: {company}",
+        "Клиент просит выставить счёт на пакет коинов.\n\n"
+        f"Выставите счёт в карточке заявки: {_portal()}/staff/applications/{account_id}",
+    )
+
+
+def staff_renewal_due(company: str, period_end, tariff_name: str, amount: str, account_id: int) -> tuple[str, str]:
+    return (
+        f"Пора выставить счёт на продление: {company}",
+        f"Оплаченный месяц заканчивается {_date(period_end)} (тариф «{tariff_name}», {amount}).\n\n"
+        f"Выставите счёт на продление в карточке: {_portal()}/staff/applications/{account_id}",
+    )
+
+
+def renewal_reminder(name: str, period_end, grace_days: int) -> tuple[str, str]:
+    return (
+        "Nox Bot: скоро продление",
+        f"Здравствуйте, {name}!\n\n"
+        f"Оплаченный месяц обслуживания Nox Bot заканчивается {_date(period_end)}. Менеджер пришлёт счёт на "
+        f"продление в ближайшие дни, он появится и в личном кабинете: {_portal()}/cabinet\n\n"
+        f"Если оплата не поступит в течение {grace_days} дней после окончания месяца, работа бота будет "
+        "приостановлена (данные сохранятся).",
+    )
+
+
+def staff_free_started(company: str, email: str, slug: str) -> tuple[str, str]:
+    return (
+        f"Подключён тест (Free): {company}",
+        f"Клиент выбрал тариф Free (тест), бот создаётся автоматически.\n\nE-mail: {email}\n"
+        f"Адрес: {slug}.{get_settings().instance_domain}\n\n{_portal()}/staff",
+    )
+
+
+def trial_ended(name: str) -> tuple[str, str]:
+    return (
+        "Nox Bot: тестовый период закончился",
+        f"Здравствуйте, {name}!\n\n"
+        "Тестовый период закончился, работа бота приостановлена. Настройки и данные сохранены.\n\n"
+        f"Чтобы продолжить с тем же ботом, выберите платный тариф в личном кабинете: {_portal()}/cabinet",
+    )
+
+
+def staff_trial_ended(company: str) -> tuple[str, str]:
+    return (
+        f"Тест закончился: {company}",
+        f"Тестовый период (Free) закончился, аккаунт приостановлен до оплаты платного тарифа.\n\n{_portal()}/staff",
+    )
+
+
+def upgraded(name: str, tariff_name: str) -> tuple[str, str]:
+    return (
+        "Nox Bot: тариф подключён",
+        f"Здравствуйте, {name}!\n\n"
+        f"Оплата получена, подключён тариф «{tariff_name}». Бот продолжает работу, новый пакет коинов уже на "
+        f"балансе.\n\nЛичный кабинет: {_portal()}/cabinet",
+    )
+
+
+def staff_online_paid(company: str, what: str, amount: str, provider: str) -> tuple[str, str]:
+    return (
+        f"Онлайн-оплата: {company}, {amount}",
+        f"{what}: получена онлайн-оплата {amount} ({provider}). Платёж записан в журнал, действие выполнено "
+        f"автоматически.\n\n{_portal()}/staff",
+    )
+
+
+def staff_online_problem(company: str, what: str, amount: str, provider: str, reason: str) -> tuple[str, str]:
+    return (
+        f"Онлайн-оплата требует внимания: {company}",
+        f"{what}, {amount} ({provider}): {reason}.\n\n{_portal()}/staff",
     )
 
 
@@ -54,7 +141,7 @@ def staff_new_application(company: str, contact: str, email: str, phone: str, sl
     )
 
 
-def invoice(name: str, number: str, tariff_name: str, amount: str, due_days: int) -> tuple[str, str]:
+def invoice(name: str, number: str, tariff_name: str, amount: str, due_days: int, comment: str = "") -> tuple[str, str]:
     s = get_settings()
     requisites = "\n".join(
         f"{label}: {value}" for label, value in (
@@ -69,6 +156,7 @@ def invoice(name: str, number: str, tariff_name: str, amount: str, due_days: int
         f"Оплатите его в течение {due_days} рабочих дней банковским переводом, в назначении платежа укажите "
         f"номер счёта {number}.\n\n"
         f"{requisites}\n\n"
+        f"{_comment(comment)}"
         f"Счёт для печати (PDF): {_portal()}/invoice\n\n"
         "После поступления оплаты мы создадим бота и пришлём письмо со ссылкой на панель управления.",
     )
@@ -125,25 +213,38 @@ def _n(value: int) -> str:
 
 
 def renewal_invoice(name: str, number: str, tariff_name: str, amount: str, period_start,
-                    grace_days: int) -> tuple[str, str]:
+                    grace_days: int, comment: str = "") -> tuple[str, str]:
     return (
         f"Счёт {number}: продление Nox Bot",
         f"Здравствуйте, {name}!\n\n"
         f"Выставлен счёт {number} за следующий месяц обслуживания Nox Bot (тариф «{tariff_name}») на {amount}. "
         f"Новый месяц начинается {_date(period_start)}, тогда же начисляется месячный пакет коинов.\n\n"
+        f"{_comment(comment)}"
         f"Счёт для печати (PDF) — в личном кабинете: {_portal()}/cabinet\n\n"
         f"Если оплата не поступит в течение {grace_days} дней после начала нового месяца, работа бота будет "
         "приостановлена (данные сохранятся).",
     )
 
 
-def topup_invoice(name: str, number: str, amount: str, coins: int) -> tuple[str, str]:
+def topup_invoice(name: str, number: str, amount: str, coins: int, comment: str = "") -> tuple[str, str]:
     return (
         f"Счёт {number}: пакет коинов Nox Bot",
         f"Здравствуйте, {name}!\n\n"
         f"Выставлен счёт {number} на пакет {_n(coins)} коинов: {amount}.\n"
         "Коины начислятся сразу после поступления оплаты и не сгорают в конце месяца.\n\n"
+        f"{_comment(comment)}"
         f"Счёт для печати (PDF): {_portal()}/cabinet",
+    )
+
+
+def upgrade_invoice(name: str, number: str, tariff_name: str, amount: str, comment: str = "") -> tuple[str, str]:
+    return (
+        f"Счёт {number}: тариф «{tariff_name}» Nox Bot",
+        f"Здравствуйте, {name}!\n\n"
+        f"Выставлен счёт {number} на переход с тестового тарифа на «{tariff_name}»: {amount} за месяц.\n"
+        "После поступления оплаты бот продолжит работу на новом тарифе, настройки сохранятся.\n\n"
+        f"{_comment(comment)}"
+        f"Счёт для печати (PDF) — в личном кабинете: {_portal()}/cabinet",
     )
 
 
