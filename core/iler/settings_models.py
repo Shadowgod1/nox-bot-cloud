@@ -37,6 +37,9 @@ class WeeklyHours(BaseModel):
     sun: DayHours = DayHours()
 
 
+NO_COINS_MESSAGE_DEFAULT = "Спасибо за сообщение! Сейчас подключится менеджер и ответит вам."
+
+
 class BotSettings(BaseModel):
     enabled: bool = True
     name: str = "Ассистент"
@@ -57,6 +60,9 @@ class BotSettings(BaseModel):
     booking_reject_template: str = "К сожалению, не получилось забронировать: {reason}"
     booking_request_timeout_min: int = Field(15, ge=1, le=240)
     booking_timeout_message: str = "Администратор скоро свяжется с вами по заявке."
+    # Sent once per conversation when the coins are used up (or model access is suspended) and the
+    # conversation goes to the operator; empty = NO_COINS_MESSAGE_DEFAULT.
+    no_coins_message: str = Field(NO_COINS_MESSAGE_DEFAULT, max_length=1000)
 
     @field_validator("template_values")
     @classmethod

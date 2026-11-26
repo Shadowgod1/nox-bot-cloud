@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator
 
 from iler.auth.deps import User, csrf_protect, current_user
-from iler.config import brand_name
+from iler.config import brand_company, brand_name, gateway_mode
 from iler.errors import ApiError
 
 log = logging.getLogger("iler.api.test_chat")
@@ -43,15 +43,20 @@ async def post_test_chat(body: TestChatRequest, _user: User = Depends(current_us
     from iler.engine.turn import run_turn  # lazy: engine is optional at import time
     from iler.engine.prompt import BotNotConfigured
     from iler.llm.base import ChatMessage, LlmError, public_error, rejected_providers
-    from iler.usage import CoinsExhausted
+    from iler.usage import AccessSuspended, CoinsExhausted
 
     history = [ChatMessage(role=m.role, content=m.content) for m in body.messages]
     try:
         outcome = await run_turn(None, dry_run=True, history=history)
     except BotNotConfigured as e:
         raise ApiError(409, "bot_not_configured", "Промпт бота пуст: настройте бота по шаблону") from e
+    except AccessSuspended as e:
+        raise ApiError(409, "llm_access_suspended",
+                       f"Доступ к моделям приостановлен — обратитесь в {brand_company()}") from e
     except CoinsExhausted as e:
-        raise ApiError(409, "coins_exhausted", f"Лимит коинов {brand_name()} на этот месяц исчерпан") from e
+        text = (f"Коины {brand_name()} закончились" if gateway_mode()
+                else f"Лимит коинов {brand_name()} на этот месяц исчерпан")
+        raise ApiError(409, "coins_exhausted", text) from e
     except LlmError as e:
         # Never 502/504: Cloudflare (cloud edition) replaces those bodies with its own page and the admin
         # loses the reason. 424 = the provider refused ILER's key, 503 = provider unreachable or failing.

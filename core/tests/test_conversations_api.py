@@ -622,7 +622,7 @@ async def test_coin_alert_compares_unrounded_ratio(pool, monkeypatch):
     await _put_spend(pool, 9999.6)  # 99.996%: shows as 100.0% but the limit is not used up
     await usage.after_spend()
     month = f"{usage.month_start(datetime.now(UTC), usage._tz()):%Y-%m}"
-    assert sent == [f"coins:{month}:10000:80"]
+    assert sent == [f"coins:{month}:10000:95"]  # the 5%-left level, not "exhausted"
     assert not await usage.limit_reached()
     usage.invalidate()
 

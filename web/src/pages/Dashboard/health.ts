@@ -17,7 +17,8 @@ export function deriveStatus(d: Pick<Dashboard, 'whatsapp' | 'bot_enabled' | 'er
   const red: string[] = []
   if (d.whatsapp.status === 'degraded') red.push('WhatsApp подключён, но сообщения не отправляются')
   else if (d.whatsapp.status !== 'open') red.push('WhatsApp не подключён — бот не видит сообщения клиентов')
-  if (d.coins.exhausted) red.push('Лимит коинов исчерпан — бот передаёт сообщения оператору')
+  const zero = coinsZeroText(d.coins)
+  if (zero) red.push(zero)
   if (!d.bot_enabled) red.push('Бот выключен — отвечают только операторы')
   if (red.length) return { level: 'danger', title: 'Бот не отвечает', reasons: red }
 
@@ -32,6 +33,15 @@ export function deriveStatus(d: Pick<Dashboard, 'whatsapp' | 'bot_enabled' | 'er
   if (amber.length) return { level: 'warn', title: 'Бот работает, но требует внимания', reasons: amber }
 
   return { level: 'ok', title: 'Бот работает и отвечает клиентам', reasons: [] }
+}
+
+/** Why the bot hands everything to the operator because of coins, or null while it can answer. */
+export function coinsZeroText(c: DashboardCoins): string | null {
+  if (c.blocked === 'key_revoked') return 'Доступ к моделям приостановлен — бот передаёт диалоги оператору'
+  if (!c.exhausted) return null
+  return c.source === 'gateway'
+    ? 'Коины закончились — бот передаёт диалоги оператору'
+    : 'Лимит коинов исчерпан — бот передаёт сообщения оператору'
 }
 
 /** Threshold color for the coins bar: <80 neutral, ≥80 amber, ≥100 (or exhausted) red. */
@@ -50,9 +60,15 @@ export interface Forecast {
 
 /** The key message of the coins card: will the limit last until the month's end? */
 export function coinsForecast(c: DashboardCoins): Forecast | null {
+  const gateway = c.source === 'gateway'
+  if (gateway && c.blocked === 'key_revoked') {
+    return { level: 'danger', text: 'Доступ к моделям приостановлен. Бот отвечает клиентам сообщением-заглушкой и передаёт диалоги оператору.' }
+  }
   if (c.limit <= 0) return null
   if (c.exhausted) {
-    return { level: 'danger', text: 'Лимит на этот месяц исчерпан. Бот передаёт новые сообщения оператору до начала следующего месяца.' }
+    return gateway
+      ? { level: 'danger', text: 'Коины закончились. Бот отвечает клиентам сообщением-заглушкой и передаёт диалоги оператору, пока баланс не пополнят.' }
+      : { level: 'danger', text: 'Лимит на этот месяц исчерпан. Бот передаёт новые сообщения оператору до начала следующего месяца.' }
   }
   const pace = `При текущем расходе (~${formatNumber(c.avg_per_day)} в день)`
   if (c.runs_out_on) {
@@ -60,7 +76,8 @@ export function coinsForecast(c: DashboardCoins): Forecast | null {
     return { level, text: `${pace} коинов хватит до ${formatDayMonth(c.runs_out_on)}` }
   }
   const leftover = Math.max(0, c.limit - c.projected_month)
-  return { level: 'ok', text: `${pace} коинов хватит до конца месяца, останется ~${formatNumber(leftover)}` }
+  const until = gateway ? (c.period_end ? `до ${formatDayMonth(c.period_end)}` : 'до конца периода') : 'до конца месяца'
+  return { level: 'ok', text: `${pace} коинов хватит ${until}, останется ~${formatNumber(leftover)}` }
 }
 
 /* ---------- formatting ---------- */
@@ -79,6 +96,12 @@ export function formatPercent(p: number): string {
 export function formatDayMonth(ymd: string): string {
   const d = parseYmd(ymd)
   return d ? new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' }).format(d) : ymd
+}
+
+/** ISO time -> "14:05" in the browser's time zone. */
+export function formatTime(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(d)
 }
 
 /** 2300 -> "~2,3 с". */

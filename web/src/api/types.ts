@@ -105,6 +105,18 @@ export interface DashboardCoins {
   by_model: { model: string; coins: number }[]
   /** Models used this month with no price entry: billed at the highest tariff. */
   unpriced_models: string[]
+  /** "gateway": limit/remaining/spent come from the LLM gateway balance; days/by_model stay local stats. */
+  source?: 'local' | 'gateway'
+  /** Gateway: end of the paid period (ISO-8601). */
+  period_end?: string | null
+  /** Gateway: the balance could not be read just now; the last known value is shown. */
+  stale?: boolean
+  /** Gateway: when the shown balance was read (ISO-8601). */
+  balance_at?: string | null
+  /** Gateway: set while the bot hands every conversation to the operator. */
+  blocked?: 'insufficient_coins' | 'key_revoked' | null
+  /** Where the owner tops up coins; null = no link. */
+  topup_url?: string | null
 }
 
 export type ConversationStatus = 'active' | 'paused' | 'needs_operator' | 'closed'
@@ -215,6 +227,8 @@ export interface BotSettings {
   booking_reject_template: string
   booking_request_timeout_min: number
   booking_timeout_message: string
+  /** Sent once per conversation when the coins run out and the conversation goes to the operator. */
+  no_coins_message: string
 }
 
 export type LlmProvider = 'openai' | 'gemini' | 'anthropic'

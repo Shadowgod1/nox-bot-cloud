@@ -6,8 +6,14 @@ price overrides (ILER_MODEL_PRICES, JSON ``{"model-prefix": [input_usd_per_mtok,
 are set by the ILER technician in .env; 0 means no limit.
 
 When the limit is reached the bot stops answering by itself and hands every new conversation to the
-operator; admins get a WhatsApp alert at 80% and at 100% (once per month and limit each; a level is
-marked as sent only after WhatsApp took the message, so a failed alert is retried on the next turn).
+operator; admins get a WhatsApp alert at 80%, 95% and 100% spent (20% and 5% left, and none; once per
+month and limit each; a level is marked as sent only after WhatsApp took the message, so a failed alert
+is retried on the next turn).
+
+LLM gateway mode (ILER_LLM_GATEWAY_URL, see ``iler.llm.gateway``): the gateway is the authority on coins.
+Local spend is still computed (per-model and per-day stats), but the local limit never blocks; the
+alerts follow the gateway balance (``coins_left`` of ``monthly_limit`` for the period ending
+``period_end``).
 
 Prices: a model with no entry in the price table (DEFAULT_PRICES + ILER_MODEL_PRICES) is billed at
 FALLBACK_PRICE, the highest tariff, so it never looks cheaper than it is. Such models are listed in
@@ -30,7 +36,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel
 
 from iler import settings_store
-from iler.config import brand_company, brand_name, get_settings
+from iler.config import brand_company, brand_name, gateway_mode, get_settings, topup_url
 from iler.db.pool import get_pool
 
 log = logging.getLogger("iler.usage")
@@ -43,12 +49,16 @@ DEFAULT_PRICES: dict[str, tuple[float, float]] = {
     "claude-haiku-5-5": (0.10, 0.50),
 }
 FALLBACK_PRICE = (2.0, 10.0)
-ALERT_LEVELS = (80, 100)
+ALERT_LEVELS = (80, 95, 100)  # spent share: 20 % left, 5 % left, exhausted
 _CACHE_S = 30.0
 
 
 class CoinsExhausted(Exception):
-    """The monthly coin limit is used up (raised for the test chat)."""
+    """The coins are used up: the local monthly limit, or the gateway balance (HTTP 402)."""
+
+
+class AccessSuspended(CoinsExhausted):
+    """The LLM gateway revoked or suspended the install's key (HTTP 401 key_revoked)."""
 
 
 class UsageAlerts(BaseModel):
@@ -191,7 +201,7 @@ def invalidate() -> None:
 async def limit_reached() -> bool:
     """Cheap check before each bot turn (cached for a few seconds)."""
     global _cache
-    if get_settings().monthly_coins <= 0:
+    if get_settings().monthly_coins <= 0 or gateway_mode():  # in gateway mode the gateway decides
         return False
     if _cache and time.monotonic() - _cache[0] < _CACHE_S:
         return _cache[1]
@@ -200,51 +210,101 @@ async def limit_reached() -> bool:
     return reached
 
 
+@dataclass
+class _AlertSource:
+    """What the coin alerts are computed from: the local monthly limit or the gateway balance."""
+
+    state_key: str  # settings_store key of the UsageAlerts state
+    period: str  # month ("2026-11") or the gateway period end
+    limit: int
+    spent: float
+    key_prefix: str  # idempotency key prefix of the WhatsApp alert
+    runs_out_on: date | None = None
+    gateway: bool = False
+
+
+async def _local_source() -> _AlertSource:
+    usage = await month_usage()
+    return _AlertSource(state_key="usage_alerts", period=f"{month_start(datetime.now(UTC), _tz()):%Y-%m}",
+                        limit=usage.limit, spent=usage.spent, key_prefix="coins", runs_out_on=usage.runs_out_on)
+
+
+async def _gateway_source() -> _AlertSource | None:
+    from iler.llm import gateway
+
+    view = await gateway.balance()
+    b = view.balance
+    if b is None or b.monthly_limit <= 0:
+        return None
+    limit = max(int(round(b.monthly_limit)), 1)
+    spent = max(b.monthly_limit - b.coins_left, 0.0)
+    if view.blocked == gateway.INSUFFICIENT_COINS:
+        spent = max(spent, float(limit))  # the gateway said 402: the coins are gone whatever the cache says
+    period = b.period_end or f"{month_start(datetime.now(UTC), _tz()):%Y-%m}"
+    return _AlertSource(state_key="usage_alerts_gateway", period=period, limit=limit, spent=spent,
+                        key_prefix="coins-gw", gateway=True)
+
+
+def _alert_text(src: _AlertSource, level: int) -> str:
+    if src.gateway:
+        if level >= 100:
+            topup = topup_url()
+            how = f"Пополнить: {topup}" if topup else f"Чтобы пополнить баланс, обратитесь в {brand_company()}."
+            return (f"{brand_name()} Bot: коины закончились. Бот больше не отвечает сам: клиент получает "
+                    f"сообщение «сейчас подключится менеджер», диалоги ждут оператора в админке. {how}")
+        pct = math.floor(src.spent / src.limit * 100 + 1e-9)
+        left = max(src.limit - src.spent, 0.0)
+        return (f"{brand_name()} Bot: израсходовано {pct}% коинов ({src.spent:.0f} из {src.limit}), "
+                f"осталось {left:.0f}.")
+    if level >= 100:
+        return (f"{brand_name()} Bot: лимит коинов на месяц исчерпан ({src.spent:.0f} из {src.limit}). "
+                "Бот больше не отвечает сам: новые сообщения ждут оператора в админке. "
+                f"Чтобы увеличить лимит, обратитесь в {brand_company()}.")
+    pct = math.floor(src.spent / src.limit * 100 + 1e-9)  # floor: never claim more than was used
+    out = f" При текущем темпе лимит закончится {src.runs_out_on:%d.%m}." if src.runs_out_on else ""
+    return f"{brand_name()} Bot: израсходовано {pct}% коинов на месяц ({src.spent:.0f} из {src.limit}).{out}"
+
+
 async def after_spend() -> None:
-    """Called after an LLM turn: refresh the cache and send the 80% / 100% alerts once per month and limit.
+    """Called after an LLM turn: refresh the cache and send the 80% / 95% / 100% alerts once per period
+    and limit (the local month and limit, or the gateway period and monthly limit in gateway mode).
 
     A level is marked as sent only when WhatsApp took the alert for at least one admin target; otherwise
     it is retried on the next call (the idempotency key keeps already-delivered targets from repeats).
     With no admin targets at all the level is marked anyway, so it is not retried on every turn."""
     invalidate()
-    if get_settings().monthly_coins <= 0:
+    if not gateway_mode() and get_settings().monthly_coins <= 0:
         return
     try:
-        usage = await month_usage()
-        month = f"{month_start(datetime.now(UTC), _tz()):%Y-%m}"
-        state = await settings_store.get("usage_alerts", UsageAlerts)
-        if state.month != month:
-            state = UsageAlerts(month=month, limit=usage.limit)
+        src = await (_gateway_source() if gateway_mode() else _local_source())
+        if src is None:
+            return
+        state = await settings_store.get(src.state_key, UsageAlerts)
+        if state.month != src.period:
+            state = UsageAlerts(month=src.period, limit=src.limit)
         elif state.limit is None:  # saved before the limit was tracked: adopt it, keep what was sent
-            state.limit = usage.limit
-        elif state.limit != usage.limit:  # ILER changed the limit: re-evaluate the levels for the new one
-            state = UsageAlerts(month=month, limit=usage.limit)
+            state.limit = src.limit
+        elif state.limit != src.limit:  # the limit changed: re-evaluate the levels for the new one
+            state = UsageAlerts(month=src.period, limit=src.limit)
         # same comparison as MonthUsage.exhausted (no rounding of the percentage)
-        due = [lvl for lvl in ALERT_LEVELS if usage.spent >= usage.limit * lvl / 100 and lvl not in state.sent]
+        due = [lvl for lvl in ALERT_LEVELS if src.spent >= src.limit * lvl / 100 and lvl not in state.sent]
         if not due:
-            await settings_store.put("usage_alerts", state)
+            await settings_store.put(src.state_key, state)
             return
         level = max(due)
         from iler.engine import sender
         from iler.settings_models import NotifySettings
 
-        if level >= 100:
-            text = (f"{brand_name()} Bot: лимит коинов на месяц исчерпан ({usage.spent:.0f} из {usage.limit}). "
-                    "Бот больше не отвечает сам: новые сообщения ждут оператора в админке. "
-                    f"Чтобы увеличить лимит, обратитесь в {brand_company()}.")
-        else:
-            pct = math.floor(usage.spent / usage.limit * 100 + 1e-9)  # floor: never claim more than was used
-            out = f" При текущем темпе лимит закончится {usage.runs_out_on:%d.%m}." if usage.runs_out_on else ""
-            text = f"{brand_name()} Bot: израсходовано {pct}% коинов на месяц ({usage.spent:.0f} из {usage.limit}).{out}"
-        statuses = await sender.notify_admins(text, key=f"coins:{month}:{usage.limit}:{level}")
+        statuses = await sender.notify_admins(_alert_text(src, level),
+                                              key=f"{src.key_prefix}:{src.period}:{src.limit}:{level}")
         if not any(st != "failed" for st in statuses):
             targets = sender.admin_targets(await settings_store.get("notify", NotifySettings))
             if targets:
                 log.warning("coin alert %s%% was not delivered to admins; will retry", level)
-                await settings_store.put("usage_alerts", state)
+                await settings_store.put(src.state_key, state)
                 return
             log.warning("coin alert %s%% not sent: no admin phones or group configured", level)
         state.sent = sorted(set(state.sent) | set(due))
-        await settings_store.put("usage_alerts", state)
+        await settings_store.put(src.state_key, state)
     except Exception:  # noqa: BLE001 - accounting must never break a reply
         log.exception("coin usage check failed")

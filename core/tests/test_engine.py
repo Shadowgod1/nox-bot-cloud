@@ -537,30 +537,33 @@ async def test_coin_limit_hands_over_without_calling_llm(env, pool, monkeypatch)
     await env.idle()
     conv = await _conv(pool)
     assert conv["status"] == "needs_operator"
-    assert env.gw.texts(CLIENT_JID) == ["Передаю ваш вопрос администратору, он скоро ответит."]
+    assert env.gw.texts(CLIENT_JID) == ["Спасибо за сообщение! Сейчас подключится менеджер и ответит вам."]
     assert len(env.gw.texts(ADMIN_JID)) == 1 and "Лимит коинов" in env.gw.texts(ADMIN_JID)[0]
 
 
-async def test_coin_limit_handover_reply_once_per_day(env, pool, monkeypatch):
+async def test_coin_limit_holding_reply_once_per_conversation(env, pool, monkeypatch):
     from iler import usage
 
     async def reached():
         return True
 
     monkeypatch.setattr(usage, "limit_reached", reached)
-    await env.set_bot(handover_pause_minutes=30)
+    await env.set_bot(handover_pause_minutes=30, no_coins_message="Менеджер скоро ответит.")
     env.llm = FakeLLM(script=[])  # must not be called
     await handler.handle_incoming(make_msg("Привет"))
     await env.idle()
     conv = await _conv(pool)
     assert conv["status"] == "needs_operator"
     assert conv["paused_until"] > datetime.now(UTC) + timedelta(hours=23)  # at least a day, not 30 minutes
-    # the operator releases the chat without answering; the client writes again the same day
+    # the operator releases the chat without answering; the client writes again, even days later
     await pool.execute("UPDATE conversations SET status = 'active', paused_until = NULL WHERE id = $1", conv["id"])
+    await pool.execute("UPDATE messages SET created_at = now() - interval '3 days' WHERE conversation_id = $1",
+                       conv["id"])
     await handler.handle_incoming(make_msg("Алло?"))
     await env.idle()
-    assert env.gw.texts(CLIENT_JID) == ["Передаю ваш вопрос администратору, он скоро ответит."]
+    assert env.gw.texts(CLIENT_JID) == ["Менеджер скоро ответит."]  # the configured text, once
     assert (await _conv(pool))["status"] == "needs_operator"
+    assert env.llm.calls == []
 
 
 async def test_llm_failure_retry_of_same_turn_notifies_admins_once(env, pool):

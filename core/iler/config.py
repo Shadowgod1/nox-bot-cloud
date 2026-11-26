@@ -28,6 +28,17 @@ class Settings(BaseSettings):
     openai_key: str = ""
     gemini_key: str = ""
     anthropic_key: str = ""
+    # Optional per-provider API base URLs (empty = the provider's public API). Ignored in gateway mode.
+    openai_base_url: str = ""
+    gemini_base_url: str = ""
+    anthropic_base_url: str = ""
+    # LLM gateway mode (cloud and managed installs): every provider is reached through
+    # <llm_gateway_url>/llm/<provider>/... with the install's virtual key instead of the ILER_*_KEY;
+    # the gateway swaps in the real key and is the authority on coins. Empty URL = off.
+    llm_gateway_url: str = ""
+    llm_gateway_key: str = ""
+    # Where the owner tops up coins (shown as the "Пополнить" link in the admin UI); empty = no link.
+    topup_url: str = ""
     # ILER coins (iler.usage): monthly limit set by ILER (0 = no limit) and optional price overrides (JSON)
     monthly_coins: int = 0
     model_prices: str = ""
@@ -41,6 +52,17 @@ class Settings(BaseSettings):
     data_dir: str = "/data"
     disable_workers: bool = False
     llm_fake: bool = False
+
+
+def gateway_mode() -> bool:
+    """LLM gateway mode is on (ILER_LLM_GATEWAY_URL is set)."""
+    return bool(get_settings().llm_gateway_url.strip())
+
+
+def topup_url() -> str | None:
+    """The coin top-up link for the admin UI; only http(s) URLs are passed on."""
+    value = get_settings().topup_url.strip()
+    return value if value.lower().startswith(("https://", "http://")) else None
 
 
 def cookies_secure() -> bool:

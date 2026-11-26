@@ -1,9 +1,9 @@
-import { CircleAlert, CircleCheck, TrendingUp } from 'lucide-react'
+import { CircleAlert, CircleCheck, CloudOff, ExternalLink, TrendingUp } from 'lucide-react'
 import type { DashboardCoins } from '../../api/types'
 import { useBrand } from '../../brand'
 import { Badge, Panel, cx } from '../../components/ui'
 import { plural } from '../../i18n/ru'
-import { coinsForecast, coinsLevel, formatDayMonth, formatNumber, formatPercent, modelLabel, type Level } from './health'
+import { coinsForecast, coinsLevel, formatDayMonth, formatNumber, formatPercent, formatTime, modelLabel, type Level } from './health'
 
 const barTone: Record<Level, string> = { ok: 'bg-accent', warn: 'bg-warn', danger: 'bg-danger' }
 const forecastTone: Record<Level, string> = {
@@ -22,19 +22,49 @@ export function CoinsCard({ coins }: { coins: DashboardCoins }) {
   const percent = coins.percent ?? (hasLimit ? (coins.spent / coins.limit) * 100 : 0)
   const remaining = coins.remaining ?? Math.max(0, coins.limit - coins.spent)
   const brand = useBrand()
+  const gateway = coins.source === 'gateway'
+  const description = gateway
+    ? coins.period_end
+      ? `Баланс на период до ${formatDayMonth(coins.period_end)}.`
+      : 'Баланс коинов на текущий период.'
+    : 'Расход на работу модели в этом месяце.'
 
   return (
     <Panel
       title={`Коины ${brand.name}`}
-      description="Расход на работу модели в этом месяце."
+      description={description}
       actions={
-        hasLimit ? (
-          <Badge tone={badgeTone[level]}>израсходовано {formatPercent(percent)}</Badge>
+        hasLimit || coins.topup_url ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {hasLimit && <Badge tone={badgeTone[level]}>израсходовано {formatPercent(percent)}</Badge>}
+            {coins.topup_url && (
+              <a
+                href={coins.topup_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="coins-topup"
+                className="inline-flex h-8 items-center gap-1.5 rounded-[7px] border border-transparent bg-accent-solid px-2.5 text-[13px] font-medium whitespace-nowrap text-white transition-[background-color] duration-150 ease-out hover:bg-accent-hover"
+              >
+                Пополнить
+                <ExternalLink className="size-3.5" aria-hidden />
+              </a>
+            )}
+          </div>
         ) : undefined
       }
       bodyClassName="p-0"
     >
       <div className="px-5 pt-4 pb-5">
+        {gateway && coins.stale && (
+          <p data-testid="coins-stale" className="mb-3 flex items-start gap-2 text-[13px] text-ink-2">
+            <CloudOff className="mt-0.5 size-4 shrink-0 text-ink-3" aria-hidden />
+            <span>
+              {coins.balance_at
+                ? `Не удалось обновить баланс — показано значение на ${formatTime(coins.balance_at)}.`
+                : 'Баланс пока недоступен — показан только расход этого бота.'}
+            </span>
+          </p>
+        )}
         {hasLimit ? (
           <>
             <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5" data-testid="coins-remaining">
@@ -68,7 +98,7 @@ export function CoinsCard({ coins }: { coins: DashboardCoins }) {
               <span className="tabular text-[30px] font-semibold leading-none text-ink">{formatNumber(coins.spent)}</span>
               <span className="text-sm text-ink-2">{coinWord(coins.spent)}</span>
             </p>
-            <p className="mt-2 text-[13px] text-ink-3">Лимит не задан</p>
+            {!gateway && <p className="mt-2 text-[13px] text-ink-3">Лимит не задан</p>}
           </>
         )}
 
@@ -102,7 +132,11 @@ export function CoinsCard({ coins }: { coins: DashboardCoins }) {
       </div>
 
       <p className="border-t border-line px-5 py-3 text-[12px] text-ink-3">
-        1 коин ≈ $0.001 расходов на модель. Чтобы увеличить лимит, обратитесь в {brand.company}.
+        {gateway
+          ? `1 коин ≈ $0.001 расходов на модель. Расход по дням и моделям — по данным этого бота.${
+              coins.topup_url ? '' : ` Чтобы пополнить баланс, обратитесь в ${brand.company}.`
+            }`
+          : `1 коин ≈ $0.001 расходов на модель. Чтобы увеличить лимит, обратитесь в ${brand.company}.`}
       </p>
     </Panel>
   )

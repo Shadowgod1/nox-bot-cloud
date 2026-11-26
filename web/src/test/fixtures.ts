@@ -27,4 +27,5 @@ export const BOT: BotSettings = {
   booking_reject_template: 'no {reason}',
   booking_request_timeout_min: 15,
   booking_timeout_message: 'later',
+  no_coins_message: 'Спасибо за сообщение! Сейчас подключится менеджер и ответит вам.',
 }

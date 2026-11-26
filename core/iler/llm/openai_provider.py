@@ -7,7 +7,7 @@ import time
 import httpx
 import openai
 
-from iler.llm.base import ChatMessage, LlmError, LlmResponse, ToolCall
+from iler.llm.base import ChatMessage, LlmError, LlmResponse, ToolCall, body_error_type
 from iler.tools.base import Tool
 
 TIMEOUT_S = 30.0
@@ -83,7 +83,8 @@ class OpenAIProvider:
         try:
             ids = [m.id async for m in self._client.models.list()]
         except openai.APIStatusError as e:
-            raise LlmError(_redact(f"openai HTTP {e.status_code}: {e.message}", self._key), retryable=False) from None
+            raise LlmError(_redact(f"openai HTTP {e.status_code}: {e.message}", self._key), retryable=False,
+                           status=e.status_code, error_type=body_error_type(e.body)) from None
         except (openai.APITimeoutError, openai.APIConnectionError) as e:
             raise LlmError(f"openai connection error: {type(e).__name__}", retryable=True) from None
         except Exception as e:  # noqa: BLE001 - never leak SDK exceptions
@@ -99,7 +100,8 @@ class OpenAIProvider:
             resp = await self._client.chat.completions.create(**kwargs)
         except openai.APIStatusError as e:
             retryable = e.status_code == 429 or e.status_code >= 500
-            raise LlmError(_redact(f"openai HTTP {e.status_code}: {e.message}", self._key), retryable=retryable) from None
+            raise LlmError(_redact(f"openai HTTP {e.status_code}: {e.message}", self._key), retryable=retryable,
+                           status=e.status_code, error_type=body_error_type(e.body)) from None
         except (openai.APITimeoutError, openai.APIConnectionError) as e:
             raise LlmError(f"openai connection error: {type(e).__name__}", retryable=True) from None
         except Exception as e:  # noqa: BLE001 - never leak SDK exceptions

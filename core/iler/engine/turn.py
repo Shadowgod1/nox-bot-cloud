@@ -6,12 +6,12 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from iler import settings_store, usage
-from iler.config import brand_name, get_settings
+from iler.config import brand_company, brand_name, gateway_mode, get_settings
 from iler.engine import admission, prompt, sender, store
 from iler.engine.pii import PiiMasker, mask_phone_for_log
 from iler.llm import router
 from iler.llm.base import ChatMessage, LlmError
-from iler.settings_models import BotSettings
+from iler.settings_models import NO_COINS_MESSAGE_DEFAULT, BotSettings
 from iler.tools import registry
 from iler.tools.base import Tool, ToolContext, ToolResult
 
@@ -20,7 +20,7 @@ log = logging.getLogger("iler.engine.turn")
 HANDOVER_TOOL = "handover_to_operator"
 HANDOVER_REPLY = "Передаю ваш вопрос администратору, он скоро ответит."
 AFTER_HOURS_REPEAT = timedelta(hours=12)  # the after-hours text goes to a conversation at most this often
-NO_COINS_REPEAT_MINUTES = 24 * 60  # coin-limit handover: minimum pause and reply repeat interval
+NO_COINS_PAUSE_MINUTES = 24 * 60  # coins used up: minimum operator pause of the conversation
 
 
 def _not_configured(bot) -> bool:
@@ -73,28 +73,43 @@ async def _handle_llm_failure(conv, error: LlmError, turn_id: str) -> None:
     log.warning("LLM failed for conversation %s (%s): %s", conv["id"], mask_phone_for_log(conv["phone"]), error)
 
 
-async def _handover_no_coins(conv, turn_id: str) -> None:
-    """The monthly coin limit is used up: the client is told an administrator will answer, the
-    conversation waits for the operator and the admins are told (once per conversation per day).
+def no_coins_message(bot) -> str:
+    """The holding reply sent when the coins are used up (bot settings, or the default)."""
+    return (getattr(bot, "no_coins_message", "") or "").strip() or NO_COINS_MESSAGE_DEFAULT
 
-    The pause is at least a day and the reply is not repeated if it already went out within a day, so a
-    client who keeps writing while the limit is exhausted does not get the same phrase over and over."""
+
+async def _handover_no_coins(conv, turn_id: str, *, suspended: bool = False) -> None:
+    """The coins are used up (local monthly limit, or the gateway's 402) or the gateway suspended the
+    model access (401 key_revoked): the client gets the holding reply, the conversation waits for the
+    operator and the admins are told (once per conversation per day).
+
+    The holding reply goes to a conversation once: it is not sent again while it is still the bot's last
+    message there, so a client who keeps writing does not get the same phrase over and over. The pause is
+    at least a day; the LLM is not called again until the coins are back (the router checks first)."""
     bot = await settings_store.get("bot", BotSettings)
-    pause = max(bot.handover_pause_minutes, NO_COINS_REPEAT_MINUTES)
+    pause = max(bot.handover_pause_minutes, NO_COINS_PAUSE_MINUTES)
     await store.set_status(conv["id"], "needs_operator", pause_minutes=pause)
+    text = no_coins_message(bot)
+    parts = sender.split_reply(text)
     prev = await store.last_bot_message(conv["id"])
-    recent = timedelta(minutes=NO_COINS_REPEAT_MINUTES)
-    if prev is not None and prev["text"] == HANDOVER_REPLY and prev["created_at"] > datetime.now(UTC) - recent:
-        log.info("conversation %s: coin-limit handover reply already sent recently", conv["id"])
+    if prev is not None and parts and prev["text"] in (parts[-1], text, HANDOVER_REPLY):
+        log.info("conversation %s: holding reply already sent", conv["id"])
     else:
-        await sender.send_reply(conv["id"], sender.split_reply(HANDOVER_REPLY), turn_id=turn_id)
+        await sender.send_reply(conv["id"], parts, turn_id=turn_id)
     who = conv["name"] or "клиент"
     phone = f" +{conv['phone']}" if conv["phone"] else ""
-    await sender.notify_admins(
-        f"Лимит коинов {brand_name()} исчерпан: бот не отвечает сам. Сообщение ({who}{phone}) ждёт оператора в админке.",
-        key=f"coins-conv:{conv['id']}:{datetime.now(UTC):%Y-%m-%d}",
-    )
-    log.info("conversation %s handed to the operator: coin limit reached", conv["id"])
+    if suspended:
+        reason = f"Доступ к моделям приостановлен — обратитесь в {brand_company()}."
+        key = f"llm-suspended-conv:{conv['id']}:{datetime.now(UTC):%Y-%m-%d}"
+    elif gateway_mode():
+        reason = f"Коины {brand_name()} закончились: бот не отвечает сам."
+        key = f"coins-conv:{conv['id']}:{datetime.now(UTC):%Y-%m-%d}"
+    else:
+        reason = f"Лимит коинов {brand_name()} исчерпан: бот не отвечает сам."
+        key = f"coins-conv:{conv['id']}:{datetime.now(UTC):%Y-%m-%d}"
+    await sender.notify_admins(f"{reason} Сообщение ({who}{phone}) ждёт оператора в админке.", key=key)
+    log.info("conversation %s handed to the operator: %s", conv["id"],
+             "model access suspended" if suspended else "coins used up")
 
 
 async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
@@ -162,10 +177,10 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
     try:
         # the router enforces the coin limit and refreshes the coin accounting (AD-3)
         result = await router.complete_with_tools(messages, tools, ctx, all_settings.llm)
-    except usage.CoinsExhausted:
+    except usage.CoinsExhausted as e:
         if dry_run:
             raise
-        await _handover_no_coins(conv, turn_id)
+        await _handover_no_coins(conv, turn_id, suspended=isinstance(e, usage.AccessSuspended))
         return TurnOutcome(handed_over=True)
     except LlmError as e:
         if dry_run:

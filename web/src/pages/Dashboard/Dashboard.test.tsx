@@ -171,6 +171,81 @@ describe('Dashboard', () => {
     expect(screen.queryByTestId('coins-forecast')).not.toBeInTheDocument()
     expect(screen.queryByTestId('coins-remaining')).not.toBeInTheDocument()
   })
+
+  it('shows the gateway balance with the period end and a top-up link', async () => {
+    await renderWith(
+      dashboard({
+        coins: coins({
+          source: 'gateway',
+          limit: 10000,
+          spent: 6000,
+          remaining: 4000,
+          percent: 60,
+          projected_month: 9000,
+          period_end: '2026-12-01T00:00:00+05:00',
+          stale: false,
+          topup_url: 'https://pay.example.kz/topup',
+        }),
+      }),
+    )
+    expect(screen.getByText('Баланс на период до 1 декабря.')).toBeInTheDocument()
+    expect(screen.getByTestId('coins-remaining')).toHaveTextContent(/осталось\s*4\s000\s*из 10\s000/)
+    const topup = screen.getByTestId('coins-topup')
+    expect(topup).toHaveAttribute('href', 'https://pay.example.kz/topup')
+    expect(topup).toHaveAttribute('target', '_blank')
+    expect(topup).toHaveTextContent('Пополнить')
+    expect(forecast()).toHaveTextContent('хватит до 1 декабря')
+    expect(screen.queryByTestId('coins-zero-banner')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('coins-stale')).not.toBeInTheDocument()
+  })
+
+  it('marks a stale gateway balance and has no top-up link without a URL', async () => {
+    await renderWith(
+      dashboard({
+        coins: coins({ source: 'gateway', limit: 10000, spent: 6000, remaining: 4000, percent: 60, stale: true, balance_at: '2026-11-26T09:05:00Z', topup_url: null }),
+      }),
+    )
+    expect(screen.getByTestId('coins-stale')).toHaveTextContent('Не удалось обновить баланс')
+    expect(screen.queryByTestId('coins-topup')).not.toBeInTheDocument()
+  })
+
+  it('shows the zero-balance banner when gateway coins run out', async () => {
+    const hero = await renderWith(
+      dashboard({
+        coins: coins({
+          source: 'gateway',
+          limit: 10000,
+          spent: 10000,
+          remaining: 0,
+          percent: 100,
+          exhausted: true,
+          blocked: 'insufficient_coins',
+          topup_url: 'https://pay.example.kz/topup',
+        }),
+      }),
+    )
+    const banner = screen.getByTestId('coins-zero-banner')
+    expect(banner).toHaveAttribute('role', 'alert')
+    expect(banner).toHaveTextContent('Коины закончились — бот передаёт диалоги оператору')
+    expect(within(banner).getByRole('link', { name: 'Пополнить' })).toHaveAttribute('href', 'https://pay.example.kz/topup')
+    expect(hero).toHaveAttribute('data-level', 'danger')
+    expect(forecast()).toHaveTextContent('Коины закончились')
+  })
+
+  it('tells the owner to contact the company when model access is suspended', async () => {
+    await renderWith(
+      dashboard({ coins: coins({ source: 'gateway', exhausted: true, blocked: 'key_revoked', topup_url: null }) }),
+    )
+    const banner = screen.getByTestId('coins-zero-banner')
+    expect(banner).toHaveTextContent('Доступ к моделям приостановлен — бот передаёт диалоги оператору')
+    expect(banner).toHaveTextContent(/Обратитесь в (ILER|Nox service)\./)
+  })
+
+  it('shows no zero-balance banner while coins are left', async () => {
+    await renderWith(dashboard())
+    expect(screen.queryByTestId('coins-zero-banner')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('coins-topup')).not.toBeInTheDocument()
+  })
 })
 
 describe('dashboard formatting', () => {

@@ -8,7 +8,7 @@ from collections import OrderedDict
 from google import genai
 from google.genai import errors, types
 
-from iler.llm.base import ChatMessage, LlmError, LlmResponse, ToolCall
+from iler.llm.base import ChatMessage, LlmError, LlmResponse, ToolCall, body_error_type
 from iler.tools.base import Tool
 
 TIMEOUT_MS = 30_000
@@ -45,15 +45,22 @@ def _tool_response(content: str) -> dict:
 class GeminiProvider:
     name = "gemini"
 
-    def __init__(self, api_key: str, *, client=None):
+    def __init__(self, api_key: str, *, client=None, base_url: str | None = None, api_version: str | None = None,
+                 http_client=None):
+        """``base_url`` / ``api_version`` redirect the client (LLM gateway: ``<gateway>/llm/gemini`` and
+        ``v1beta``); ``http_client`` (an ``httpx.AsyncClient``) is for tests."""
         self._key = api_key
-        self._client = client or genai.Client(
-            api_key=api_key,
-            http_options=types.HttpOptions(
-                timeout=TIMEOUT_MS,
-                retry_options=types.HttpRetryOptions(attempts=3, http_status_codes=RETRY_STATUSES),
-            ),
-        )
+        options: dict = {
+            "timeout": TIMEOUT_MS,
+            "retry_options": types.HttpRetryOptions(attempts=3, http_status_codes=RETRY_STATUSES),
+        }
+        if base_url:
+            options["base_url"] = base_url
+        if api_version:
+            options["api_version"] = api_version
+        if http_client is not None:
+            options["httpx_async_client"] = http_client
+        self._client = client or genai.Client(api_key=api_key, http_options=types.HttpOptions(**options))
         # thought signatures of returned function calls, keyed by our tool call id (needed by thinking models)
         self._signatures: OrderedDict[str, bytes] = OrderedDict()
 
@@ -102,7 +109,8 @@ class GeminiProvider:
             models = [m async for m in await self._client.aio.models.list()]
         except errors.APIError as e:
             code = getattr(e, "code", None)
-            raise LlmError(_redact(f"gemini HTTP {code}: {e.message}", self._key), retryable=False) from None
+            raise LlmError(_redact(f"gemini HTTP {code}: {e.message}", self._key), retryable=False,
+                           status=code, error_type=body_error_type(getattr(e, "details", None))) from None
         except Exception as e:  # noqa: BLE001 - never leak SDK exceptions
             raise LlmError(_redact(f"gemini error: {type(e).__name__}: {e}", self._key), retryable=True) from None
         return chat_model_ids(models)
@@ -122,7 +130,8 @@ class GeminiProvider:
         except errors.APIError as e:
             code = getattr(e, "code", 0) or 0
             retryable = code == 429 or code >= 500
-            raise LlmError(_redact(f"gemini HTTP {code}: {e.message}", self._key), retryable=retryable) from None
+            raise LlmError(_redact(f"gemini HTTP {code}: {e.message}", self._key), retryable=retryable,
+                           status=code, error_type=body_error_type(getattr(e, "details", None))) from None
         except Exception as e:  # noqa: BLE001 - never leak SDK exceptions
             raise LlmError(_redact(f"gemini error: {type(e).__name__}: {e}", self._key), retryable=True) from None
         latency = int((time.monotonic() - started) * 1000)

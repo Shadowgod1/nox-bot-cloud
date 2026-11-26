@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
-import { ArrowRight, CircleCheck, LogOut, Smartphone } from 'lucide-react'
+import { ArrowRight, CircleAlert, CircleCheck, LogOut, Smartphone } from 'lucide-react'
 import { api } from '../../api/client'
 import type { BotSettings, Dashboard as DashboardData, WhatsAppStatus } from '../../api/types'
 import { useBrand } from '../../brand'
@@ -13,7 +13,7 @@ import { toast } from '../../components/toast'
 import { plural, ru } from '../../i18n/ru'
 import { StatusHero } from './StatusHero'
 import { CoinsCard } from './CoinsCard'
-import { deriveStatus } from './health'
+import { coinsZeroText, deriveStatus } from './health'
 
 const waTone = { open: 'ok', connecting: 'warn', close: 'danger', degraded: 'danger' } as const
 
@@ -86,12 +86,30 @@ export function Dashboard() {
   const e24 = data.errors_24h
   const errorsTotal = e24.llm + e24.send
   const status = deriveStatus(data)
+  const coinsZero = coinsZeroText(data.coins)
 
   return (
     <PageBody>
       <PageHeader title="Обзор" description="Работает ли бот, сколько осталось коинов и что было сегодня." />
 
       <div className="space-y-5">
+        {coinsZero && (
+          <div
+            role="alert"
+            data-testid="coins-zero-banner"
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-panel)] border border-danger/20 bg-danger-soft px-5 py-3 text-sm text-ink"
+          >
+            <CircleAlert className="size-4 shrink-0 text-danger" aria-hidden />
+            <span className="font-medium">{coinsZero}</span>
+            {data.coins.blocked === 'key_revoked' ? (
+              <span className="text-ink-2">Обратитесь в {brand.company}.</span>
+            ) : data.coins.topup_url ? (
+              <a href={data.coins.topup_url} target="_blank" rel="noopener noreferrer" className="font-medium text-danger underline">
+                Пополнить
+              </a>
+            ) : null}
+          </div>
+        )}
         <StatusHero
           status={status}
           health={data.health}

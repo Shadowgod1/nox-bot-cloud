@@ -15,7 +15,7 @@ from collections import OrderedDict
 
 import anthropic
 
-from iler.llm.base import ChatMessage, LlmError, LlmResponse, ToolCall
+from iler.llm.base import ChatMessage, LlmError, LlmResponse, ToolCall, body_error_type
 from iler.tools.base import Tool
 
 TIMEOUT_S = 60.0
@@ -45,13 +45,17 @@ def to_anthropic_tools(tools: list[Tool]) -> list[dict]:
 class AnthropicProvider:
     name = "anthropic"
 
-    def __init__(self, api_key: str, *, effort: str = "low", http_client=None, base_url: str | None = None):
+    def __init__(self, api_key: str, *, effort: str = "low", http_client=None, base_url: str | None = None,
+                 native_key_header: bool = False):
+        """``native_key_header``: also send the key as ``x-api-key`` (the LLM gateway reads the key from
+        the provider's native header; anthropic 2.x itself sends it only as ``Authorization: Bearer``)."""
         self._key = api_key
         self.effort = effort  # refreshed by the router factory from LlmSettings.anthropic_effort
         # http_client must be an httpx2.AsyncClient (anthropic>=1 is built on httpx2, not httpx)
         self._client = anthropic.AsyncAnthropic(
             api_key=api_key, timeout=TIMEOUT_S, max_retries=MAX_RETRIES, http_client=http_client,
             base_url=base_url or DEFAULT_BASE_URL,
+            default_headers={"x-api-key": api_key} if native_key_header else None,
         )
         # tool_use id -> (all tool_use ids of that turn, raw assistant content as returned by the API)
         self._raw: OrderedDict[str, tuple[tuple[str, ...], list[dict]]] = OrderedDict()
@@ -126,13 +130,15 @@ class AnthropicProvider:
         try:
             resp = await self._client.beta.messages.create(**kwargs)
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
-            raise LlmError(_redact(f"anthropic HTTP {e.status_code}: {e.message}", self._key), retryable=False) from None
+            raise LlmError(_redact(f"anthropic HTTP {e.status_code}: {e.message}", self._key), retryable=False,
+                           status=e.status_code, error_type=body_error_type(e.body)) from None
         except anthropic.RateLimitError as e:
-            raise LlmError(_redact(f"anthropic HTTP 429: {e.message}", self._key), retryable=True) from None
+            raise LlmError(_redact(f"anthropic HTTP 429: {e.message}", self._key), retryable=True,
+                           status=429, error_type=body_error_type(e.body)) from None
         except anthropic.APIStatusError as e:  # other non-2xx: 5xx / 529 overloaded are transient, 4xx are not
             retryable = e.status_code == 429 or e.status_code >= 500
             raise LlmError(_redact(f"anthropic HTTP {e.status_code}: {e.message}", self._key),
-                           retryable=retryable) from None
+                           retryable=retryable, status=e.status_code, error_type=body_error_type(e.body)) from None
         except anthropic.APIConnectionError as e:  # includes APITimeoutError
             raise LlmError(f"anthropic connection error: {type(e).__name__}", retryable=True) from None
         except Exception as e:  # noqa: BLE001 - never leak SDK exceptions

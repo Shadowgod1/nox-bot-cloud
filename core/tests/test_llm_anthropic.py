@@ -258,7 +258,7 @@ async def test_check_key_via_default_factory_applies_effort(monkeypatch):
     monkeypatch.setattr(get_settings(), "anthropic_key", KEY)  # ILER's key comes from the environment
     router.set_provider_factory(None)
     api = Api((200, _message([{"type": "text", "text": "pong"}])), _err(401, "authentication_error", "bad"))
-    router._provider_cache[("anthropic", KEY)] = api.provider()
+    router._provider_cache[("anthropic", KEY, "")] = api.provider()
     try:
         s = LlmSettings(provider="anthropic", anthropic_effort="high")
         await router.check_key(s)
@@ -268,7 +268,7 @@ async def test_check_key_via_default_factory_applies_effort(monkeypatch):
             await router.check_key(s)
         assert ei.value.retryable is False and KEY not in str(ei.value)
     finally:
-        router._provider_cache.pop(("anthropic", KEY), None)
+        router._provider_cache.pop(("anthropic", KEY, ""), None)
 
 
 async def test_check_key_missing_anthropic_key():

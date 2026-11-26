@@ -287,6 +287,18 @@ export function BotSettingsPage() {
                 </Field>
               </div>
             </SubSection>
+
+            <SubSection title="Когда закончились коины" description="Бот не может ответить сам: клиент один раз получает это сообщение, диалог переходит к оператору.">
+              <Field label="Сообщение клиенту">
+                <Textarea
+                  rows={2}
+                  maxLength={1000}
+                  value={form.no_coins_message}
+                  onChange={(e) => set('no_coins_message', e.target.value)}
+                  placeholder="Спасибо за сообщение! Сейчас подключится менеджер и ответит вам."
+                />
+              </Field>
+            </SubSection>
           </div>
         </Collapsible>
 
