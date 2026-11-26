@@ -128,7 +128,9 @@ async def test_booking_tool_truncates_free_text(env, pool):
     assert len(payload["name"]) <= 60 and len(payload["zone"]) <= 60 and len(payload["comment"]) <= 300
     assert "\n" not in payload["zone"] and "\x07" not in payload["comment"]
     admin = env.gw.texts(ADMIN_JID)[0]
-    assert "\n" not in admin and "«" in admin
+    # one fact per line: client text cannot add lines of its own
+    labels = ("Новая заявка", "Имя:", "Телефон:", "Услуга:", "Когда:", "Комментарий:", "Диалог:", "Ответьте")
+    assert all(line.startswith(labels) for line in admin.split("\n")) and "«" in admin
 
 
 async def test_handover_twice_notifies_admins_once(env, pool):

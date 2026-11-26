@@ -11,6 +11,7 @@ cloud bot still goes through the provisioner as an ordinary suspend job.
   period_end, unpaid                     grace: the bot keeps working on what is left of the old period
   period_end + NOX_GRACE_DAYS, unpaid    status suspended (suspend_reason unpaid): keys answer 401, a cloud
                                          bot gets a suspend job; paying the invoice renews and resumes it
+  Free, free_until - 3 days / - 1 day    client reminder "тест закончится ..." (each once, trial_notice_days)
   Free (tariff free)                     no renewal at all (one trial grant); free_until passed -> suspended
                                          (suspend_reason trial_ended) until an upgrade invoice is paid
 """
@@ -31,6 +32,8 @@ from nox_portal.errors import ApiError
 
 log = logging.getLogger("nox_portal.renewal")
 LOW_BALANCE_LEVELS = (20, 5)
+# Free trial reminders this many days before free_until (each level at most once per account)
+TRIAL_NOTICE_DAYS = (3, 1)
 _LOCK = "hashtext('nox_portal_billing')"
 
 
@@ -139,6 +142,38 @@ async def suspend_trials() -> int:
         for to in mailer.staff_recipients():
             await mailer.send_quiet(to, *letters.staff_trial_ended(acc["company"]))
     return count
+
+
+async def trial_notices() -> int:
+    """Free trial: the client is reminded TRIAL_NOTICE_DAYS days before free_until (3 days, then 1). Each level once
+    (accounts.trial_notice_days keeps the smallest level sent); a trial with less time left gets only the nearest."""
+    pool = get_pool()
+    rows = await pool.fetch(
+        "SELECT id FROM accounts WHERE tariff = 'free' AND status IN ('approved','provisioning','active')"
+        " AND free_until IS NOT NULL AND free_until > now() AND free_until - make_interval(days => $1) <= now()"
+        " AND (trial_notice_days IS NULL OR trial_notice_days > $2)",
+        max(TRIAL_NOTICE_DAYS), min(TRIAL_NOTICE_DAYS),
+    )
+    sent = 0
+    for r in rows:
+        async with pool.acquire() as conn, conn.transaction():
+            acc = await conn.fetchrow(
+                "SELECT id, email, contact_name, tariff, free_until, trial_notice_days, free_until - now() AS left"
+                " FROM accounts WHERE id = $1 FOR UPDATE", r["id"],
+            )
+            if acc["tariff"] != "free" or acc["free_until"] is None or acc["left"] <= timedelta(0):
+                continue
+            due = [d for d in TRIAL_NOTICE_DAYS if acc["left"] <= timedelta(days=d)
+                   and (acc["trial_notice_days"] is None or acc["trial_notice_days"] > d)]
+            if not due:
+                continue
+            level = min(due)
+            await conn.execute("UPDATE accounts SET trial_notice_days = $2 WHERE id = $1", acc["id"], level)
+            await audit(conn, "billing.trial_reminder", account_id=acc["id"],
+                        details={"days": level, "free_until": acc["free_until"].isoformat()})
+        sent += 1
+        await mailer.send_quiet(acc["email"], *letters.trial_ending(acc["contact_name"], acc["free_until"], level))
+    return sent
 
 
 async def rollover_due() -> int:
@@ -302,6 +337,7 @@ async def tick() -> dict:
                 "renewal_notices": await renewal_notices(),
                 "renewed": await rollover_due(),
                 "suspended": await suspend_overdue(),
+                "trial_reminders": await trial_notices(),
                 "trials_ended": await suspend_trials(),
                 "low_balance": await low_balance_notices(),
                 "summary": await maybe_daily_summary(),

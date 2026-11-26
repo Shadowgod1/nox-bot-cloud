@@ -111,6 +111,29 @@ export interface ClientMe {
   /** unpaid | trial_ended | null */
   suspend_reason?: string | null
   upgrade_tariff?: string | null
+  /** "Попросить помочь с настройкой": when asked / when a manager marked that they got in touch */
+  setup_help_requested_at?: string | null
+  setup_help_contacted_at?: string | null
+}
+
+export interface SupportContacts {
+  /** as typed in NOX_SUPPORT_PHONE; "" = not shown */
+  phone: string
+  /** digits only; "" = not shown */
+  whatsapp: string
+  whatsapp_url: string
+  email: string
+}
+
+export interface Seller {
+  name: string
+  bin: string
+  address: string
+  bank: string
+  iik: string
+  bik: string
+  kbe: string
+  phone: string
 }
 
 export interface PublicConfig {
@@ -120,6 +143,12 @@ export interface PublicConfig {
   free_days?: number
   /** qr: the invoice is paid by a QR / deeplink (Kaspi); redirect: provider checkout page */
   online_mode?: 'qr' | 'redirect' | null
+  coins_per_dialog?: number
+  support?: SupportContacts
+  /** edition date of /offer, /refund, /privacy; "" = draft */
+  legal_date?: string
+  /** filled-in seller requisites (empty strings for the missing ones) */
+  seller?: Seller
 }
 
 export interface CheckoutOut {
@@ -211,6 +240,8 @@ export interface ApplicationDetail extends ApplicationListItem {
   period_end?: string | null
   renewal_due?: boolean
   topup_requested_at?: string | null
+  setup_help_requested_at?: string | null
+  setup_help_contacted_at?: string | null
   online_payments?: OnlinePaymentOut[]
   llm?: LlmBalance | null
   keys?: KeyOut[]
@@ -265,6 +296,8 @@ export interface Tariff {
   description: string
   /** Free: false when every test place is taken */
   available?: boolean
+  /** about how many client dialogs the coins pay for (computed by the api) */
+  dialogs?: number | null
 }
 
 export const FREE_CODE = 'free'
@@ -311,6 +344,8 @@ export interface LlmBalance {
   period_start: string | null
   period_end: string | null
   status: 'active' | 'suspended' | 'revoked'
+  /** about how many client dialogs coins_left is enough for */
+  dialogs_left?: number
 }
 
 export interface UsageOut {
@@ -390,6 +425,28 @@ export function coins(n: number): string {
 export function formatDay(iso: string | null | undefined): string {
   if (!iso) return '—'
   return new Date(iso).toLocaleDateString('ru-RU', { timeZone: 'Asia/Almaty', day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
+/** Russian plural: plural(5, ['день', 'дня', 'дней']) -> 'дней'. */
+export function plural(n: number, [one, few, many]: [string, string, string]): string {
+  const a = Math.abs(Math.trunc(n))
+  const d = a % 10
+  const dd = a % 100
+  if (d === 1 && dd !== 11) return one
+  if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return few
+  return many
+}
+
+/** "≈ 800 диалогов" (the number comes rounded from the api). */
+export function dialogsText(n: number): string {
+  return `≈ ${coins(n)} ${plural(n, ['диалог', 'диалога', 'диалогов'])}`
+}
+
+/** Whole days left until `iso` (a started day counts as a day), 0 when it has passed. */
+export function daysLeft(iso: string | null | undefined, now: number = Date.now()): number {
+  if (!iso) return 0
+  const ms = new Date(iso).getTime() - now
+  return ms <= 0 ? 0 : Math.ceil(ms / 86_400_000)
 }
 
 export function money(amount: number): string {

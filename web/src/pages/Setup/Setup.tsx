@@ -8,6 +8,8 @@ import { useAuth } from '../../hooks/useAuth'
 import { useLoad } from '../../hooks/useLoad'
 import { AuthFrame } from '../Login/Login'
 import { WhatsAppConnect } from '../../components/WhatsAppConnect'
+import { ReplyRulesCard } from '../../components/ReplyRules'
+import { LeadNotifications } from '../../components/LeadNotifications'
 import { BotSetupStep } from './BotSetupStep'
 import { TestBotStep } from './TestBotStep'
 import { StepHeader } from './StepHeader'
@@ -30,7 +32,8 @@ const PROVIDER_DESC: Record<LlmProvider, string> = {
   gemini: 'Модели Gemini от Google',
 }
 
-const STEPS = ['Владелец', 'Языковая модель', 'WhatsApp', 'Настройка бота', 'Проверьте бота', 'Готово'] as const
+// check the bot first (test chat needs no number), then connect WhatsApp
+const STEPS = ['Владелец', 'Языковая модель', 'Настройка бота', 'Проверьте бота', 'WhatsApp', 'Заявки', 'Готово'] as const
 const TOKEN_KEY = 'iler_setup_token'
 const TOKEN_HELP = 'Откройте ссылку из установщика (она содержит одноразовый токен).'
 
@@ -90,8 +93,7 @@ export function Setup() {
       <div className="rounded-[12px] border border-line bg-surface p-6 sm:p-8">
         {step === 0 && <OwnerStep token={token} onDone={next} />}
         {step === 1 && <LlmStep onDone={next} />}
-        {step === 2 && <WhatsAppStep onDone={next} />}
-        {step === 3 && (
+        {step === 2 && (
           <BotSetupStep
             onDone={(saved) => {
               setBotReady(saved)
@@ -99,8 +101,10 @@ export function Setup() {
             }}
           />
         )}
-        {step === 4 && <TestBotStep ready={botReady} onDone={next} />}
-        {step === 5 && (
+        {step === 3 && <TestBotStep ready={botReady} onDone={next} />}
+        {step === 4 && <WhatsAppStep onDone={next} />}
+        {step === 5 && <LeadsStep onDone={next} />}
+        {step === 6 && (
           <div className="flex flex-col items-start gap-4">
             {botReady ? <CheckCircle2 className="size-8 text-ok" aria-hidden /> : <CircleAlert className="size-8 text-warn" aria-hidden />}
             <div>
@@ -413,12 +417,33 @@ function WhatsAppStep({ onDone }: { onDone: () => void }) {
     <>
       <StepHeader
         title="Подключите WhatsApp"
-        text="Используйте телефон с номером, на который пишут клиенты. WhatsApp на телефоне продолжит работать как обычно."
+        text="Используйте телефон с номером, на который пишут клиенты. Сначала коротко о том, что будет с номером."
       />
       <WhatsAppConnect onConnected={() => setConnected(true)} />
+      <section aria-labelledby="rules-title" className="mt-8 border-t border-line pt-6">
+        <h2 id="rules-title" className="text-[15px] font-semibold text-ink">
+          Кому и когда отвечает бот
+        </h2>
+        <p className="mt-1 mb-5 max-w-[60ch] text-[13px] text-ink-2">Можно настроить до подключения — бот начнёт отвечать уже по этим правилам.</p>
+        <ReplyRulesCard />
+      </section>
       <div className="mt-6 flex items-center gap-3 border-t border-line pt-5">
         <Button variant={connected ? 'primary' : 'secondary'} onClick={onDone}>
           {connected ? 'Продолжить' : 'Подключу позже'}
+        </Button>
+      </div>
+    </>
+  )
+}
+
+function LeadsStep({ onDone }: { onDone: () => void }) {
+  return (
+    <>
+      <StepHeader title="Куда присылать заявки" text="Выберите, где вы или администратор будете узнавать о новых заявках. Можно оба способа сразу." />
+      <LeadNotifications />
+      <div className="mt-6 flex items-center gap-3 border-t border-line pt-5">
+        <Button variant="secondary" onClick={onDone}>
+          Дальше
         </Button>
       </div>
     </>

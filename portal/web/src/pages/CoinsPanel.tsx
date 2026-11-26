@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { Coins, CreditCard, FileText, PlusCircle } from 'lucide-react'
 import {
-  api, coins, formatDay, goToCheckout, INVOICE_KIND, loadPublicConfig, money,
+  api, coins, dialogsText, formatDay, goToCheckout, INVOICE_KIND, loadPublicConfig, money,
   type InvoiceListItem, type PublicConfig, type TopupOut, type UsageOut,
 } from '../api'
 import { Alert, Button, Card } from '../components/ui'
@@ -102,6 +102,11 @@ export function CoinsPanel() {
               {coins(b.coins_left)}
             </span>
             <span className="text-[14px] text-ink-2">коинов осталось</span>
+            {b.dialogs_left !== undefined && (
+              <span className="text-[14px] font-bold text-ink" data-testid="dialogs-left">
+                {b.dialogs_left > 0 ? `${dialogsText(b.dialogs_left)}` : 'меньше одного диалога'}
+              </span>
+            )}
             {b.status !== 'active' && <span className="text-[13px] font-semibold text-danger">ключ отключён</span>}
           </div>
           <div className="mt-2 h-2 overflow-hidden rounded-full bg-sunken" role="progressbar" aria-valuenow={Math.round(percent)} aria-valuemin={0} aria-valuemax={100}>
@@ -121,7 +126,10 @@ export function CoinsPanel() {
               <dd className="text-ink">{coins(b.spent)}</dd>
             </div>
           </dl>
-          <p className="mt-2 text-[12.5px] text-ink-3">1 коин = $0.001 расхода модели. Неиспользованный месячный пакет сгорает в конце месяца.</p>
+          <p className="mt-2 text-[12.5px] text-ink-3">
+            Один диалог с клиентом в среднем стоит около {config?.coins_per_dialog ?? 37} коинов, сложные — дороже. 1 коин = $0.001
+            расхода модели. Неиспользованный месячный пакет сгорает в конце месяца.
+          </p>
         </>
       )}
       {usage && usage.by_day.length > 0 && (

@@ -7,7 +7,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, Query, Request, Response
 
 from nox_portal import billing, codes, fulfil, letters, mailer, payments, ratelimit, security, slugs, tariffs, wallet
-from nox_portal.config import get_settings
+from nox_portal.config import get_settings, whatsapp_digits, whatsapp_url
 from nox_portal.db import get_pool
 from nox_portal.deps import (
     Principal, audit, clear_session_cookies, csrf_protect, current_client, is_locked, register_failure,
@@ -25,7 +25,8 @@ router = APIRouter(tags=["client"])
 
 _ACCOUNT_COLS = ("id, email, password_hash, company, contact_name, phone, slug, status, admin_url, reject_reason,"
                  " setup_link_enc, tariff, invoice_no, invoice_amount, invoice_issued_at, created_at, period_start,"
-                 " local_install, invoice_note, pay_method, free_until, suspend_reason, upgrade_tariff")
+                 " local_install, invoice_note, pay_method, free_until, suspend_reason, upgrade_tariff,"
+                 " setup_help_requested_at, setup_help_contacted_at")
 # unverified registrations hold their slug for a day, then disappear
 UNVERIFIED_TTL = "24 hours"
 INVALID_CREDENTIALS = ApiError(401, "invalid_credentials", "Неверный e-mail или пароль")
@@ -41,6 +42,7 @@ def client_me(row: asyncpg.Record, payment_url: str | None = None) -> ClientMe:
         llm_enabled=row["period_start"] is not None, local_install=row["local_install"],
         pay_method=row["pay_method"], payment_url=payment_url, free_until=row["free_until"],
         suspend_reason=row["suspend_reason"], upgrade_tariff=row["upgrade_tariff"],
+        setup_help_requested_at=row["setup_help_requested_at"], setup_help_contacted_at=row["setup_help_contacted_at"],
     )
 
 
@@ -72,28 +74,75 @@ async def _send_code(to: str, name: str, purpose: str, code: str) -> None:
         raise ApiError(502, "email_failed", "Не удалось отправить письмо. Повторите попытку позже.") from None
 
 
+def _real(value: str) -> str:
+    """A seller requisite worth printing on the public documents: the .env.example placeholders (zeros, XXXX,
+    «Примерная») count as not filled in."""
+    v = value.strip()
+    digits = "".join(c for c in v if c.isdigit())
+    if not v or "пример" in v.lower() or "xxxx" in v.lower() or "0000000" in digits:
+        return ""
+    return v
+
+
+def public_seller() -> dict:
+    """Seller requisites for /offer, /refund, /privacy (only filled-in values; the brand alone is not a legal name)."""
+    s = get_settings()
+    name = _real(s.seller_name)
+    return {
+        "name": "" if name.lower() == "nox service" else name, "bin": _real(s.seller_bin),
+        "address": _real(s.seller_address), "bank": _real(s.seller_bank), "iik": _real(s.seller_iik),
+        "bik": _real(s.seller_bik), "kbe": _real(s.seller_kbe), "phone": _real(s.seller_phone),
+    }
+
+
 @router.get("/api/public-config")
 async def get_public_config():
+    s = get_settings()
     provider = payments.get_provider()
-    return {"instance_domain": get_settings().instance_domain, "online_payments": provider is not None,
-            "online_methods": sorted(provider.supports) if provider else [], "free_days": get_settings().free_days,
+    return {"instance_domain": s.instance_domain, "online_payments": provider is not None,
+            "online_methods": sorted(provider.supports) if provider else [], "free_days": s.free_days,
             # qr: show a QR / deeplink of the invoice (Kaspi); redirect: go to the provider checkout page
-            "online_mode": ("qr" if provider.invoice_based else "redirect") if provider else None}
+            "online_mode": ("qr" if provider.invoice_based else "redirect") if provider else None,
+            "coins_per_dialog": max(s.coins_per_dialog, 1),
+            # empty strings = not shown
+            "support": {"phone": s.support_phone.strip(), "whatsapp": whatsapp_digits(),
+                        "whatsapp_url": whatsapp_url(), "email": "info@noxsw.kz"},
+            # "" = the documents are drafts
+            "legal_date": s.legal_date.strip(), "seller": public_seller()}
 
 
 @router.get("/api/slug-check", response_model=SlugCheck)
 async def get_slug_check(request: Request, slug: str = Query(max_length=64)):
     await ratelimit.hit("slug:ip", ratelimit.client_ip(request))
     slug = slugs.normalize(slug)
+    pool = get_pool()
     err = slugs.check(slug)
     if err:
-        return SlugCheck(slug=slug, available=False, message=err)
-    taken = await get_pool().fetchval(
+        # a reserved word gets a close free variant; a malformed address does not
+        suggestion = await _suggest_slug(pool, slug) if slug in slugs.reserved() else None
+        return SlugCheck(slug=slug, available=False, message=err, suggestion=suggestion)
+    if await _slug_taken(pool, slug):
+        return SlugCheck(slug=slug, available=False, message="этот адрес уже занят",
+                         suggestion=await _suggest_slug(pool, slug))
+    return SlugCheck(slug=slug, available=True)
+
+
+async def _slug_taken(conn, slug: str) -> bool:
+    return await conn.fetchval(
         f"SELECT EXISTS (SELECT 1 FROM accounts WHERE slug = $1 AND NOT (status = 'new'"
         f" AND created_at < now() - interval '{UNVERIFIED_TTL}'))",
         slug,
     )
-    return SlugCheck(slug=slug, available=not taken, message="этот адрес уже занят" if taken else None)
+
+
+async def _suggest_slug(conn, slug: str) -> str | None:
+    """salon -> salon-2, salon-3, ... (the first valid free one), or None."""
+    base = slug[:29].rstrip("-")
+    for i in range(2, 21):
+        candidate = f"{base}-{i}"
+        if slugs.check(candidate) is None and not await _slug_taken(conn, candidate):
+            return candidate
+    return None
 
 
 @router.post("/api/auth/register", response_model=Ok, status_code=202)
@@ -274,6 +323,32 @@ async def post_reveal_setup_link(request: Request, client: Principal = Depends(c
     return SetupLink(setup_url=security.decrypt(enc))
 
 
+@router.post("/api/me/setup-help", response_model=ClientMe,
+             dependencies=[Depends(current_client), Depends(csrf_protect)])
+async def post_setup_help(request: Request, client: Principal = Depends(current_client)):
+    """"Попросить помочь с настройкой": staff get one letter per open request; pressing again while the request is
+    open changes nothing. After a manager marked "связались", a new press opens a new request."""
+    pool = get_pool()
+    row = await pool.fetchrow(
+        "UPDATE accounts SET setup_help_requested_at = now(), setup_help_contacted_at = NULL,"
+        " setup_help_contacted_by = NULL, updated_at = now()"
+        " WHERE id = $1 AND status IN ('approved','provisioning','active','failed')"
+        " AND (setup_help_requested_at IS NULL OR setup_help_contacted_at IS NOT NULL)"
+        " RETURNING company, contact_name, phone, email",
+        client.id,
+    )
+    if row is None:
+        status = await pool.fetchval("SELECT status FROM accounts WHERE id = $1", client.id)
+        if status not in ("approved", "provisioning", "active", "failed"):
+            raise ApiError(409, "wrong_status", "Помощь с настройкой доступна, когда бот подключён")
+        return await _me(pool, client.id)  # already asked: no second letter
+    await audit(pool, "client.setup_help_requested", account_id=client.id, ip=ratelimit.client_ip(request))
+    for to in mailer.staff_recipients():
+        await mailer.send_quiet(to, *letters.staff_setup_help(row["company"], row["contact_name"], row["phone"],
+                                                              row["email"], client.id))
+    return await _me(pool, client.id)
+
+
 # ---- tariff and invoice ---------------------------------------------------------------------
 
 
@@ -305,7 +380,7 @@ async def get_tariffs():
     if get_settings().free_tariff_public:
         f = tariffs.FREE
         out.append(TariffOut(code=f.code, name=f.name, price_kzt=f.price_kzt, coins=f.coins, description=f.description,
-                             available=await free_slots_left(get_pool()) > 0))
+                             available=await free_slots_left(get_pool()) > 0, dialogs=tariffs.dialogs(f.coins)))
     return out
 
 

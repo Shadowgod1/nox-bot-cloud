@@ -111,8 +111,12 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
   )
 }
 
-export function Card({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cx('rounded-nx border border-line bg-surface', className)}>{children}</div>
+export function Card({ children, className, ...rest }: { children: ReactNode; className?: string; 'data-testid'?: string }) {
+  return (
+    <div className={cx('rounded-nx border border-line bg-surface', className)} {...rest}>
+      {children}
+    </div>
+  )
 }
 
 export function Alert({ tone = 'danger', children }: { tone?: 'danger' | 'ok' | 'warn' | 'info'; children: ReactNode }) {

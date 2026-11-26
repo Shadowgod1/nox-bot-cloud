@@ -336,7 +336,12 @@ async def get_dashboard_roi(days: int = 7, _user: User = Depends(current_user)):
         " WHERE author = 'bot' AND created_at >= $1 AND text <> ALL($2::text[])",
         since_utc, skip,
     )
-    after_hours = {r["conversation_id"] for r in replies if is_after_hours(r["created_at"].astimezone(tz), bot)}
+    # working hours are set in the bot's own time zone (reply rules), the period in the install's
+    try:
+        hours_tz = ZoneInfo((bot.timezone or "").strip() or tz_name)
+    except Exception:  # noqa: BLE001 - validated on save; never break the dashboard
+        hours_tz = tz
+    after_hours = {r["conversation_id"] for r in replies if is_after_hours(r["created_at"].astimezone(hours_tz), bot)}
     spend = await pool.fetch(
         "SELECT model, sum(input_tokens)::bigint AS tin, sum(output_tokens)::bigint AS tout"
         " FROM ai_requests WHERE created_at >= $1 GROUP BY model",

@@ -17,6 +17,7 @@ import { setTheme, useBrand, useTheme } from '../brand'
 import { useAuth } from '../hooks/useAuth'
 import { ru } from '../i18n/ru'
 import { StatusBanner } from './StatusBanner'
+import { BotPausedBanner, BotPauseSwitch, useBotPause } from './BotPause'
 import { cx } from './ui'
 import type { ReactNode } from 'react'
 
@@ -137,12 +138,26 @@ export function Layout() {
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar />
         <StatusBanner />
         <main className="min-h-0 flex-1 overflow-y-auto" id="main">
           <Outlet />
         </main>
       </div>
     </div>
+  )
+}
+
+/** Thin header over every page: the global "bot on pause" switch, plus a banner while paused. */
+function TopBar() {
+  const pause = useBotPause()
+  return (
+    <>
+      <header className="flex h-12 shrink-0 items-center justify-end gap-3 border-b border-line bg-surface px-4 sm:px-6 lg:px-8">
+        <BotPauseSwitch enabled={pause.enabled} busy={pause.busy} onToggle={() => void pause.setPaused(pause.enabled !== false)} />
+      </header>
+      {pause.enabled === false && <BotPausedBanner busy={pause.busy} onResume={() => void pause.setPaused(false)} />}
+    </>
   )
 }
 

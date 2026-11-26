@@ -41,8 +41,25 @@ def is_free(code: str | None) -> bool:
     return code == FREE.code
 
 
+def dialogs(coins: float) -> int:
+    """About how many client dialogs the coins pay for (NOX_COINS_PER_DIALOG coins per dialog), rounded to a
+    number that reads as an estimate: 54 -> 50, 811 -> 800, 1622 -> 1600. Under 10 the exact count."""
+    from nox_portal.config import get_settings
+
+    per = max(get_settings().coins_per_dialog, 1)
+    n = max(coins, 0) / per
+    if n < 10:
+        return int(n)
+    step = 10 if n < 100 else 50 if n < 1000 else 100
+    return int(round(n / step) * step)
+
+
+def _out(t: Tariff) -> dict:
+    return {**asdict(t), "dialogs": dialogs(t.coins)}
+
+
 def as_dicts(*, include_free: bool = False) -> list[dict]:
-    return [asdict(t) for t in (*TARIFFS, FREE)] if include_free else [asdict(t) for t in TARIFFS]
+    return [_out(t) for t in ((*TARIFFS, FREE) if include_free else TARIFFS)]
 
 
 def money(amount: int) -> str:

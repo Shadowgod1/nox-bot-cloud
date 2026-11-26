@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router'
-import { LogOut, Moon, Sun } from 'lucide-react'
+import { LogOut, MessageCircle, Moon, Sun } from 'lucide-react'
 import { useTheme } from '../theme'
+import { SupportLinks, usePublicConfig } from './Support'
 import { cx } from './ui'
 
 export function Wordmark({ to = '/', subtitle }: { to?: string; subtitle?: string }) {
@@ -43,6 +44,7 @@ interface ShellProps {
 
 /** Top bar + centered content. */
 export function Shell({ children, subtitle, home = '/', user, onLogout, wide }: ShellProps) {
+  const support = usePublicConfig()?.support
   return (
     <div className="flex min-h-dvh flex-col">
       <header className="border-b border-line bg-surface">
@@ -50,6 +52,19 @@ export function Shell({ children, subtitle, home = '/', user, onLogout, wide }: 
           <Wordmark to={home} subtitle={subtitle} />
           <div className="ml-auto flex items-center gap-1">
             {user && <span className="mr-2 hidden text-[13px] text-ink-3 sm:inline">{user}</span>}
+            {support?.whatsapp_url && (
+              <a
+                href={support.whatsapp_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Написать в поддержку в WhatsApp"
+                title="Поддержка в WhatsApp"
+                className="flex h-9 items-center gap-1.5 rounded-nx px-2.5 text-[13.5px] font-semibold text-ink-2 hover:bg-sunken hover:text-ink"
+              >
+                <MessageCircle className="size-[18px]" aria-hidden />
+                <span className="hidden sm:inline">Поддержка</span>
+              </a>
+            )}
             <ThemeToggle />
             {onLogout && (
               <button
@@ -65,11 +80,25 @@ export function Shell({ children, subtitle, home = '/', user, onLogout, wide }: 
         </div>
       </header>
       <main className={cx('mx-auto w-full flex-1 px-4 py-8', wide ? 'max-w-[1180px]' : 'max-w-[880px]')}>{children}</main>
-      <footer className="px-4 pb-6 text-center text-[12.5px] text-ink-3">
-        Nox service · Усть-Каменогорск ·{' '}
-        <a href="https://noxsw.kz" className="text-ink-2 hover:text-accent" rel="noopener">
-          noxsw.kz
-        </a>
+      <footer className="flex flex-col items-center gap-2 px-4 pb-6 text-center text-[12.5px] text-ink-3">
+        <SupportLinks support={support} className="justify-center text-[13px]" />
+        <nav aria-label="Документы" className="flex flex-wrap justify-center gap-x-4 gap-y-1">
+          <Link to="/offer" className="text-ink-2 hover:text-accent">
+            Оферта
+          </Link>
+          <Link to="/refund" className="text-ink-2 hover:text-accent">
+            Возврат денег
+          </Link>
+          <Link to="/privacy" className="text-ink-2 hover:text-accent">
+            Конфиденциальность
+          </Link>
+        </nav>
+        <span>
+          Nox service · Усть-Каменогорск ·{' '}
+          <a href="https://noxsw.kz" className="text-ink-2 hover:text-accent" rel="noopener">
+            noxsw.kz
+          </a>
+        </span>
       </footer>
     </div>
   )
@@ -83,6 +112,7 @@ const STEPS: [string, string][] = [
 
 /** What the visitor gets: shown beside the auth form on wide screens. */
 function AuthAside() {
+  const support = usePublicConfig()?.support
   return (
     <aside className="hidden lg:block">
       <h2 className="max-w-[24ch] text-[30px] leading-[1.15] font-extrabold tracking-[-0.02em] text-ink">
@@ -104,13 +134,29 @@ function AuthAside() {
           </li>
         ))}
       </ol>
-      <p className="mt-8 text-[13.5px] text-ink-3">
-        Вопросы —{' '}
-        <a href="mailto:info@noxsw.kz" className="font-semibold text-ink-2 hover:text-accent">
-          info@noxsw.kz
-        </a>
-      </p>
+      <div className="mt-8 text-[13.5px] text-ink-3">
+        <p>Есть вопросы — позвоните или напишите, поможем:</p>
+        {support ? (
+          <SupportLinks support={support} email className="mt-2" />
+        ) : (
+          <a href="mailto:info@noxsw.kz" className="mt-2 inline-block font-semibold text-ink-2 hover:text-accent">
+            info@noxsw.kz
+          </a>
+        )}
+      </div>
     </aside>
+  )
+}
+
+/** Phones: the aside is hidden, so the card itself ends with the support contacts (when configured). */
+function AuthHelp() {
+  const support = usePublicConfig()?.support
+  if (!support || !(support.phone || support.whatsapp_url)) return null
+  return (
+    <div className="mt-6 border-t border-line pt-4 text-[13px] text-ink-3 lg:hidden">
+      <p>Нужна помощь с заявкой?</p>
+      <SupportLinks support={support} className="mt-1.5" />
+    </div>
   )
 }
 
@@ -129,6 +175,7 @@ export function AuthCard({ title, lead, children, aside = true }: { title: strin
           <h1 className="text-[22px] font-extrabold tracking-[-0.015em] text-ink">{title}</h1>
           {lead && <div className="mt-1.5 text-[14.5px] text-ink-2">{lead}</div>}
           <div className="mt-6">{children}</div>
+          {aside && <AuthHelp />}
         </div>
       </div>
     </Shell>

@@ -34,4 +34,9 @@ export const BOT: BotSettings = {
   voice_message: 'Пока не могу прослушать голосовое, напишите, пожалуйста, текстом 🙏',
   photo_mode: 'handover',
   photo_message: 'Спасибо! Передам фото мастеру, он подскажет.',
+  // reply rules
+  new_contacts_only: false,
+  exclude_phones: [],
+  work_hours_mode: 'reply',
+  timezone: 'Asia/Almaty',
 }

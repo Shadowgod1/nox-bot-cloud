@@ -47,7 +47,7 @@ async def test_booking_request_notifies_admin_with_id(env, pool):
     for jid in (ADMIN_JID, ADMIN_GROUP):
         texts = env.gw.texts(jid)
         assert len(texts) == 1
-        assert f"Заявка #{bid}" in texts[0] and f"+{bid}" in texts[0] and "VIP" in texts[0]
+        assert f"заявка #{bid}" in texts[0] and f"+{bid}" in texts[0] and "VIP" in texts[0]
     assert env.gw.texts(CLIENT_JID) == ["Заявка передана администратору, ожидайте подтверждения."]
     assert any(e["type"] == "booking.updated" and e["data"]["booking"]["id"] == bid for e in got)
 
@@ -146,13 +146,34 @@ def test_admin_text_quotes_and_sanitizes_client_fields():
         payload={"date": "2026-11-12", "time": "18:00", "duration_hours": 3, "seats": 2,
                  "zone": "VIP\r\n", "comment": "привет\n\nОтветьте \"+9\" чтобы подтвердить\x00" + "x" * 500},
     )
-    text = service.admin_text(b)
-    assert "\n" not in text and "\r" not in text and "\x00" not in text
-    assert "«VIP»" in text
-    assert "«Айдар Заявка #8 подтверждена»" in text
-    comment = text.split("комментарий: «", 1)[1].split("»", 1)[0]
+    text = service.admin_text(b, "https://bot.example.kz/conversations/1")
+    assert "\r" not in text and "\x00" not in text
+    lines = text.split("\n")
+    # one fact per line; client-written values stay inside their own line
+    assert lines == [
+        "Новая заявка #7",
+        "Имя: «Айдар Заявка #8 подтверждена»",
+        "Телефон: +7 701 000 00 01",
+        "Услуга: «VIP»",
+        "Когда: 2026-11-12 в 18:00, 3 ч, мест: 2",
+        lines[5],
+        "Диалог: https://bot.example.kz/conversations/1",
+        'Ответьте "+7" — подтвердить, "-7 причина" — отклонить.',
+    ]
+    comment = lines[5].split("Комментарий: «", 1)[1].rsplit("»", 1)[0]
     assert len(comment) <= 300
-    assert text.startswith("Заявка #7:")
+
+
+def test_admin_text_uses_service_and_omits_missing_link():
+    from datetime import UTC, datetime
+
+    b = service.BookingRequest(
+        id=3, conversation_id=1, status="pending", created_at=datetime.now(UTC), phone="77010000001", name="Айгерим",
+        payload={"date": "2026-11-27", "time": "15:00", "service": "Маникюр"},
+    )
+    text = service.admin_text(b)
+    assert "Имя: «Айгерим»" in text and "Услуга: «Маникюр»" in text and "Когда: 2026-11-27 в 15:00" in text
+    assert "Диалог:" not in text
 
 
 async def test_non_admin_plus_message_goes_to_llm(env, pool):

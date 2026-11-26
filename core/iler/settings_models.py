@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
@@ -35,6 +36,17 @@ class WeeklyHours(BaseModel):
     fri: DayHours = DayHours()
     sat: DayHours = DayHours()
     sun: DayHours = DayHours()
+
+
+EXCLUDE_PHONES_MAX = 2000
+
+
+def normalize_phone_digits(value: str | None) -> str:
+    """Digits only; a KZ/RU local number 8XXXXXXXXXX (11 digits) becomes 7XXXXXXXXXX."""
+    d = re.sub(r"\D", "", (value or "").split("@", 1)[0])
+    if len(d) == 11 and d.startswith("8"):
+        d = "7" + d[1:]
+    return d
 
 
 NO_COINS_MESSAGE_DEFAULT = "Спасибо за сообщение! Сейчас подключится менеджер и ответит вам."
@@ -97,7 +109,8 @@ class BotSettings(BaseModel):
     after_hours_message: str = ""
     greeting: str = ""
     buffer_delay_seconds: int = Field(8, ge=3, le=120)
-    handover_pause_minutes: int = Field(60, ge=1, le=1440)
+    # how long the bot stays silent in a chat after a person (operator in the panel or on the phone) replied
+    handover_pause_minutes: int = Field(720, ge=1, le=4320)
     memory_messages: int = Field(20, ge=2, le=100)
     booking_confirm_template: str = "Ваша бронь подтверждена ✅ {details}"
     booking_reject_template: str = "К сожалению, не получилось забронировать: {reason}"
@@ -124,6 +137,44 @@ class BotSettings(BaseModel):
             from iler.knowledge.prices import parse_text
 
             return [r.as_dict() for r in parse_text(v).rows[:SERVICES_MAX]]
+        return v
+
+    # reply rules (iler.reply_rules): who gets a bot reply and when
+    # Only contacts that did not write to the number before the bot was linked (see reply_rules.is_known).
+    new_contacts_only: bool = False
+    # Numbers the bot never answers (digits, KZ 8XXXXXXXXXX normalized to 7XXXXXXXXXX).
+    exclude_phones: list[str] = []
+    # Inside working hours (`hours`): "reply" as usual or "silent" (the staff answers during the day).
+    # Outside working hours `after_hours_mode` applies.
+    work_hours_mode: Literal["reply", "silent"] = "reply"
+    # Time zone of `hours`; empty = the server default (ILER_TZ, Asia/Almaty).
+    timezone: str = "Asia/Almaty"
+
+    @field_validator("exclude_phones")
+    @classmethod
+    def _exclude_phones(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for raw in v:
+            d = normalize_phone_digits(raw)
+            if not d:
+                continue
+            if not 10 <= len(d) <= 15:
+                raise ValueError(f"phone must have 10-15 digits: {raw[:32]}")
+            if d not in out:
+                out.append(d)
+        if len(out) > EXCLUDE_PHONES_MAX:
+            raise ValueError(f"at most {EXCLUDE_PHONES_MAX} excluded numbers")
+        return out
+
+    @field_validator("timezone")
+    @classmethod
+    def _timezone(cls, v: str) -> str:
+        v = (v or "").strip()
+        if v:
+            try:
+                ZoneInfo(v)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise ValueError(f"unknown time zone: {v[:64]}") from None
         return v
 
     @field_validator("template_values")
@@ -176,6 +227,35 @@ class NotifySettings(BaseModel):
     admin_phones: list[str] = []
     admin_group_jid: str | None = None
     smtp: SmtpSettings | None = None
+
+    # lead notifications (iler.notify): new requests and handovers also go to Telegram
+    # The owner's own Telegram bot token: write-only in the API (GET says only whether it is set).
+    telegram_bot_token: SecretStr | None = None
+    telegram_chat_ids: list[str] = []
+    # Address of this admin panel, for the "open the conversation" link in notifications.
+    admin_url: str = Field("", max_length=300)
+
+    @field_validator("telegram_chat_ids")
+    @classmethod
+    def _chat_ids(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for raw in v:
+            value = str(raw).strip()
+            if not value:
+                continue
+            if not re.fullmatch(r"-?\d{1,20}", value):
+                raise ValueError(f"Telegram chat id must be a number: {value[:32]}")
+            if value not in out:
+                out.append(value)
+        return out[:20]
+
+    @field_validator("admin_url")
+    @classmethod
+    def _admin_url(cls, v: str) -> str:
+        v = (v or "").strip().rstrip("/")
+        if v and not re.match(r"^https?://[^\s/]+", v, re.IGNORECASE):
+            raise ValueError("admin_url must start with http:// or https://")
+        return v
 
 
 class SenetSettings(BaseModel):

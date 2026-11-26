@@ -117,7 +117,30 @@ class Settings(BaseSettings):
     # the same alert (provider + kind) is not repeated within this time
     alert_cooldown_seconds: int = 1800
 
+    # ---- client-facing texts ----
+    # coins one typical client dialog costs: tariff cards and the cabinet show "≈ N диалогов" (tariffs.dialogs)
+    coins_per_dialog: int = 37
+    # support contacts shown in the portal (header/footer, login panel, cabinet) and in the signature of letters;
+    # empty = not shown. WhatsApp: the number in digits (wa.me link), e.g. 77001234567
+    support_phone: str = ""
+    support_whatsapp: str = ""
+    # date of the published edition of /offer, /refund, /privacy (e.g. 01.12.2026); empty = the pages say "Черновик"
+    legal_date: str = ""
+
     openapi: bool = False
+
+
+def whatsapp_digits() -> str:
+    """NOX_SUPPORT_WHATSAPP as digits only (+7 700 123-45-67 -> 77001234567); 8XXXXXXXXXX counts as 7XXXXXXXXXX."""
+    digits = "".join(c for c in get_settings().support_whatsapp if c.isdigit())
+    if len(digits) == 11 and digits[0] == "8":
+        digits = "7" + digits[1:]
+    return digits
+
+
+def whatsapp_url() -> str:
+    digits = whatsapp_digits()
+    return f"https://wa.me/{digits}" if digits else ""
 
 
 def cookies_secure() -> bool:

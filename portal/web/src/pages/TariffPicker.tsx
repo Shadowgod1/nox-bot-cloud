@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Coins, CreditCard, FileText, FlaskConical, QrCode } from 'lucide-react'
-import { api, FREE_CODE, goToCheckout, loadPublicConfig, money, type ClientMe, type PublicConfig, type Tariff } from '../api'
+import { api, dialogsText, FREE_CODE, goToCheckout, loadPublicConfig, money, type ClientMe, type PublicConfig, type Tariff } from '../api'
 import { Alert, Button, cx } from '../components/ui'
 
 type Method = 'invoice' | 'online'
@@ -96,6 +96,11 @@ export function TariffPicker({ current, onChosen, upgrade = false }: Props) {
                 <Coins className="size-4 text-accent" aria-hidden />
                 <span className="tabular-nums">{t.coins.toLocaleString('ru-RU')}</span> коинов в месяц
               </span>
+              {!!t.dialogs && (
+                <span className="mt-1 text-[13.5px] font-bold text-ink" data-testid="tariff-dialogs">
+                  {dialogsText(t.dialogs)} в месяц
+                </span>
+              )}
               {t.description && <span className="mt-2 border-t border-line pt-2 text-[13px] leading-snug text-ink-3">{t.description}</span>}
             </button>
           )
@@ -124,7 +129,9 @@ export function TariffPicker({ current, onChosen, upgrade = false }: Props) {
             <span className="mt-0.5 block text-[13px] text-ink-3">
               {free.available === false
                 ? FREE_FULL
-                : `Бот подключается сразу, без оплаты. ${free.coins.toLocaleString('ru-RU')} коинов на весь тест.`}
+                : `Бот подключается сразу, без оплаты. ${free.coins.toLocaleString('ru-RU')} коинов${
+                    free.dialogs ? ` — ${dialogsText(free.dialogs)} на весь тест` : ' на весь тест'
+                  }.`}
             </span>
           </span>
           <span className="nx-dot" aria-hidden />

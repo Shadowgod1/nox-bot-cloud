@@ -246,10 +246,14 @@ async def notify_admins(text: str, *, key: str) -> list[str]:
     deterministic (derived from what makes the alert unique), so a repeated call never notifies twice (AD-4)."""
     try:
         notify = await settings_store.get("notify", NotifySettings)
-        return [await send_to_jid(f"admin:{key}:{jid}", jid, text) for jid in admin_targets(notify)]
+        statuses = [await send_to_jid(f"admin:{key}:{jid}", jid, text) for jid in admin_targets(notify)]
     except Exception:  # noqa: BLE001 - a notification must not break the caller
         log.exception("admin notification failed")
         return []
+    # lead notifications: the same text to the owner's Telegram chats (never raises)
+    from iler import notify as lead_notify
+
+    return statuses + await lead_notify.notify_telegram(notify, text, key=key)
 
 
 async def send_operator_message(conversation_id: int, text: str, user_name: str, *, request_id: str) -> None:

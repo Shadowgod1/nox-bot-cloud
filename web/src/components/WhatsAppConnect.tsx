@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CheckCircle2, QrCode, RefreshCw, Smartphone } from 'lucide-react'
+import { CheckCircle2, FlaskConical, Power, QrCode, RefreshCw, ShieldCheck, Smartphone, UserCheck } from 'lucide-react'
 import { api } from '../api/client'
 import type { WhatsAppStatus } from '../api/types'
 import { Button, Field, Input, Segmented, Spinner, cx } from './ui'
@@ -10,11 +10,13 @@ export const WA_POLL_MS = 4000
 type Method = 'qr' | 'code'
 
 /**
- * Connect the club's WhatsApp number: QR code or 8-character pairing code.
+ * Connect the business WhatsApp number: QR code or 8-character pairing code.
+ * Before the first QR the owner sees what happens to the number (NumberSafety), with one button.
  * Polls /api/whatsapp/status every 4 s until the session is `open`, then stops.
  */
-export function WhatsAppConnect({ onConnected }: { onConnected?: (s: WhatsAppStatus) => void }) {
+export function WhatsAppConnect({ onConnected, intro = true }: { onConnected?: (s: WhatsAppStatus) => void; intro?: boolean }) {
   const [status, setStatus] = useState<WhatsAppStatus | null>(null)
+  const [showIntro, setShowIntro] = useState(intro)
   const [method, setMethod] = useState<Method>('qr')
   const [qr, setQr] = useState<string | null>(null)
   const [code, setCode] = useState<string | null>(null)
@@ -91,6 +93,23 @@ export function WhatsAppConnect({ onConnected }: { onConnected?: (s: WhatsAppSta
     )
   }
 
+  if (showIntro) {
+    return (
+      <NumberSafety
+        busy={busy}
+        onQr={() => {
+          setShowIntro(false)
+          setMethod('qr')
+          void requestQr()
+        }}
+        onCode={() => {
+          setShowIntro(false)
+          setMethod('code')
+        }}
+      />
+    )
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -129,7 +148,7 @@ export function WhatsAppConnect({ onConnected }: { onConnected?: (s: WhatsAppSta
               <li>
                 Меню <span className="text-ink">⋮</span> или «Настройки» → «Связанные устройства» → «Привязка устройства».
               </li>
-              <li>Наведите камеру на QR-код слева.</li>
+              <li>Наведите камеру телефона на этот QR-код.</li>
             </ol>
             <p className="text-[13px]">Код обновляется примерно раз в минуту. Если он истёк — получите новый.</p>
             <div>
@@ -174,5 +193,69 @@ export function WhatsAppConnect({ onConnected }: { onConnected?: (s: WhatsAppSta
         </div>
       )}
     </div>
+  )
+}
+
+const SAFETY: { icon: typeof Smartphone; title: string; text: string }[] = [
+  {
+    icon: Smartphone,
+    title: 'WhatsApp на телефоне продолжит работать',
+    text:
+      'Бот подключается как связанное устройство — так же, как WhatsApp Web на компьютере. Вы и администратор переписываетесь с телефона как раньше и видите все ответы бота.',
+  },
+  {
+    icon: ShieldCheck,
+    title: 'Бот пишет только тем, кто написал сам',
+    text:
+      'Он не делает рассылок и никому не пишет первым. Номера чаще всего блокируют за массовые сообщения незнакомым людям и жалобы на них — бот так не работает. Честно: полной гарантии нет — WhatsApp официально не поддерживает ботов через связанные устройства и сам решает, кого ограничить.',
+  },
+  {
+    icon: UserCheck,
+    title: 'Вы решаете, кому он отвечает',
+    text:
+      'Можно отвечать только новым контактам, не трогать старых клиентов и друзей, добавить номера-исключения. Если вы ответили клиенту сами, бот в этом чате замолкает.',
+  },
+  {
+    icon: Power,
+    title: 'Выключить — одной кнопкой',
+    text:
+      'Переключатель «Бот на паузе» вверху админки. Отвязать совсем: WhatsApp на телефоне → «Связанные устройства» → выйти. Если телефон не выходит в интернет дольше 14 дней, WhatsApp отвяжет бота сам — админка об этом предупредит.',
+  },
+  {
+    icon: FlaskConical,
+    title: 'Сначала проверьте ответы',
+    text: 'Пока бот не настроен, он никому не отвечает. Проверьте его в «Тестовом чате» — там сообщения не уходят клиентам.',
+  },
+]
+
+/** The screen before the first QR: honest answers to "what happens to my number". */
+export function NumberSafety({ onQr, onCode, busy }: { onQr: () => void; onCode: () => void; busy?: boolean }) {
+  return (
+    <section aria-labelledby="wa-safety-title" className="flex flex-col gap-4">
+      <h2 id="wa-safety-title" className="text-[15px] font-semibold text-ink">
+        Что будет с вашим номером
+      </h2>
+      <ul className="grid gap-3 sm:grid-cols-2">
+        {SAFETY.map(({ icon: Icon, title, text }, i) => (
+          <li key={title} className={cx('flex gap-3 rounded-[10px] border border-line bg-surface p-3.5', i === SAFETY.length - 1 && 'sm:col-span-2')}>
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-accent-soft text-accent" aria-hidden>
+              <Icon className="size-4" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-ink">{title}</span>
+              <span className="mt-0.5 block text-[13px] leading-relaxed text-ink-2">{text}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="primary" loading={busy} onClick={onQr} icon={<QrCode className="size-4" aria-hidden />}>
+          Показать QR-код
+        </Button>
+        <button type="button" onClick={onCode} className="text-[13px] text-ink-2 underline hover:text-ink">
+          Нет камеры? Подключить по коду
+        </button>
+      </div>
+    </section>
   )
 }

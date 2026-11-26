@@ -6,8 +6,9 @@ import { useAuth } from '../../hooks/useAuth'
 import { useLoad } from '../../hooks/useLoad'
 import { PageBody } from '../../components/Layout'
 import { SecretInput, secretPayload, secretState, type SecretState } from '../../components/SecretInput'
-import { Button, CheckLine, type CheckView, ErrorState, Field, Input, PageHeader, Panel, Spinner, Switch, Textarea } from '../../components/ui'
+import { Button, CheckLine, type CheckView, ErrorState, Field, Input, PageHeader, Panel, Spinner, Switch } from '../../components/ui'
 import { toast } from '../../components/toast'
+import { LeadNotifications } from '../../components/LeadNotifications'
 import { ru } from '../../i18n/ru'
 
 export function Integrations() {
@@ -16,6 +17,9 @@ export function Integrations() {
       <PageHeader title="Интеграции" description="Подключение клубной системы и куда присылать уведомления администратору." />
       <div className="flex flex-col gap-5">
         <SenetPanel />
+        <Panel id="leads" title="Уведомления о заявках" description="Куда бот присылает новые заявки и просьбы позвать человека.">
+          <LeadNotifications />
+        </Panel>
         <NotifyPanel />
       </div>
     </PageBody>
@@ -128,7 +132,6 @@ function SenetPanel() {
 /* ---------- Notifications ---------- */
 
 interface NotifyForm {
-  phones: string
   group: string
   smtpOn: boolean
   smtp: Omit<SmtpSettings, 'password' | 'to'> & { to: string }
@@ -139,7 +142,6 @@ const emptySmtp = { host: '', port: 587, user: '', sender: '', to: '', starttls:
 
 function toNotifyForm(n: NotifySettings): NotifyForm {
   return {
-    phones: n.admin_phones.join('\n'),
     group: n.admin_group_jid ?? '',
     smtpOn: Boolean(n.smtp),
     smtp: n.smtp ? { host: n.smtp.host, port: n.smtp.port, user: n.smtp.user, sender: n.smtp.sender, to: n.smtp.to.join(', '), starttls: n.smtp.starttls } : emptySmtp,
@@ -162,22 +164,22 @@ function NotifyPanel() {
     if (data) setForm(toNotifyForm(data))
   }, [data])
 
-  const title = 'Уведомления администратору'
-  const description = 'Сюда бот присылает заявки на бронь и просьбы позвать оператора. Ответ «+12» подтверждает заявку №12, «-12 причина» — отклоняет.'
+  const title = 'Дополнительные каналы'
+  const description = 'Группа администраторов в WhatsApp и резервные письма на e-mail.'
   if (loading && !form) return <Panel title={title} description={description}><Spinner /></Panel>
   if (error && !form) return <Panel title={title} description={description}><ErrorState message={error.message} onRetry={reload} /></Panel>
   if (!form) return null
 
-  const phones = splitList(form.phones)
-  const badPhones = phones.filter((p) => p.replace(/\D/g, '').length < 10)
   const smtpInvalid = form.smtpOn && !form.smtp.host.trim()
 
   async function save() {
-    if (!form || badPhones.length || smtpInvalid) return
+    if (!form || smtpInvalid) return
     setSaving(true)
     try {
+      // the latest stored settings: the lead-notification fields (numbers, Telegram) stay as they are
+      const current = await api.get<NotifySettings>('/api/settings/notify', { silent: true })
       const payload: NotifySettings = {
-        admin_phones: phones,
+        ...current,
         admin_group_jid: form.group.trim() || null,
         smtp: form.smtpOn
           ? {
@@ -212,18 +214,9 @@ function NotifyPanel() {
           void save()
         }}
       >
-        <div className="grid gap-5 md:grid-cols-2">
-          <Field
-            label="Номера администраторов в WhatsApp"
-            hint="По одному на строку, в международном формате."
-            error={badPhones.length ? `Проверьте номер: ${badPhones.join(', ')}` : null}
-          >
-            <Textarea rows={3} value={form.phones} onChange={(e) => setForm({ ...form, phones: e.target.value })} placeholder="+7 701 123 45 67" className="tabular" />
-          </Field>
-          <Field label="Группа администраторов (JID)" hint="Необязательно. Идентификатор вида 1203630…@g.us — уведомления пойдут в группу.">
-            <Input value={form.group} onChange={(e) => setForm({ ...form, group: e.target.value.trim() })} spellCheck={false} placeholder="120363000000000000@g.us" />
-          </Field>
-        </div>
+        <Field label="Группа администраторов (JID)" hint="Необязательно. Идентификатор вида 1203630…@g.us — уведомления пойдут в группу." className="md:max-w-md">
+          <Input value={form.group} onChange={(e) => setForm({ ...form, group: e.target.value.trim() })} spellCheck={false} placeholder="120363000000000000@g.us" />
+        </Field>
 
         <div className="rounded-[9px] border border-line p-4">
           <Switch
@@ -261,7 +254,7 @@ function NotifyPanel() {
         </div>
 
         <div>
-          <Button type="submit" variant="primary" loading={saving} disabled={badPhones.length > 0 || smtpInvalid}>
+          <Button type="submit" variant="primary" loading={saving} disabled={smtpInvalid}>
             {ru.common.save}
           </Button>
         </div>

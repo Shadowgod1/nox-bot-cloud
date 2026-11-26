@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from iler import settings_store, usage
+from iler import reply_rules, settings_store, usage
 from iler.config import brand_company, brand_name, gateway_mode, get_settings
 from iler.engine import admission, media, prompt, sender, store
 from iler.engine.pii import PiiMasker, mask_phone_for_log, one_line
@@ -57,8 +57,9 @@ class _PiiRestoringTool:
         return await self._tool.run(ctx, self._masker.restore_obj(args))
 
 
-def _tz() -> tuple[ZoneInfo, str]:
-    name = get_settings().tz
+def _tz(bot=None) -> tuple[ZoneInfo, str]:
+    # reply rules: the time zone of the working hours (bot settings), else the server default
+    name = (getattr(bot, "timezone", "") or "").strip() or get_settings().tz
     try:
         return ZoneInfo(name), name
     except Exception:  # noqa: BLE001
@@ -148,7 +149,7 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
     """
     all_settings = await settings_store.load_all()
     bot = all_settings.bot
-    tz, tz_name = _tz()
+    tz, tz_name = _tz(bot)
     now = datetime.now(UTC)
     now_local = now.astimezone(tz)
     conv = None
@@ -166,6 +167,10 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
         decision = admission.decide(conv, bot, now, now_local)
         if decision.action == "skip":
             log.info("conversation %s: no reply (%s)", conversation_id, decision.reason)
+            return TurnOutcome()
+        rule = await reply_rules.skip_reason(conv, bot)
+        if rule is not None:
+            log.info("conversation %s: no reply by the reply rules (%s)", conversation_id, rule)
             return TurnOutcome()
         if _not_configured(bot):
             log.warning("conversation %s: no reply, the bot prompt is not configured", conversation_id)

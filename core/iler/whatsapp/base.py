@@ -16,6 +16,9 @@ class IncomingMessage:
     is_group: bool
     media: dict | None
     ts: datetime
+    # WhatsApp's own timestamp of the message (messageTimestamp); None when absent. Used only to tell
+    # history (written before the bot was linked) from live messages; `ts` stays our receive time.
+    sent_at: datetime | None = None
 
 
 class WhatsAppGateway(Protocol):

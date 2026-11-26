@@ -61,7 +61,7 @@ describe('Setup wizard', () => {
       </MemoryRouter>,
     )
     const steps = await screen.findByRole('list', { name: 'Шаги первоначальной настройки' })
-    expect(steps.textContent).toBe('1Владелец2Языковая модель3WhatsApp4Настройка бота5Проверьте бота6Готово')
+    expect(steps.textContent).toBe('1Владелец2Языковая модель3Настройка бота4Проверьте бота5WhatsApp6Заявки7Готово')
   })
 
   it('sends the setup token from the URL and explains a missing/invalid token', async () => {

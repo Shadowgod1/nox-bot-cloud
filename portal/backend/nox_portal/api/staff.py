@@ -77,7 +77,7 @@ async def get_staff_config():
         sealing = False
     return StaffConfig(tariffs=tariffs.as_dicts(include_free=True), coin_presets=COIN_PRESETS,
                        instance_domain=get_settings().instance_domain, custom_key_supported=sealing,
-                       topup=TariffOut(**asdict(tariffs.TOPUP)), gateway_url=get_settings().public_url.rstrip("/"),
+                       topup=TariffOut(**asdict(tariffs.TOPUP), dialogs=tariffs.dialogs(tariffs.TOPUP.coins)), gateway_url=get_settings().public_url.rstrip("/"),
                        online_payments=payments.get_provider() is not None)
 
 
@@ -129,7 +129,7 @@ async def get_application(account_id: int):
     row = await pool.fetchrow(
         f"SELECT {_LIST_COLS}, admin_url, port, reject_reason, last_error, email_verified_at, register_ip,"
         " invoice_no, invoice_amount, invoice_issued_at, local_install, period_start, pay_method, invoice_note,"
-        " free_until, suspend_reason, upgrade_tariff, period_end,"
+        " free_until, suspend_reason, upgrade_tariff, period_end, setup_help_requested_at, setup_help_contacted_at,"
         " (period_end IS NOT NULL AND coalesce(tariff, '') <> 'free'"
         "  AND status IN ('approved','provisioning','active','suspended')"
         "  AND period_end - make_interval(days => $2) <= now()"
@@ -192,7 +192,7 @@ async def llm_balance(conn, account_id: int) -> LlmBalance:
     status = ("suspended" if bal.status not in wallet.LIVE_STATUSES else "active") if has_key else "revoked"
     return LlmBalance(coins_left=bal.coins_left, monthly_limit=bal.monthly_limit, monthly_coins=float(bal.monthly),
                       topup_coins=float(bal.carry + bal.topups), spent=float(bal.spent), period_start=bal.period_start,
-                      period_end=bal.period_end, status=status)
+                      period_end=bal.period_end, status=status, dialogs_left=tariffs.dialogs(bal.coins_left))
 
 
 @router.post("/api/staff/applications/{account_id}/approve", response_model=Ok, dependencies=staff_mutation)
@@ -373,6 +373,24 @@ async def _simple_job(account_id: int, kind: str, allowed: tuple[str, ...], requ
         job_id = await jobs.enqueue(conn, account_id, kind, row["slug"], staff_id=staff.id)
         await audit(conn, f"staff.{kind}", staff_id=staff.id, account_id=account_id, ip=ratelimit.client_ip(request),
                     details={"job": job_id})
+
+
+@router.post("/api/staff/applications/{account_id}/setup-help/contacted", response_model=Ok,
+             dependencies=staff_mutation)
+async def post_setup_help_contacted(account_id: int, request: Request, staff: Principal = Depends(current_staff)):
+    """Close the client's open "помогите с настройкой" request: a manager got in touch."""
+    pool = get_pool()
+    async with pool.acquire() as conn, conn.transaction():
+        done = await conn.fetchval(
+            "UPDATE accounts SET setup_help_contacted_at = now(), setup_help_contacted_by = $2, updated_at = now()"
+            " WHERE id = $1 AND setup_help_requested_at IS NOT NULL AND setup_help_contacted_at IS NULL RETURNING id",
+            account_id, staff.id,
+        )
+        if done is None:
+            raise ApiError(409, "no_request", "Открытого запроса на помощь с настройкой нет")
+        await audit(conn, "staff.setup_help_contacted", staff_id=staff.id, account_id=account_id,
+                    ip=ratelimit.client_ip(request))
+    return Ok()
 
 
 @router.post("/api/staff/applications/{account_id}/suspend", response_model=Ok, dependencies=staff_mutation)

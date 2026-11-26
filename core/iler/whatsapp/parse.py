@@ -66,6 +66,50 @@ def _text_and_media(message: dict) -> tuple[str, dict | None]:
     return "", None
 
 
+def message_timestamp(value) -> datetime | None:
+    """`messageTimestamp` as an aware datetime: seconds as int/str, or a protobuf Long {low, high}."""
+    if isinstance(value, dict):
+        try:
+            value = (int(value.get("high") or 0) << 32) + (int(value.get("low") or 0) & 0xFFFFFFFF)
+        except (TypeError, ValueError):
+            return None
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return None
+    if seconds > 10**11:  # milliseconds
+        seconds //= 1000
+    if seconds <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(seconds, UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def history_contacts(payload: dict) -> list[tuple[str, str]]:
+    """(phone, jid) of private chats in a history-sync webhook (MESSAGES_SET / CHATS_SET)."""
+    data = payload.get("data")
+    if isinstance(data, dict):
+        data = data.get("messages") or data.get("chats") or [data]
+    if not isinstance(data, list):
+        return []
+    out: list[tuple[str, str]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key") if isinstance(item.get("key"), dict) else {}
+        jid = str(key.get("remoteJid") or item.get("remoteJid") or item.get("id") or "")
+        if not jid or jid.endswith(("@g.us", "@broadcast", "@newsletter")):
+            continue
+        alt = key.get("remoteJidAlt") or key.get("senderPn")
+        if jid.endswith("@lid") and alt:
+            jid = alt if "@" in str(alt) else f"{_digits(alt)}@s.whatsapp.net"
+        phone = "" if jid.endswith("@lid") else _digits(jid)
+        out.append((phone, jid))
+    return out
+
+
 def parse_upsert(payload: dict, received_at: datetime | None = None) -> IncomingMessage | None:
     """Turn a MESSAGES_UPSERT webhook into an IncomingMessage.
 
@@ -116,6 +160,7 @@ def parse_upsert(payload: dict, received_at: datetime | None = None) -> Incoming
         is_group=is_group,
         media=media,
         ts=received_at or datetime.now(UTC),
+        sent_at=message_timestamp(data.get("messageTimestamp")),
     )
 
 

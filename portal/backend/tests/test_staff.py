@@ -197,7 +197,8 @@ async def test_staff_config(client, pool):
     cfg = (await client.get("/api/staff/config")).json()
     assert [t["code"] for t in cfg.pop("tariffs")] == ["start", "business", "pro", "free"]
     assert cfg.pop("topup") == {"code": "topup", "name": "Пакет коинов", "price_kzt": 9900, "coins": 10000,
-                                "description": "10 000 коинов сверх месячного пакета, не сгорают", "available": True}
+                                "description": "10 000 коинов сверх месячного пакета, не сгорают", "available": True,
+                                "dialogs": 250}
     assert cfg.pop("gateway_url") == "https://bot.example.kz"
     assert cfg == {"coin_presets": [30000, 60000, 120000], "instance_domain": "example.kz",
                    "custom_key_supported": True, "online_payments": False}

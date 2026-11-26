@@ -57,6 +57,9 @@ async def set_status(status: str, *, phone=_KEEP, last_error=_KEEP, reset_failur
             " last_error = CASE WHEN $4 THEN $5 ELSE last_error END,"
             " send_failures = CASE WHEN $6 THEN 0 ELSE send_failures END,"
             " last_seen_at = CASE WHEN $7 THEN now() ELSE last_seen_at END,"
+            # the current link starts at the first `open`; a logout (phone cleared) ends it
+            " linked_at = CASE WHEN $1 = 'open' AND linked_at IS NULL THEN now()"
+            "                  WHEN $2 AND $3::text IS NULL THEN NULL ELSE linked_at END,"
             " updated_at = now()"
             " WHERE id = 1 RETURNING status, phone, last_error",
             status,
@@ -114,8 +117,9 @@ async def apply_connection_update(state: str, *, wuid: str | None = None, status
     if state == "open":
         phone = _digits(wuid) if wuid else _KEEP
         return await set_status("open", phone=phone, last_error=None, reset_failures=True, seen=True)
-    error = "logged_out" if str(status_reason) == "401" else _KEEP
-    return await set_status(state, last_error=error)
+    if str(status_reason) == "401":  # logged out on the phone: the link is gone
+        return await set_status(state, phone=None, last_error="logged_out")
+    return await set_status(state)
 
 
 def _digits(jid: str) -> str:

@@ -72,7 +72,8 @@ const s: State = {
     { id: 1, email: 'owner@club.local', name: 'Айгерим', role: 'owner', created_at: ago(9000), last_login_at: ago(5) },
     { id: 2, email: 'reception@club.local', name: 'Ресепшн', role: 'operator', created_at: ago(8000), last_login_at: ago(300) },
   ],
-  wa: { status: 'open', phone: '77015551234', last_error: null },
+  // VITE_MOCK_WA=close starts disconnected (to see the screen before the QR)
+  wa: import.meta.env.VITE_MOCK_WA === 'close' ? { status: 'close', phone: null, last_error: null } : { status: 'open', phone: '77015551234', last_error: null },
   waPolls: 0,
   conversations: [
     { id: 1, chat_jid: '77015550101@s.whatsapp.net', phone: '77015550101', name: 'Данияр', status: 'needs_operator', paused_until: null, last_message_at: ago(3), unread: 2 },
@@ -121,10 +122,15 @@ const s: State = {
     voice_message: VOICE_DEFAULT,
     photo_mode: 'handover',
     photo_message: PHOTO_DEFAULT,
+    // reply rules
+    new_contacts_only: false,
+    exclude_phones: [],
+    work_hours_mode: 'reply',
+    timezone: 'Asia/Almaty',
   },
   llm: { provider: 'openai', openai_model: 'gpt-5.4-mini', openai_fallback_model: null, gemini_model: 'gemini-3.8-flash', anthropic_model: 'claude-sonnet-5-5', anthropic_effort: 'low', emergency_provider: null },
   vendorProviders: ['anthropic', 'openai'],
-  notify: { admin_phones: ['77015550000'], admin_group_jid: null, smtp: null, _smtpPass: null },
+  notify: { admin_phones: ['77015550000'], admin_group_jid: null, smtp: null, _smtpPass: null, telegram_bot_token: null, telegram_chat_ids: [], admin_url: '' },
   senet: { enabled: false, orgname: null, app_key: null, _key: null },
   backups: [
     { name: 'iler-backup-20261111-040000.tar.gz', size: 18_734_112, created_at: ago(60 * 8), sha256: 'a1b2c3d4' },
@@ -174,7 +180,11 @@ const convRow = (c: ConvState): ConversationRow => ({ ...c, created_at: ago(60 *
 const sortKey = (c: ConvState) => (c.last_message_at ? Date.parse(c.last_message_at) * 1000 : 0)
 
 const llmOut = (): LlmSettings => ({ ...s.llm })
-const notifyOut = (): NotifySettings => ({ ...strip(s.notify), smtp: s.notify.smtp ? { ...s.notify.smtp, password: mask(s.notify._smtpPass) } : null })
+const notifyOut = (): NotifySettings => ({
+  ...strip(s.notify),
+  smtp: s.notify.smtp ? { ...s.notify.smtp, password: mask(s.notify._smtpPass) } : null,
+  telegram_bot_token: s.notify.telegram_bot_token ? MASK : null, // write-only, like core
+})
 const senetOut = (): SenetSettings => ({ ...strip(s.senet), app_key: mask(s.senet._key) })
 
 function strip<T extends object>(o: T): T {
@@ -494,8 +504,40 @@ on('GET', '/api/settings/notify', () => json(notifyOut()))
 on('PUT', '/api/settings/notify', (_m, b) => {
   const smtp = b.smtp as (NotifySettings['smtp'] & { password?: unknown }) | null
   s.notify._smtpPass = smtp ? applySecret(s.notify._smtpPass, smtp.password) : null
-  s.notify = { ...s.notify, admin_phones: (b.admin_phones as string[]) ?? [], admin_group_jid: (b.admin_group_jid as string) || null, smtp: smtp ? { ...smtp, password: null } : null }
+  s.notify = {
+    ...s.notify,
+    admin_phones: (b.admin_phones as string[]) ?? [],
+    admin_group_jid: (b.admin_group_jid as string) || null,
+    smtp: smtp ? { ...smtp, password: null } : null,
+    telegram_bot_token: applySecret(s.notify.telegram_bot_token, b.telegram_bot_token),
+    telegram_chat_ids: (b.telegram_chat_ids as string[]) ?? [],
+    admin_url: String(b.admin_url ?? ''),
+  }
   return json(notifyOut())
+})
+
+/* reply rules + lead notifications */
+on('GET', '/api/settings/bot/pause', () => json({ enabled: s.bot.enabled }))
+on('POST', '/api/settings/bot/pause', (_m, b) => {
+  s.bot = { ...s.bot, enabled: !b.paused }
+  publish('bot.status', { enabled: s.bot.enabled })
+  return json({ enabled: s.bot.enabled })
+})
+on('GET', '/api/settings/bot/known-contacts', () => json({ count: 37 }))
+on('POST', '/api/settings/notify/telegram/chats', async (_m, b) => {
+  await sleep(500)
+  const token = (b.token as string | null) || s.notify.telegram_bot_token
+  if (!token) return json({ ok: false, chats: [], error: 'укажите токен бота' })
+  if (!/^\d{5,15}:[A-Za-z0-9_-]{20,}$/.test(token)) return json({ ok: false, chats: [], error: 'токен бота выглядит неверно: он вида 123456789:AA…' })
+  return json({ ok: true, chats: [{ id: '501234567', title: 'Айгерим' }] })
+})
+on('POST', '/api/settings/notify/test', async () => {
+  await sleep(600)
+  const tg = s.notify.telegram_bot_token && s.notify.telegram_chat_ids.length
+  return json({
+    whatsapp: s.notify.admin_phones.length ? { ok: true, sent: s.notify.admin_phones.length, error: null } : null,
+    telegram: tg ? { ok: true, sent: s.notify.telegram_chat_ids.length, error: null } : null,
+  })
 })
 on('GET', '/api/integrations/senet', () => json(senetOut()))
 on('PUT', '/api/integrations/senet', (_m, b) => {

@@ -186,7 +186,7 @@ async def test_ensure_instance_creates_when_missing_and_sets_webhook(evo):
     hook = next(c for c in fake.calls if c[1] == "/webhook/set/iler")[2]["webhook"]
     assert hook["url"].endswith("/internal/evolution/webhook")
     assert hook["headers"] == {"apikey": "test-evo-key"}
-    assert set(hook["events"]) == {"MESSAGES_UPSERT", "CONNECTION_UPDATE"}
+    assert set(hook["events"]) == {"MESSAGES_UPSERT", "CONNECTION_UPDATE", "MESSAGES_SET", "CHATS_SET"}
 
 
 async def test_ensure_instance_never_recreates_open_instance(evo):

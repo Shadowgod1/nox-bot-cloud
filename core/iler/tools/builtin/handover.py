@@ -39,8 +39,12 @@ class HandoverToOperator:
             name = one_line(conv["name"], 60)
             who = " ".join(x for x in (f"«{name}»" if name else "", f"+{conv['phone']}" if conv["phone"] else "")
                            if x)
+            from iler.notify import conversation_link
+
+            link = await conversation_link(ctx.conversation_id)
             await sender.notify_admins(
-                f"Нужен оператор: {who or 'клиент'}. Причина: «{reason}». Ответьте клиенту из админки или с телефона.",
+                f"Нужен оператор: {who or 'клиент'}. Причина: «{reason}». Ответьте клиенту из админки или с телефона."
+                + (f"\nДиалог: {link}" if link else ""),
                 key=f"handover:{ctx.conversation_id}:{ctx.extra.get('turn_id', '')}",
             )
         return ToolResult(result)

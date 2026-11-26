@@ -239,6 +239,16 @@ export interface BotSettings {
   /** Photo / video: thank and hand over (default), or only reply. */
   photo_mode: 'handover' | 'reply'
   photo_message: string
+
+  // reply rules
+  /** Answer only contacts that did not write to the number before the bot was linked. */
+  new_contacts_only: boolean
+  /** Numbers the bot never answers (digits). */
+  exclude_phones: string[]
+  /** Inside working hours: reply as usual or stay silent (staff answers during the day). */
+  work_hours_mode: WorkHoursMode
+  /** IANA time zone of `hours` (default Asia/Almaty). */
+  timezone: string
 }
 
 export interface ServiceItem {
@@ -291,6 +301,13 @@ export interface RoiStats {
   has_activity: boolean
 }
 
+export type WorkHoursMode = 'reply' | 'silent'
+
+/** GET/POST /api/settings/bot/pause */
+export interface BotPauseState {
+  enabled: boolean
+}
+
 export type LlmProvider = 'openai' | 'gemini' | 'anthropic'
 
 /** Claude thinking depth (`output_config.effort`): low = fastest replies. */
@@ -326,6 +343,31 @@ export interface NotifySettings {
   admin_phones: string[]
   admin_group_jid: string | null
   smtp: SmtpSettings | null
+  // lead notifications
+  /** Write-only: "••••" when set, null when not. */
+  telegram_bot_token: SecretValue
+  telegram_chat_ids: string[]
+  /** Address of this admin panel for links in notifications. */
+  admin_url: string
+}
+
+/** POST /api/settings/notify/telegram/chats */
+export interface TelegramChatsResult {
+  ok: boolean
+  chats: { id: string; title: string }[]
+  error?: string
+}
+
+export interface NotifyChannelResult {
+  ok: boolean
+  sent: number
+  error?: string | null
+}
+
+/** POST /api/settings/notify/test: channels that are not set up are null. */
+export interface NotifyTestResult {
+  whatsapp: NotifyChannelResult | null
+  telegram: NotifyChannelResult | null
 }
 
 export interface SenetSettings {
@@ -481,3 +523,4 @@ export type ServerEvent =
   | { type: 'conversation.updated'; data: Conversation | { conversation: ConversationRow } }
   | { type: 'booking.updated'; data: { booking: Booking } }
   | { type: 'whatsapp.status'; data: WhatsAppStatus }
+  | { type: 'bot.status'; data: BotPauseState }
