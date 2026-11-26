@@ -12,7 +12,10 @@ import { formatDateTime, plural, ru } from '../../i18n/ru'
 
 type Filter = 'all' | BookingStatus
 
-const tone = { pending: 'warn', confirmed: 'ok', rejected: 'danger', expired: 'neutral' } as const
+/** Columns of the request table on xl+ (header and rows): request, client, status, actions. */
+const ROW_GRID = 'xl:grid xl:grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)_minmax(0,180px)_340px] xl:gap-x-6'
+
+export const bookingTone = { pending: 'warn', confirmed: 'ok', rejected: 'danger', expired: 'neutral' } as const
 
 export function Bookings() {
   const [filter, setFilter] = useState<Filter>('pending')
@@ -62,18 +65,27 @@ export function Bookings() {
             {filter === 'pending' ? 'Когда клиент попросит забронировать место, заявка появится здесь.' : 'Попробуйте другой фильтр.'}
           </EmptyState>
         ) : (
-          <ul className="divide-y divide-line">
-            {list.data.map((b) => (
-              <BookingRow key={b.id} booking={b} onChange={replace} onStale={() => void list.reload()} />
-            ))}
-          </ul>
+          <>
+            <div aria-hidden className={cx('hidden border-b border-line px-5 py-2.5 text-[12px] font-medium text-ink-3', ROW_GRID)}>
+              <span>Заявка</span>
+              <span>Клиент</span>
+              <span>Статус</span>
+              <span className="text-right">Действия</span>
+            </div>
+            <ul className="divide-y divide-line">
+              {list.data.map((b) => (
+                <BookingRow key={b.id} booking={b} onChange={replace} onStale={() => void list.reload()} />
+              ))}
+            </ul>
+          </>
         )}
       </div>
     </PageBody>
   )
 }
 
-function details(b: Booking) {
+/** "чт, 12 ноября · 19:00 · 3 ч · 5 мест · VIP": the request fields core knows how to describe. */
+export function bookingDetails(b: Booking) {
   const p = b.payload ?? {}
   const parts: string[] = []
   if (p.date) {
@@ -118,33 +130,45 @@ function BookingRow({ booking: b, onChange, onStale }: { booking: Booking; onCha
   }
 
   return (
-    <li className="px-5 py-4">
-      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="tabular text-[13px] text-ink-3">#{b.id}</span>
-            <span className="text-sm font-semibold text-ink">{details(b) || 'Без деталей'}</span>
-            <Badge tone={tone[b.status]} dot>{ru.bookingStatus[b.status]}</Badge>
-            {b.timeout_notified && b.status === 'pending' && (
-              <Badge tone="danger">
-                <Clock className="size-3" aria-hidden /> Долго без ответа
-              </Badge>
-            )}
-          </div>
-          <p className="mt-1 text-[13px] text-ink-2">
-            {who}
-            {b.phone && who !== b.phone && <span className="tabular"> · {b.phone}</span>}
-            <span className="text-ink-3"> · создана {formatDateTime(b.created_at)}</span>
-          </p>
-          {b.payload?.comment && <p className="mt-1.5 text-sm text-ink">«{b.payload.comment}»</p>}
-          {b.status !== 'pending' && (b.admin_note || b.decided_by) && (
-            <p className="mt-1.5 text-[13px] text-ink-2">
-              {b.admin_note && <>Комментарий: {b.admin_note}. </>}
-              {b.decided_by && <span className="text-ink-3">Решение: {b.decided_by}{b.decided_at ? `, ${formatDateTime(b.decided_at)}` : ''}</span>}
-            </p>
+    <li className="px-4 py-4 sm:px-5">
+      {/* phones..lg: stacked card; xl+: a table row (columns shared with the header in Bookings) */}
+      <div className={cx('flex flex-col gap-2', ROW_GRID, 'xl:items-start xl:gap-y-1.5')}>
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 xl:col-start-1 xl:row-start-1">
+          <span className="tabular text-[13px] text-ink-3">#{b.id}</span>
+          <span className="text-sm font-semibold text-ink">{bookingDetails(b) || 'Без деталей'}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 xl:col-start-3 xl:row-span-2 xl:row-start-1">
+          <Badge tone={bookingTone[b.status]} dot>{ru.bookingStatus[b.status]}</Badge>
+          {b.timeout_notified && b.status === 'pending' && (
+            <Badge tone="danger">
+              <Clock className="size-3" aria-hidden /> Долго без ответа
+            </Badge>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <p className="min-w-0 text-[13px] text-ink-2 xl:col-start-2 xl:row-span-2 xl:row-start-1">
+          <span className="xl:block xl:truncate xl:text-sm xl:font-medium xl:text-ink">{who}</span>
+          {b.phone && who !== b.phone && (
+            <span className="tabular">
+              <span className="xl:hidden"> · </span>
+              {b.phone}
+            </span>
+          )}
+          <span className="text-ink-3 xl:block">
+            <span className="xl:hidden"> · </span>создана {formatDateTime(b.created_at)}
+          </span>
+        </p>
+        {(b.payload?.comment || (b.status !== 'pending' && (b.admin_note || b.decided_by))) && (
+          <div className="min-w-0 xl:col-start-1 xl:row-start-2">
+            {b.payload?.comment && <p className="text-sm text-ink">«{b.payload.comment}»</p>}
+            {b.status !== 'pending' && (b.admin_note || b.decided_by) && (
+              <p className="mt-1 text-[13px] text-ink-2">
+                {b.admin_note && <>Комментарий: {b.admin_note}. </>}
+                {b.decided_by && <span className="text-ink-3">Решение: {b.decided_by}{b.decided_at ? `, ${formatDateTime(b.decided_at)}` : ''}</span>}
+              </p>
+            )}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-2 pt-1 xl:col-start-4 xl:row-span-2 xl:row-start-1 xl:justify-end xl:pt-0">
           <Link
             to={`/conversations/${b.conversation_id}`}
             className="inline-flex h-8 items-center gap-1.5 rounded-[7px] px-2.5 text-[13px] font-medium text-ink-2 hover:bg-sunken hover:text-ink"
@@ -165,7 +189,7 @@ function BookingRow({ booking: b, onChange, onStale }: { booking: Booking; onCha
       </div>
       {mode && (
         <form
-          className={cx('mt-3 flex flex-col gap-3 rounded-[9px] border p-3.5', mode === 'confirm' ? 'border-ok/30 bg-ok-soft/60' : 'border-danger/25 bg-danger-soft/60')}
+          className={cx('mt-3 flex max-w-[720px] flex-col gap-3 rounded-[9px] border p-3.5', mode === 'confirm' ? 'border-ok/30 bg-ok-soft/60' : 'border-danger/25 bg-danger-soft/60')}
           onSubmit={(e) => {
             e.preventDefault()
             void decide()
