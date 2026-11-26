@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 
 from iler import events, settings_store
-from iler.config import get_settings
+from iler.config import brand_name, get_settings
 from iler.db.pool import get_pool
 from iler.settings_models import NotifySettings
 
@@ -169,7 +169,7 @@ async def smtp_configured() -> bool:
     return smtp is not None and bool(smtp.host) and bool(smtp.to)
 
 
-async def send_alert(text: str, subject: str = "ILER Bot: WhatsApp disconnected") -> None:
+async def send_alert(text: str, subject: str | None = None) -> None:
     """Notify the admin through a channel other than WhatsApp (SMTP), if configured.
 
     TLS: port 465 uses implicit TLS (SMTP_SSL), otherwise STARTTLS when enabled; both verify the
@@ -179,7 +179,7 @@ async def send_alert(text: str, subject: str = "ILER Bot: WhatsApp disconnected"
     if smtp is None or not smtp.host or not smtp.to:
         return
     msg = EmailMessage()
-    msg["Subject"] = subject
+    msg["Subject"] = subject or f"{brand_name()} Bot: WhatsApp disconnected"
     msg["From"] = smtp.sender or smtp.user
     msg["To"] = ", ".join(smtp.to)
     msg.set_content(text)

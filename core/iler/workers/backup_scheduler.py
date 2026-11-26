@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from iler.backup import run as run_mod
 from iler.backup import status as backup_status
 from iler.backup.schedule import next_run
-from iler.config import get_settings
+from iler.config import brand_name, get_settings
 from iler.whatsapp import monitor
 
 log = logging.getLogger("iler.workers.backup")
@@ -37,7 +37,7 @@ async def _report_failure(message: str) -> None:
     await backup_status.safe_record(False, message)
     try:
         if await monitor.smtp_configured():
-            await monitor.send_alert(f"Scheduled backup failed: {message}"[:1000], subject="ILER Bot: backup failed")
+            await monitor.send_alert(f"Scheduled backup failed: {message}"[:1000], subject=f"{brand_name()} Bot: backup failed")
     except Exception:  # noqa: BLE001
         log.exception("backup failure alert delivery failed")
 

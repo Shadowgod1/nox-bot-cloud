@@ -64,7 +64,7 @@ def _default_factory(name: str, settings: LlmSettings) -> LlmProvider:
         raise LlmError(f"unknown LLM provider: {name}", retryable=False)
     key = vendor_key(name)
     if not key:
-        raise LlmError(f"{name}: ключ ILER не настроен (обратитесь в поддержку ILER)", retryable=False)
+        raise LlmError(f"{name}: ключ {config.brand_name()} не настроен (обратитесь в поддержку {config.brand_company()})", retryable=False)
     provider = _provider_cache.get((name, key))
     if provider is None:
         if name == "openai":

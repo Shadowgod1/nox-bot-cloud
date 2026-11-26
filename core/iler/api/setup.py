@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from iler.auth.deps import User, audit, set_session_cookies
 from iler.auth.passwords import hash_password
 from iler.auth.schemas import OwnerCreate
-from iler.config import get_settings
+from iler.config import brand, get_settings
 from iler.db.pool import get_pool
 from iler.errors import ApiError
 
@@ -24,6 +24,16 @@ class SetupState(BaseModel):
 async def get_setup_state():
     has_users = await get_pool().fetchval("SELECT EXISTS (SELECT 1 FROM users)")
     return SetupState(needs_setup=not has_users)
+
+
+class BrandInfo(BaseModel):
+    brand: str
+
+
+@router.get("/api/brand", response_model=BrandInfo)
+async def get_brand():
+    """Unauthenticated and DB-free: the admin SPA brands the login and setup screens with it."""
+    return BrandInfo(brand=brand())
 
 
 def check_setup_token(supplied: str | None) -> None:
