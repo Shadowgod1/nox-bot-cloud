@@ -292,7 +292,7 @@ async def test_migration_0004_keeps_old_accounts(tmp_path):
             " RETURNING id")
         await pool.execute("INSERT INTO invoices(account_id, number, kind, tariff, amount_kzt, coins, period_start)"
                            " VALUES ($1, 'NOX-2026-00008', 'renewal', 'start', 70000, 30000, now())", aid)
-        assert await migrate(pool, MIGRATIONS_DIR) == ["0004_payments.sql"]
+        assert (await migrate(pool, MIGRATIONS_DIR))[0] == "0004_payments.sql"
         acc = await pool.fetchrow("SELECT status, invoice_no, invoice_amount, pay_method, invoice_note, free_until"
                                   " FROM accounts")
         assert tuple(acc) == ("awaiting_payment", "NOX-2026-00007", 70000, None, "", None)

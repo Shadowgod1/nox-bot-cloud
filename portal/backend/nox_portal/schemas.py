@@ -113,6 +113,8 @@ class SlugCheck(BaseModel):
     slug: str
     available: bool
     message: str | None = None
+    # a free address close to the requested one (slug-2, slug-3, ...) when it is taken or reserved
+    suggestion: str | None = None
 
 
 Status = Literal["new", "verified", "awaiting_invoice", "payment_pending", "awaiting_payment", "approved",
@@ -150,6 +152,9 @@ class ClientMe(BaseModel):
     suspend_reason: str | None = None
     # a Free account asked a manager for an invoice for this paid tariff
     upgrade_tariff: str | None = None
+    # "Попросить помочь с настройкой": when asked, and when a manager marked that they got in touch
+    setup_help_requested_at: datetime | None = None
+    setup_help_contacted_at: datetime | None = None
 
 
 class SetupLink(BaseModel):
@@ -249,6 +254,8 @@ class ApplicationDetail(ApplicationListItem):
     renewal_due: bool = False
     # "Пополнить через менеджера": open request (created_at) waiting for a top-up invoice
     topup_requested_at: datetime | None = None
+    setup_help_requested_at: datetime | None = None
+    setup_help_contacted_at: datetime | None = None
     online_payments: list["OnlinePaymentOut"] = []
     llm: "LlmBalance | None" = None
     keys: list["KeyOut"] = []
@@ -266,6 +273,8 @@ class TariffOut(BaseModel):
     description: str
     # Free: false when every test place is taken (NOX_FREE_MAX_ACTIVE)
     available: bool = True
+    # about how many client dialogs the coins pay for (tariffs.dialogs)
+    dialogs: int | None = None
 
 
 class TariffChoice(BaseModel):
@@ -388,6 +397,8 @@ class LlmBalance(BaseModel):
     period_start: datetime | None
     period_end: datetime | None
     status: Literal["active", "suspended", "revoked"]
+    # about how many client dialogs coins_left is enough for (tariffs.dialogs)
+    dialogs_left: int = 0
 
 
 class UsageDay(BaseModel):

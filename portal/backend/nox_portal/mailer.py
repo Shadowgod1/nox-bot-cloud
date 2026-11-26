@@ -10,11 +10,21 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
 
-from nox_portal.config import get_settings
+from nox_portal.config import get_settings, whatsapp_url
 
 log = logging.getLogger("nox_portal.mail")
 
-SIGNATURE = "С уважением,\nNox service\nhttps://noxsw.kz"
+
+def signature() -> str:
+    """Added to every letter; the support phone and WhatsApp only when NOX_SUPPORT_PHONE / NOX_SUPPORT_WHATSAPP are set."""
+    lines = ["С уважением,", "Nox service"]
+    phone = get_settings().support_phone.strip()
+    if phone:
+        lines.append(f"Телефон: {phone}")
+    if whatsapp_url():
+        lines.append(f"WhatsApp: {whatsapp_url()}")
+    lines.append("https://noxsw.kz")
+    return "\n".join(lines)
 
 
 @dataclass
@@ -56,7 +66,7 @@ def _build(mail: Mail) -> EmailMessage:
     if s.smtp_reply_to.strip():
         msg["Reply-To"] = s.smtp_reply_to.strip()
     msg["Message-ID"] = make_msgid(domain=(s.smtp_from.rsplit("@", 1)[-1].strip(">") or "noxsw.kz"))
-    body = f"{mail.text}\n\n{SIGNATURE}\n"
+    body = f"{mail.text}\n\n{signature()}\n"
     msg.set_content(body)
     msg.add_alternative(_html(body), subtype="html")
     return msg

@@ -99,6 +99,32 @@ def trial_ended(name: str) -> tuple[str, str]:
     )
 
 
+def trial_ending(name: str, free_until, days: int) -> tuple[str, str]:
+    """Free trial reminder: days = 3 (three days left) or 1 (a day or less left)."""
+    from zoneinfo import ZoneInfo
+
+    when = free_until.astimezone(ZoneInfo(get_settings().tz)).strftime("%d.%m.%Y в %H:%M")
+    left = "Остались последние сутки" if days <= 1 else f"Осталось {days} дня"
+    return (
+        f"Nox Bot: тест закончится {_date(free_until)}",
+        f"Здравствуйте, {name}!\n\n"
+        f"{left} бесплатного теста: он закончится {when} по времени Алматы.\n\n"
+        "После этого бот перестанет отвечать клиентам. Настройки, услуги и переписка сохранятся — после оплаты "
+        "тарифа бот продолжит с того же места, заново ничего настраивать не нужно.\n\n"
+        f"Выбрать тариф: {_portal()}/cabinet\n"
+        "Для ТОО и ИП есть оплата по счёту: выберите её в кабинете, и менеджер пришлёт счёт.",
+    )
+
+
+def staff_setup_help(company: str, contact: str, phone: str, email: str, account_id: int) -> tuple[str, str]:
+    return (
+        f"Просят помочь с настройкой: {company}",
+        "Клиент нажал «Попросить помочь с настройкой»: нужно подключить WhatsApp и заполнить услуги вместе с ним.\n\n"
+        f"Контакт: {contact}\nТелефон: {phone}\nE-mail: {email}\n\n"
+        f"Когда свяжетесь, отметьте это в карточке: {_portal()}/staff/applications/{account_id}",
+    )
+
+
 def staff_trial_ended(company: str) -> tuple[str, str]:
     return (
         f"Тест закончился: {company}",
