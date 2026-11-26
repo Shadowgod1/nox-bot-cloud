@@ -7,6 +7,7 @@ from fastapi import Depends, Request, Response
 from pydantic import BaseModel
 
 from iler.auth import tokens
+from iler.config import cookies_secure
 from iler.db.pool import get_pool
 from iler.errors import ApiError
 
@@ -29,17 +30,20 @@ def set_session_cookies(response: Response, user_id: int, password_hash: str, *,
         httponly=True,
         samesite="strict",
         path="/",
+        secure=cookies_secure(),
     )
     if new_csrf:
         # Readable by the SPA (not HttpOnly): it echoes the value in the X-ILER-CSRF header.
         response.set_cookie(
-            tokens.CSRF_COOKIE, tokens.new_csrf_token(), max_age=tokens.SESSION_TTL, samesite="strict", path="/"
+            tokens.CSRF_COOKIE, tokens.new_csrf_token(), max_age=tokens.SESSION_TTL, samesite="strict", path="/",
+            secure=cookies_secure(),
         )
 
 
 def clear_session_cookies(response: Response) -> None:
-    response.delete_cookie(tokens.SESSION_COOKIE, path="/", httponly=True, samesite="strict")
-    response.delete_cookie(tokens.CSRF_COOKIE, path="/", samesite="strict")
+    secure = cookies_secure()
+    response.delete_cookie(tokens.SESSION_COOKIE, path="/", httponly=True, samesite="strict", secure=secure)
+    response.delete_cookie(tokens.CSRF_COOKIE, path="/", samesite="strict", secure=secure)
 
 
 async def current_user(request: Request, response: Response) -> User:
@@ -60,7 +64,7 @@ async def current_user(request: Request, response: Response) -> User:
         if request.cookies.get(tokens.CSRF_COOKIE):  # extend the CSRF cookie alongside the session
             response.set_cookie(
                 tokens.CSRF_COOKIE, request.cookies[tokens.CSRF_COOKIE], max_age=tokens.SESSION_TTL,
-                samesite="strict", path="/",
+                samesite="strict", path="/", secure=cookies_secure(),
             )
     return User(id=row["id"], email=row["email"], name=row["name"], role=row["role"])
 

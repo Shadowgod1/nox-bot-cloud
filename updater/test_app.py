@@ -238,3 +238,62 @@ def test_job_dataclass_roundtrip():
     job = Job(id="x", target="0.2.0", previous="0.1.0")
     job.add_log("hello")
     assert Job.from_dict(job.to_dict()).log == job.log
+
+
+# ---- compose project name (several instances on one machine) --------------------------------
+
+class _Proc:
+    returncode = 0
+    stdout = "ok"
+    stderr = ""
+
+
+def _capture_runs(monkeypatch) -> list:
+    runs: list = []
+
+    def fake_run(cmd, **kwargs):
+        runs.append((cmd, kwargs))
+        return _Proc()
+
+    monkeypatch.setattr(updater_app.subprocess, "run", fake_run)
+    return runs
+
+
+def _cfg(ilerdir: Path) -> Config:
+    return Config(token=TOKEN, ilerdir=ilerdir, core_url="http://core", channel_url="")
+
+
+def test_compose_project_defaults_to_iler_for_old_installs(ilerdir, monkeypatch):
+    runs = _capture_runs(monkeypatch)
+    dc = updater_app.DockerCompose(_cfg(ilerdir))  # .env has no ILER_PROJECT (installed before it existed)
+    dc.pull("0.2.0")
+    cmd = runs[0][0]
+    assert cmd[:4] == ["docker", "compose", "-p", "iler"]
+    assert cmd[-4:] == ["pull", "iler-core", "iler-web", "iler-updater"]
+
+
+def test_compose_project_from_env_for_cloud_instance(ilerdir, monkeypatch):
+    with (ilerdir / ".env").open("a") as f:
+        f.write("ILER_PROJECT=iler-acme\nILER_HTTP_BIND=127.0.0.1\n")
+    runs = _capture_runs(monkeypatch)
+    dc = updater_app.DockerCompose(_cfg(ilerdir))
+    dc.up("0.2.0")
+    cmd, kwargs = runs[0]
+    assert cmd[:4] == ["docker", "compose", "-p", "iler-acme"]
+    assert cmd[cmd.index("--project-directory") + 1] == str(ilerdir)
+    assert "COMPOSE_PROJECT_NAME" not in kwargs["env"]
+
+    dc.self_update("0.2.0")
+    cmd = runs[1][0]
+    assert cmd[-2:] == [str(ilerdir), "iler-acme"]  # $0 = dir, $1 = project
+    assert '-p "$1"' in cmd[-3]
+    assert cmd[cmd.index("--name") + 1].startswith("iler-acme-updater-selfupdate-")
+
+
+def test_compose_project_invalid_value_refuses_to_run(ilerdir, monkeypatch):
+    with (ilerdir / ".env").open("a") as f:
+        f.write("ILER_PROJECT=Bad Name!\n")
+    runs = _capture_runs(monkeypatch)
+    with pytest.raises(updater_app.DockerError):
+        updater_app.DockerCompose(_cfg(ilerdir)).pull("0.2.0")
+    assert runs == []

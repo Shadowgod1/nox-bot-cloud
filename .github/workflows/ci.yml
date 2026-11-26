@@ -133,6 +133,16 @@ jobs:
           docker compose -f compose.yml --env-file deploy/.env.example config --images \
             | grep -v '^ghcr.io/' | grep -v '@sha256:' && { echo "unpinned image(s) above"; exit 1; } || true
           ! grep -nE 'image:.*:latest' compose.yml compose.test.yml
+      - name: project name and bind address (LAN default and cloud .env)
+        run: |
+          # LAN default unchanged: project iler, port on all interfaces (no host_ip: IPv4 and IPv6)
+          docker compose -f compose.yml --env-file deploy/.env.example config --format json > /tmp/lan.json
+          jq -e '.name == "iler" and (.services["iler-web"].ports[0] | has("host_ip") | not)' /tmp/lan.json
+          # cloud instance: own project, admin port on 127.0.0.1 only
+          sed -e 's/^ILER_PROJECT=.*/ILER_PROJECT=iler-ci/' -e 's/^ILER_HTTP_BIND=.*/ILER_HTTP_BIND=127.0.0.1/'               -e 's/^ILER_HTTP_PORT=.*/ILER_HTTP_PORT=8101/' deploy/.env.example > /tmp/cloud.env
+          docker compose -f compose.yml --env-file /tmp/cloud.env config --format json > /tmp/cloud.json
+          jq -e '.name == "iler-ci"' /tmp/cloud.json
+          jq -e '.services["iler-web"].ports[0] | .host_ip == "127.0.0.1" and .published == "8101"' /tmp/cloud.json
 
   e2e-smoke:
     # needs core endpoints + web/ (Task 12); skipped until tests/e2e/smoke.py exists
@@ -178,6 +188,19 @@ jobs:
         run: |
           docker compose -f compose.yml build
           bash scripts/build-offline-bundle.sh ci --no-pull
+      - name: iler-web proxy modes
+        if: hashFiles('web/Dockerfile') != ''
+        run: |
+          img=ghcr.io/shadowgod1/iler-web:ci
+          # the image ships the LAN snippet, so nginx -t works without the entrypoint
+          docker run --rm --entrypoint nginx "$img" -t
+          cid="$(docker run -d -e ILER_PUBLIC_URL=https://ci.example "$img")"
+          sleep 3
+          docker logs "$cid" > /tmp/web.log 2>&1 || true
+          cat /tmp/web.log
+          grep -q "iler-web: proxy mode cloud" /tmp/web.log
+          docker exec "$cid" nginx -t
+          docker rm -f "$cid"
       - name: Install from the offline bundle
         if: hashFiles('web/Dockerfile') != ''
         run: |
@@ -191,6 +214,11 @@ jobs:
           sudo cp /opt/iler/.env /tmp/env.before
           sudo bash /tmp/bundle/iler-bot-ci/deploy/install.sh --offline /tmp/bundle/iler-bot-ci/images.tar --yes
           sudo diff /tmp/env.before /opt/iler/.env
-      - name: Uninstall
+      - name: Uninstall (purge keeps other instances in clients/)
         if: always() && hashFiles('web/Dockerfile') != ''
-        run: sudo bash /opt/iler/deploy/install.sh --uninstall --purge --yes || true
+        run: |
+          sudo mkdir -p /opt/iler/clients/x
+          echo "ILER_PROJECT=iler-x" | sudo tee /opt/iler/clients/x/.env >/dev/null
+          sudo bash /opt/iler/deploy/install.sh --uninstall --purge --yes
+          sudo test -f /opt/iler/clients/x/.env
+          if sudo test -e /opt/iler/compose.yml; then echo "compose.yml was not purged"; exit 1; fi

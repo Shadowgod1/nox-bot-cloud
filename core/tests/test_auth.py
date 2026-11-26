@@ -209,3 +209,88 @@ async def test_expired_or_forged_token_rejected(client, pool):
     assert (await client.get("/api/auth/me")).status_code == 401
     client.cookies.set("iler_session", "not.a.jwt")
     assert (await client.get("/api/auth/me")).status_code == 401
+
+
+# ---- Secure cookies behind the cloud tunnel (ILER_PUBLIC_URL) --------------------------------
+
+
+def _all_auth_cookies(r) -> list[str]:
+    return [h for h in r.headers.get_list("set-cookie") if h.startswith(("iler_session=", "iler_csrf="))]
+
+
+async def test_lan_cookies_are_not_secure(client, monkeypatch):
+    from iler.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "public_url", "")
+    r = await client.post("/api/setup/owner", json=OWNER, headers=SETUP)
+    assert r.status_code == 200, r.text
+    cookies = _all_auth_cookies(r)
+    assert len(cookies) == 2
+    assert all("secure" not in h.lower() for h in cookies)
+    r = await client.post("/api/auth/logout")
+    deleted = _all_auth_cookies(r)
+    assert len(deleted) == 2
+    assert all("secure" not in h.lower() for h in deleted)
+
+
+async def test_https_public_url_makes_every_auth_cookie_secure(app, pool, monkeypatch):
+    from iler.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "public_url", "https://acme.example.kz")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://acme.example.kz") as c:
+        r = await c.post("/api/setup/owner", json=OWNER, headers=SETUP)
+        assert r.status_code == 200, r.text
+        cookies = _all_auth_cookies(r)
+        assert {h.split("=", 1)[0] for h in cookies} == {"iler_session", "iler_csrf"}
+        assert all("secure" in h.lower() for h in cookies)
+
+        c.cookies.clear()
+        r = await c.post("/api/auth/login", json={"email": "owner@club.kz", "password": OWNER["password"]})
+        assert r.status_code == 200, r.text
+        assert len(_all_auth_cookies(r)) == 2
+        assert all("secure" in h.lower() for h in _all_auth_cookies(r))
+        assert (await c.get("/api/auth/me")).status_code == 200  # Secure cookies flow over https
+
+        # sliding refresh re-issues both cookies, still Secure
+        uid = (await c.get("/api/auth/me")).json()["id"]
+        pw_hash = await pool.fetchval("SELECT password_hash FROM users WHERE id=$1", uid)
+        c.cookies.set("iler_session", tokens.create_session(uid, pw_hash, now=time.time() - 11 * 3600),
+                      domain="acme.example.kz")
+        r = await c.get("/api/auth/me")
+        assert r.status_code == 200
+        refreshed = _all_auth_cookies(r)
+        assert refreshed and all("secure" in h.lower() for h in refreshed)
+
+        r = await c.post("/api/auth/logout")
+        deleted = _all_auth_cookies(r)
+        assert len(deleted) == 2 and all("secure" in h.lower() for h in deleted)
+
+
+async def test_http_public_url_keeps_cookies_plain(client, monkeypatch):
+    from iler.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "public_url", "http://bot.lan")
+    r = await client.post("/api/setup/owner", json=OWNER, headers=SETUP)
+    assert r.status_code == 200, r.text
+    cookies = _all_auth_cookies(r)
+    assert len(cookies) == 2
+    assert all("secure" not in h.lower() for h in cookies)
+
+
+def test_public_url_env_name_maps_to_cookies_secure(monkeypatch):
+    from iler import config
+
+    original = config.get_settings()
+    monkeypatch.setenv("ILER_PUBLIC_URL", "https://acme.example.kz")
+    config.get_settings.cache_clear()
+    try:
+        assert config.get_settings().public_url == "https://acme.example.kz"
+        assert config.cookies_secure() is True
+    finally:
+        # put the original Settings object back into the cache (other tests patch its attributes)
+        monkeypatch.delenv("ILER_PUBLIC_URL")
+        with monkeypatch.context() as m:
+            m.setattr(config, "Settings", lambda: original)
+            config.get_settings.cache_clear()
+            assert config.get_settings() is original
+    assert config.cookies_secure() is False

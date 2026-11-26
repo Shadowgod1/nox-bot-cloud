@@ -15,10 +15,18 @@ RUN rm -f /etc/nginx/conf.d/default.conf \
  && rm -rf /usr/share/nginx/html/* \
  && chown -R nginx:nginx /var/cache/nginx
 COPY nginx.conf /etc/nginx/nginx.conf
+# LAN / cloud proxy snippets; the entrypoint copies one to /tmp/iler-proxy-mode.conf (nginx.conf includes it)
+COPY nginx/proxy-lan.conf nginx/proxy-cloud.conf /etc/nginx/iler/
+# default (LAN) so nginx -t / --entrypoint nginx work without the entrypoint; owned by nginx so the
+# entrypoint (USER nginx) can overwrite it
+COPY --chown=nginx:nginx nginx/proxy-lan.conf /tmp/iler-proxy-mode.conf
+COPY nginx/iler-web-entrypoint.sh /usr/local/bin/iler-web-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/iler-web-entrypoint.sh && chmod 755 /usr/local/bin/iler-web-entrypoint.sh
 COPY --from=build --chown=nginx:nginx /app/dist /usr/share/nginx/html
 
 USER nginx
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1
+ENTRYPOINT ["/usr/local/bin/iler-web-entrypoint.sh"]
 CMD ["nginx", "-g", "daemon off;"]

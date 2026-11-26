@@ -5,7 +5,9 @@
 #   updater_net  core and iler-updater only (Evolution, postgres and redis cannot reach the updater,
 #                which holds docker.sock)
 # Image digests: ILER_*_DIGEST (optional, from the release channel) pin our images to tag@digest.
-name: iler
+# Project name: ILER_PROJECT (default iler; volumes iler_*). Cloud instances get their own name
+# (iler-<client>), so their containers, volumes and networks never collide.
+name: ${ILER_PROJECT:-iler}
 
 x-common: &common
   restart: unless-stopped
@@ -23,7 +25,14 @@ services:
     build:
       context: ./web
     ports:
-      - "${ILER_HTTP_PORT:-8080}:8080"
+      # ILER_HTTP_BIND empty (LAN install, default): all interfaces, IPv4 and IPv6, exactly as before
+      # (the firewall limits it to private networks); cloud: 127.0.0.1 only
+      - "${ILER_HTTP_BIND:+${ILER_HTTP_BIND}:}${ILER_HTTP_PORT:-8080}:8080"
+    environment:
+      # cloud mode (public URL set or bound to loopback): nginx takes the visitor IP from the
+      # tunnel's CF-Connecting-IP header, trusted only from loopback / Docker networks
+      ILER_HTTP_BIND: ${ILER_HTTP_BIND:-}
+      ILER_PUBLIC_URL: ${ILER_PUBLIC_URL:-}
     depends_on:
       iler-core:
         condition: service_started
@@ -61,6 +70,8 @@ services:
       ILER_MONTHLY_COINS: ${ILER_MONTHLY_COINS:-0}
       ILER_MODEL_PRICES: ${ILER_MODEL_PRICES:-}
       ILER_TZ: ${ILER_TZ:-Asia/Almaty}
+      # public address behind the tunnel (https://... -> cookies get the Secure flag); empty on a LAN
+      ILER_PUBLIC_URL: ${ILER_PUBLIC_URL:-}
       ILER_DATA_DIR: /data
     volumes:
       # backups run inside core (scheduler worker); host path is /opt/iler/backups by default

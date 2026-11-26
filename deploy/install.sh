@@ -2,6 +2,8 @@
 # ILER Bot installer for Linux (Ubuntu 22.04/24.04, Debian 12) and WSL2 (spec section 8).
 #
 #   sudo bash deploy/install.sh [--port 8080] [--dir /opt/iler] [--offline images.tar]
+#   sudo bash deploy/install.sh --dir /opt/iler/clients/acme --name iler-acme --port 8101 \
+#        --public-url https://acme.example.kz            # cloud instance (see deploy/cloud/README.md)
 #   sudo bash deploy/install.sh --restore /path/iler-backup-YYYYMMDD-HHMMSS.tar.gz [--env /path/old.env]
 #   sudo bash deploy/install.sh --uninstall [--purge]
 #   curl -fsSL <release>/install.sh | sudo bash          # downloads the bundle first
@@ -63,6 +65,11 @@ Usage: sudo bash install.sh [options]
   --port N            admin UI port on the LAN (default 8080 or the value in .env)
   --dir PATH          install directory (default /opt/iler)
   --offline FILE      load images from FILE (docker save archive) instead of the registry
+  --name NAME         docker compose project name (default iler); one per instance on this machine
+  --bind ADDR         address the admin port is published on (default: all interfaces; 127.0.0.1 = cloud)
+  --public-url URL    public address behind the tunnel, e.g. https://acme.example.kz (cloud; implies
+                      --bind 127.0.0.1). Cloud mode (--public-url or --bind 127.x): no firewall rules,
+                      no iler.local, Secure cookies for https, setup link printed with this address
   --restore FILE      restore a backup archive after installing (databases + WhatsApp session)
   --env FILE          with --restore: take ILER_SECRET_KEY from the ORIGINAL server's .env, so
                       stored secrets (SMTP password, SENET key) can be decrypted;
@@ -82,11 +89,22 @@ ENV_IMPORT=""
 UNINSTALL=0
 PURGE=0
 ASSUME_YES=0
+PROJECT_NAME=""
+HTTP_BIND=""
+PUBLIC_URL=""
+PUBLIC_URL_SET=0
+CLOUD=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --port) PORT="${2:-}"; shift 2 ;;
     --port=*) PORT="${1#*=}"; shift ;;
+    --name) PROJECT_NAME="${2:-}"; shift 2 ;;
+    --name=*) PROJECT_NAME="${1#*=}"; shift ;;
+    --bind) HTTP_BIND="${2:-}"; shift 2 ;;
+    --bind=*) HTTP_BIND="${1#*=}"; shift ;;
+    --public-url) PUBLIC_URL="${2:-}"; PUBLIC_URL_SET=1; shift 2 ;;
+    --public-url=*) PUBLIC_URL="${1#*=}"; PUBLIC_URL_SET=1; shift ;;
     --dir) ILER_DIR_PATH="${2:-}"; shift 2 ;;
     --dir=*) ILER_DIR_PATH="${1#*=}"; shift ;;
     --offline) OFFLINE_TAR="${2:-}"; shift 2 ;;
@@ -109,6 +127,18 @@ ILER_DIR_PATH="${ILER_DIR_PATH%/}"
 if [[ -n "$PORT" ]] && ! [[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1 && "$PORT" -le 65535 ]]; then
   die "invalid --port: $PORT"
 fi
+if [[ -n "$PROJECT_NAME" ]] && ! [[ "$PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; then
+  die "invalid --name: $PROJECT_NAME (lowercase letters, digits, '-' and '_'; starts with a letter or digit)"
+fi
+if [[ -n "$HTTP_BIND" ]] && ! [[ "$HTTP_BIND" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+  die "invalid --bind: $HTTP_BIND (an IPv4 address such as 127.0.0.1 or 0.0.0.0)"
+fi
+PUBLIC_URL="${PUBLIC_URL%/}"
+if [[ -n "$PUBLIC_URL" ]]; then
+  [[ "$PUBLIC_URL" =~ ^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$ ]] \
+    || die "invalid --public-url: $PUBLIC_URL (expected https://host[:port], no path)"
+  [[ "$PUBLIC_URL" == https://* ]] || warn "--public-url is not https: session cookies will not be Secure"
+fi
 if [[ "$PURGE" == "1" && "$UNINSTALL" != "1" ]]; then
   die "--purge is only valid together with --uninstall"
 fi
@@ -129,12 +159,60 @@ fi
 
 require_root
 
+# ---- instance (project name, bind address, public URL) ------------------------------------
+
+# Combines the options with the existing <dir>/.env: a re-run without options keeps what the
+# installation already has; an installation from before these settings is project "iler" on all interfaces.
+# Sets PROJECT_NAME, HTTP_BIND, PUBLIC_URL, PORT and CLOUD (1 = behind a tunnel on this machine).
+resolve_instance() {
+  local envfile="$ILER_DIR_PATH/.env" cur_name cur_bind cur_url cur_port
+  cur_name="$(env_get "$envfile" ILER_PROJECT)"
+  cur_bind="$(env_get "$envfile" ILER_HTTP_BIND)"
+  cur_url="$(env_get "$envfile" ILER_PUBLIC_URL)"
+  cur_port="$(env_get "$envfile" ILER_HTTP_PORT)"
+  if [[ -f "$envfile" ]]; then
+    cur_name="${cur_name:-iler}"
+    # renaming would orphan the running containers and the data volumes of the old name
+    [[ -z "$PROJECT_NAME" || "$PROJECT_NAME" == "$cur_name" ]] \
+      || die "$ILER_DIR_PATH is installed as project '$cur_name'; the project name cannot be changed (--name $PROJECT_NAME)"
+  fi
+  PROJECT_NAME="${PROJECT_NAME:-${cur_name:-iler}}"
+  [[ "$PUBLIC_URL_SET" == "1" ]] || PUBLIC_URL="$cur_url"
+  if [[ -z "$HTTP_BIND" ]]; then
+    if [[ "$PUBLIC_URL_SET" == "1" && -n "$PUBLIC_URL" ]]; then
+      HTTP_BIND=127.0.0.1
+    else
+      HTTP_BIND="$cur_bind"
+    fi
+  fi
+  CLOUD=0
+  if [[ -n "$PUBLIC_URL" || "$HTTP_BIND" == 127.* ]]; then
+    CLOUD=1
+  fi
+  # cloud mode has no firewall rules: the port must not be reachable from outside this machine
+  if [[ "$CLOUD" == "1" && "$HTTP_BIND" != 127.* ]]; then
+    die "a cloud instance (--public-url) publishes the admin port on 127.0.0.1 only, not on ${HTTP_BIND:-all interfaces}"
+  fi
+  PORT="${PORT:-${cur_port:-8080}}"
+}
+
 # ---- uninstall ----------------------------------------------------------------------------
+
+# Deletes the install directory, but never other instances kept below it (<dir>/clients/*).
+purge_dir() {
+  if [[ -d "$ILER_DIR_PATH/clients" ]] && [[ -n "$(ls -A "$ILER_DIR_PATH/clients" 2>/dev/null)" ]]; then
+    find "$ILER_DIR_PATH" -mindepth 1 -maxdepth 1 ! -name clients -exec rm -rf {} +
+    warn "kept $ILER_DIR_PATH/clients (other ILER instances); everything else in $ILER_DIR_PATH is deleted"
+  else
+    rm -rf "$ILER_DIR_PATH"
+  fi
+}
 
 do_uninstall() {
   local what="stop and remove the ILER Bot containers"
   [[ "$PURGE" == "1" ]] && what="DELETE ILER Bot completely: containers, database, WhatsApp session, backups and $ILER_DIR_PATH"
-  confirm "This will $what. Continue?" || die "aborted"
+  resolve_instance
+  confirm "This will $what (project $PROJECT_NAME). Continue?" || die "aborted"
   if [[ -f "$ILER_DIR_PATH/compose.yml" ]] && have docker; then
     if [[ "$PURGE" == "1" ]]; then
       dc down --remove-orphans --volumes || warn "compose down failed"
@@ -144,10 +222,14 @@ do_uninstall() {
   else
     warn "no installation found in $ILER_DIR_PATH"
   fi
-  remove_firewall
-  remove_mdns
+  # firewall rules and iler.local belong to the LAN installation of this machine; a cloud instance
+  # has none and must not remove them
+  if [[ "$CLOUD" != "1" ]]; then
+    remove_firewall
+    remove_mdns
+  fi
   if [[ "$PURGE" == "1" ]]; then
-    rm -rf "$ILER_DIR_PATH"
+    purge_dir
     ok "removed $ILER_DIR_PATH and all volumes"
   else
     ok "stack removed; data volumes and $ILER_DIR_PATH/backups are kept (use --uninstall --purge to delete)"
@@ -209,6 +291,15 @@ check_port() {
   fi
 }
 
+# One compose project = one installation: refuse a name another directory's containers already use.
+check_project() {
+  local other
+  other="$(docker ps -a --filter "label=com.docker.compose.project=$PROJECT_NAME" \
+    --format '{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null \
+    | sort -u | grep -vxF "$ILER_DIR_PATH" | head -n1 || true)"
+  [[ -z "$other" ]] || die "project '$PROJECT_NAME' already belongs to the installation in $other; choose another --name"
+}
+
 # ---- install steps ------------------------------------------------------------------------
 
 copy_bundle() {
@@ -225,6 +316,7 @@ copy_bundle() {
   # bundles built on Windows may carry CRLF; postgres runs the init script with bash
   find "$ILER_DIR_PATH/deploy" -name '*.sh' -exec sed -i 's/\r$//' {} +
   chmod 755 "$ILER_DIR_PATH/deploy/install.sh" "$ILER_DIR_PATH"/deploy/postgres-init/*.sh
+  [[ -f "$ILER_DIR_PATH/deploy/cloud/iler-client.sh" ]] && chmod 755 "$ILER_DIR_PATH/deploy/cloud/iler-client.sh"
   ok "files in $ILER_DIR_PATH"
 }
 
@@ -256,15 +348,14 @@ configure_env() {
   fi
   [[ -n "$ENV_IMPORT" ]] && import_secret_key "$envfile"
   env_set "$envfile" ILER_DIR "$ILER_DIR_PATH"
-  if [[ -n "$PORT" ]]; then
-    env_set "$envfile" ILER_HTTP_PORT "$PORT"
-  else
-    PORT="$(env_get "$envfile" ILER_HTTP_PORT)"
-    PORT="${PORT:-8080}"
-  fi
+  # resolved by resolve_instance from the options and the previous .env
+  env_set "$envfile" ILER_HTTP_PORT "$PORT"
+  env_set "$envfile" ILER_PROJECT "$PROJECT_NAME"
+  env_set "$envfile" ILER_HTTP_BIND "$HTTP_BIND"
+  env_set "$envfile" ILER_PUBLIC_URL "$PUBLIC_URL"
   chmod 600 "$envfile"
   printf '%s\n' "$(env_get "$envfile" ILER_VERSION)" >"$ILER_DIR_PATH/VERSION"
-  ok ".env ready (version $(env_get "$envfile" ILER_VERSION), port $PORT)"
+  ok ".env ready (version $(env_get "$envfile" ILER_VERSION), project $PROJECT_NAME, port ${HTTP_BIND:-*}:$PORT)"
 }
 
 # Take ILER_SECRET_KEY from the original server's .env (--env). Other values (DB passwords etc.)
@@ -390,20 +481,40 @@ restore_backup() {
   ok "backup restored"
 }
 
+# address this machine reaches the admin port on
+local_host() {
+  if [[ -z "$HTTP_BIND" || "$HTTP_BIND" == "0.0.0.0" ]]; then echo 127.0.0.1; else echo "$HTTP_BIND"; fi
+}
+
 needs_setup() {
   have curl || return 0
-  curl -fsS --max-time 10 "http://127.0.0.1:$PORT/api/setup/state" 2>/dev/null | grep -q '"needs_setup":[[:space:]]*true'
+  curl -fsS --max-time 10 "http://$(local_host):$PORT/api/setup/state" 2>/dev/null | grep -q '"needs_setup":[[:space:]]*true'
 }
 
 print_summary() {
-  local ip mdns="$1" token setup=""
+  local ip mdns="$1" token setup="" dir_opt=""
   ip="$(lan_ip)"
   token="$(env_get "$ILER_DIR_PATH/.env" ILER_SETUP_TOKEN)"
   if [[ -n "$token" ]] && needs_setup; then
     setup="/setup?token=$token"
   fi
+  [[ "$ILER_DIR_PATH" == "/opt/iler" ]] || dir_opt=" --dir $ILER_DIR_PATH"
   echo
   printf '%sILER Bot is running.%s Open the admin UI:\n' "$C_BOLD" "$C_RESET"
+  if [[ "$CLOUD" == "1" ]]; then
+    [[ -n "$setup" ]] && printf '%sFirst run:%s send the owner this one-time setup link privately (it creates the owner account):\n' "$C_YELLOW" "$C_RESET"
+    if [[ -n "$PUBLIC_URL" ]]; then
+      echo "  $PUBLIC_URL$setup"
+      echo "  (the tunnel must route ${PUBLIC_URL#*://} to http://$(local_host):$PORT)"
+    else
+      warn "no --public-url: the admin UI is reachable only on this machine until a tunnel routes to it"
+      echo "  http://$(local_host):$PORT$setup"
+    fi
+    echo
+    echo "Data: $ILER_DIR_PATH (secrets in .env, backups in backups/), compose project $PROJECT_NAME."
+    echo "Uninstall: sudo bash $ILER_DIR_PATH/deploy/install.sh --uninstall$dir_opt"
+    return 0
+  fi
   if [[ -n "$setup" ]]; then
     printf '%sFirst run:%s create the owner account with this one-time setup link (keep it private):\n' "$C_YELLOW" "$C_RESET"
     echo "  http://localhost:$PORT$setup"
@@ -415,23 +526,33 @@ print_summary() {
   [[ "$mdns" == "1" ]] && echo "  http://iler.local:$PORT"
   echo
   echo "Data: $ILER_DIR_PATH (secrets in .env, backups in backups/)."
-  echo "Uninstall: sudo bash $ILER_DIR_PATH/deploy/install.sh --uninstall"
+  echo "Uninstall: sudo bash $ILER_DIR_PATH/deploy/install.sh --uninstall$dir_opt"
 }
 
 main() {
   local mdns=0
   log "ILER Bot installer ($SRC_ROOT -> $ILER_DIR_PATH)"
+  resolve_instance
+  [[ "$CLOUD" == "1" ]] && log "cloud instance: project $PROJECT_NAME, admin port $HTTP_BIND:$PORT${PUBLIC_URL:+, public $PUBLIC_URL}"
   check_system
   ensure_docker "$OFFLINE"
+  # before anything is written: a busy port or a taken project name stops the install here
+  check_project
+  check_port "$PORT"
   copy_bundle
   configure_env
-  check_port "$PORT"
   fetch_images
-  # the admin port must be restricted before docker publishes it
-  configure_firewall "$PORT"
+  if [[ "$CLOUD" == "1" ]]; then
+    log "cloud instance: port published on $HTTP_BIND only; firewall rules and iler.local are skipped"
+  else
+    # the admin port must be restricted before docker publishes it
+    configure_firewall "$PORT"
+  fi
   start_stack
   [[ -n "$RESTORE_FILE" ]] && restore_backup
-  configure_mdns "$OFFLINE" && mdns=1
+  if [[ "$CLOUD" != "1" ]]; then
+    configure_mdns "$OFFLINE" && mdns=1
+  fi
   print_summary "$mdns"
 }
 

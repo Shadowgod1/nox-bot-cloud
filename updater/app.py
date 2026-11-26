@@ -23,6 +23,9 @@ can restore it (`install.sh --restore <dir>/backups/<name>`).
 Digests: when the channel file carries ILER_CORE_DIGEST / ILER_WEB_DIGEST / ILER_UPDATER_DIGEST
 (sha256:<64 hex>), they are written to .env together with ILER_VERSION and compose.yml pins the
 images to `<tag>@<digest>`; without them images are pulled by tag.
+
+Project: every compose call passes `-p <ILER_PROJECT from .env>` (default "iler"), so on a machine with
+several instances (cloud) the updater only ever touches its own installation.
 """
 
 from __future__ import annotations
@@ -54,6 +57,8 @@ PULL_SERVICES = ("iler-core", "iler-web", "iler-updater")
 VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 DIGEST_KEYS = ("ILER_CORE_DIGEST", "ILER_WEB_DIGEST", "ILER_UPDATER_DIGEST")
+# docker compose project name (ILER_PROJECT in .env, default "iler"; cloud instances use iler-<client>)
+PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 
 
 class DockerError(Exception):
@@ -169,8 +174,15 @@ class DockerCompose:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
+    def project(self) -> str:
+        """Compose project of this installation: the same name install.sh used (ILER_PROJECT, default iler)."""
+        name = read_env_value(self.cfg.env_file, "ILER_PROJECT") or "iler"
+        if not PROJECT_RE.match(name):
+            raise DockerError(f"invalid ILER_PROJECT in .env: {name!r}")
+        return name
+
     def _base(self) -> list[str]:
-        return ["docker", "compose", "--project-directory", str(self.cfg.ilerdir),
+        return ["docker", "compose", "-p", self.project(), "--project-directory", str(self.cfg.ilerdir),
                 "-f", str(self.cfg.compose_file), "--env-file", str(self.cfg.env_file)]
 
     def _env(self, version: str, digests: dict[str, str] | None = None) -> dict:
@@ -208,14 +220,15 @@ class DockerCompose:
         if digest:
             image = f"{image}@{digest}"
         d = str(self.cfg.ilerdir)
+        project = self.project()
         env_args = ["-e", f"ILER_VERSION={version}"]
         for key in DIGEST_KEYS:
             env_args += ["-e", f"{key}={(digests or {}).get(key, '')}"]
-        cmd = ["docker", "run", "-d", "--rm", "--name", f"iler-updater-selfupdate-{uuid.uuid4().hex[:6]}",
+        cmd = ["docker", "run", "-d", "--rm", "--name", f"{project}-updater-selfupdate-{uuid.uuid4().hex[:6]}",
                "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", f"{d}:{d}",
                *env_args, "--entrypoint", "sh", image, "-c",
-               "sleep 5 && docker compose --project-directory \"$0\" -f \"$0/compose.yml\" "
-               "--env-file \"$0/.env\" up -d --no-deps iler-updater", d]
+               "sleep 5 && docker compose -p \"$1\" --project-directory \"$0\" -f \"$0/compose.yml\" "
+               "--env-file \"$0/.env\" up -d --no-deps iler-updater", d, project]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if proc.returncode != 0:
             raise DockerError(f"self-update: {(proc.stdout + proc.stderr).strip()[-1000:]}")

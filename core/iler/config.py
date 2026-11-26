@@ -32,9 +32,17 @@ class Settings(BaseSettings):
     monthly_coins: int = 0
     model_prices: str = ""
     tz: str = "Asia/Almaty"
+    # Public address of a cloud instance behind the tunnel (https://client.example.kz); empty on a LAN.
+    # An https:// address makes every auth cookie Secure.
+    public_url: str = ""
     data_dir: str = "/data"
     disable_workers: bool = False
     llm_fake: bool = False
+
+
+def cookies_secure() -> bool:
+    """Auth cookies get the Secure flag when the instance is served over https (cloud, behind the tunnel)."""
+    return get_settings().public_url.strip().lower().startswith("https://")
 
 
 @lru_cache

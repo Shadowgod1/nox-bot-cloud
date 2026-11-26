@@ -34,8 +34,12 @@ ensure_docker() {
   ok "docker $(docker version --format '{{.Server.Version}}' 2>/dev/null), $(docker compose version --short 2>/dev/null)"
 }
 
+# Explicit -p (ILER_PROJECT from .env, default iler, like the updater): an exported
+# COMPOSE_PROJECT_NAME must never point compose at another instance's project.
 dc() {
-  docker compose --project-directory "$ILER_DIR_PATH" -f "$ILER_DIR_PATH/compose.yml" \
+  local project
+  project="$(env_get "$ILER_DIR_PATH/.env" ILER_PROJECT)"
+  docker compose -p "${project:-iler}" --project-directory "$ILER_DIR_PATH" -f "$ILER_DIR_PATH/compose.yml" \
     --env-file "$ILER_DIR_PATH/.env" "$@"
 }
 
