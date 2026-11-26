@@ -223,4 +223,40 @@ describe('Conversations', () => {
     expect(sent(1).request_id).not.toBe(sent(0).request_id)
     expect(sent(1).request_id).toMatch(/^[A-Za-z0-9_-]{8,64}$/)
   })
+
+  it('client panel: contact, only this client’s requests and the bot memory', async () => {
+    const booking = (id: number, conversation_id: number, comment: string) => ({
+      id,
+      conversation_id,
+      payload: { time: '19:00', comment },
+      status: 'pending',
+      admin_note: null,
+      timeout_notified: false,
+      created_at: '2026-11-11T10:05:00Z',
+      decided_at: null,
+      decided_by: null,
+      phone: '',
+      name: '',
+    })
+    mockApi({
+      'GET /api/conversations': { items: [conv(1, 'Данияр', 'Привет'), conv(2, 'Алина', 'Ок')], next_cursor: null },
+      'GET /api/conversations/1/messages': { items: [msg(10, 1, 'Привет', '2026-11-11T10:00:00Z')], next_cursor: null },
+      'GET /api/bookings': [booking(7, 1, 'У окна'), booking(8, 2, 'Чужая заявка')],
+      'GET /api/settings/bot': { memory_messages: 20 },
+    })
+    renderAt('/conversations/1')
+    const panel = await screen.findByRole('complementary', { name: 'Что бот знает о клиенте' })
+    expect(await within(panel).findByText('«У окна»')).toBeInTheDocument()
+    expect(within(panel).queryByText('«Чужая заявка»')).not.toBeInTheDocument()
+    expect(within(panel).getByText('77010000001')).toBeInTheDocument()
+    expect(await within(panel).findByText(/последние 20 сообщений/)).toBeInTheDocument()
+
+    // below xl the panel is a sheet toggled from the chat header
+    const toggle = screen.getByRole('button', { name: 'Что бот знает о клиенте' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    await userEvent.click(within(panel).getByRole('button', { name: 'Закрыть' }))
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  })
 })
