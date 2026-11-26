@@ -87,6 +87,101 @@ describe('Setup wizard', () => {
   })
 })
 
+describe('Owner from the Nox portal (one account for the cabinet and the panel)', () => {
+  const OWNER = { id: 1, email: 'owner@salon.kz', name: 'Айгерим', role: 'owner' }
+
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    sessionStorage.clear()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('login page from the cabinet button: e-mail pre-filled, hint, no auto-login, then the wizard', async () => {
+    window.history.replaceState(null, '', '/login?email=owner%40salon.kz')
+    const user = userEvent.setup()
+    let loggedIn = false
+    const fetchMock = mockApi({
+      'GET /api/setup/state': () => ({ needs_setup: false, wizard_pending: true }),
+      'GET /api/auth/me': () =>
+        loggedIn ? OWNER : jsonResponse({ error: { code: 'unauthorized', message: 'Not signed in' } }, 401),
+      'POST /api/auth/login': () => {
+        loggedIn = true
+        return OWNER
+      },
+      'GET /api/settings/llm': LLM,
+      'GET /api/settings/llm/providers': { providers: [] },
+    })
+    render(
+      <MemoryRouter initialEntries={['/login']}>
+        <App />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByTestId('cabinet-login-hint')).toHaveTextContent('Войдите e-mail и паролем от личного кабинета.')
+    expect(screen.getByLabelText('E-mail')).toHaveValue('owner@salon.kz')
+    expect(window.location.search).toBe('') // the e-mail leaves the address bar
+    expect(callsTo(fetchMock, 'POST', '/api/auth/login')).toHaveLength(0) // prefill only
+    await user.type(screen.getByLabelText('Пароль'), 'cabinet-pass-123')
+    await user.click(screen.getByRole('button', { name: 'Войти' }))
+    const body = JSON.parse(String((callsTo(fetchMock, 'POST', '/api/auth/login')[0][1] as RequestInit).body))
+    expect(body).toEqual({ email: 'owner@salon.kz', password: 'cabinet-pass-123' })
+    // straight into the wizard, without the owner step
+    const steps = await screen.findByRole('list', { name: 'Шаги первоначальной настройки' })
+    expect(steps.textContent).toBe('1Языковая модель2Настройка бота3Проверьте бота4WhatsApp5Заявки6Готово')
+    expect(screen.queryByText('Создайте учётную запись владельца')).toBeNull()
+    expect(await screen.findByText('Подключите языковую модель')).toBeInTheDocument()
+  })
+
+  it('plain login page has no cabinet hint', async () => {
+    mockApi({
+      'GET /api/setup/state': { needs_setup: false },
+      'GET /api/auth/me': () => jsonResponse({ error: { code: 'unauthorized', message: 'Not signed in' } }, 401),
+    })
+    window.history.replaceState(null, '', '/login')
+    render(
+      <MemoryRouter initialEntries={['/login']}>
+        <App />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByLabelText('E-mail')).toHaveValue('')
+    expect(screen.queryByTestId('cabinet-login-hint')).toBeNull()
+  })
+
+  it('pending wizard: opened from any page, company already in "Название", finish closes it', async () => {
+    const user = userEvent.setup()
+    let pending = true
+    const fetchMock = mockApi({
+      'GET /api/setup/state': () => ({ needs_setup: false, wizard_pending: pending }),
+      'GET /api/auth/me': OWNER,
+      'GET /api/settings/llm': LLM,
+      'GET /api/settings/llm/providers': { providers: [] },
+      'GET /api/templates': TEMPLATES,
+      // core put the company from the application into the template field business_name
+      'GET /api/settings/bot': { ...BOT, template_values: { business_name: 'Салон Aru' } },
+      'POST /api/setup/finish': () => {
+        pending = false
+        return { needs_setup: false, wizard_pending: false }
+      },
+    })
+    render(
+      <MemoryRouter initialEntries={['/bookings']}>
+        <App />
+      </MemoryRouter>,
+    )
+    const steps = await screen.findByRole('list', { name: 'Шаги первоначальной настройки' })
+    expect(steps.textContent).toBe('1Языковая модель2Настройка бота3Проверьте бота4WhatsApp5Заявки6Готово')
+    await user.click(await screen.findByRole('button', { name: 'Настроить позже' }))
+    expect(await screen.findByLabelText('Название')).toHaveValue('Салон Aru')
+    await user.click(screen.getByRole('button', { name: 'Настрою позже' }))
+    await user.click(await screen.findByRole('button', { name: 'Дальше' }))
+    await user.click(await screen.findByRole('button', { name: 'Подключу позже' }))
+    await user.click(await screen.findByRole('button', { name: 'Дальше' }))
+    expect(callsTo(fetchMock, 'POST', '/api/setup/finish')).toHaveLength(0)
+    await user.click(await screen.findByRole('button', { name: 'Перейти в админку' }))
+    await waitFor(() => expect(callsTo(fetchMock, 'POST', '/api/setup/finish')).toHaveLength(1))
+    await waitFor(() => expect(screen.queryByRole('list', { name: 'Шаги первоначальной настройки' })).toBeNull())
+  })
+})
+
 describe('LlmStep', () => {
   it('shows only the providers ILER has keys for, without a key field', async () => {
     mockApi({

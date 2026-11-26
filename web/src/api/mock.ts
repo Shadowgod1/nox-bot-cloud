@@ -36,6 +36,8 @@ type ConvState = Omit<Conversation, 'last_message'>
 
 interface State {
   needsSetup: boolean
+  /** owner created from the Nox portal, wizard not finished (VITE_MOCK_WIZARD=1) */
+  wizardPending: boolean
   loggedIn: boolean
   user: User
   users: UserListItem[]
@@ -68,6 +70,7 @@ let mockCoinsSpent = 0
 
 const s: State = {
   needsSetup: import.meta.env.VITE_MOCK_SETUP === '1',
+  wizardPending: import.meta.env.VITE_MOCK_WIZARD === '1',
   fresh: import.meta.env.VITE_MOCK_SETUP === '1',
   loggedIn: sessionStorage.getItem('iler_mock_session') === '1',
   user: { id: 1, email: 'owner@club.local', name: 'Айгерим', role: 'owner' },
@@ -253,7 +256,12 @@ on('GET', '/api/brand', (_m, _b, url) => json({ brand: mockBrand(url) }))
 
 /* ---------- setup / auth ---------- */
 
-on('GET', '/api/setup/state', () => json({ needs_setup: s.needsSetup }))
+on('GET', '/api/setup/state', () => json({ needs_setup: s.needsSetup, wizard_pending: !s.needsSetup && s.wizardPending }))
+// Like core: the owner from the Nox portal closes the wizard (it had no owner step)
+on('POST', '/api/setup/finish', () => {
+  s.wizardPending = false
+  return json({ needs_setup: false, wizard_pending: false })
+})
 on('POST', '/api/setup/owner', (_m, b, _url, init) => {
   if (!s.needsSetup) return fail(409, 'already_set_up', 'Setup is already complete')
   // Like core: the one-time installer token comes in X-ILER-Setup-Token (open /setup?token=anything in the mock).
