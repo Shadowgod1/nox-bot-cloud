@@ -11,7 +11,7 @@ import pytest
 from pydantic import SecretStr
 
 from iler.llm import router
-from iler.llm.anthropic_provider import FALLBACK_BETA, AnthropicProvider, system_blocks
+from iler.llm.anthropic_provider import FALLBACK_BETA, AnthropicProvider, cache_layout, system_blocks
 from iler.llm.base import SYSTEM_DYNAMIC_MARK, ChatMessage, LlmError, LlmResponse
 from iler.llm.fake import FakeLLM
 from iler.settings_models import BotSettings, LlmSettings
@@ -99,8 +99,10 @@ async def test_request_mapping_system_tools_effort():
     assert body["model"] == "claude-opus-5-5"
     # prompt caching: a breakpoint on the system prompt and automatic caching of the dialogue tail
     assert body["system"] == [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]
-    assert body["cache_control"] == {"type": "ephemeral"}
-    assert body["messages"] == [{"role": "user", "content": "hi"}]
+    # ...and on the last dialogue message, so the next turn re-reads the earlier dialogue from the cache
+    assert body["messages"] == [{"role": "user", "content": [
+        {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}]
+    assert "cache_control" not in body  # explicit breakpoints only
     assert body["tools"] == [{"name": "echo", "description": "Echo back the text",
                               "input_schema": EchoTool.parameters}]
     assert body["tool_choice"] == {"type": "auto"}
@@ -156,7 +158,8 @@ async def test_tool_use_parsing_and_tool_loop_echoes_raw_content(pool):
     assert second[1]["content"][0] == THINKING
     assert second[1]["content"][2] == TOOL_USE
     assert second[2] == {"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": "toolu_1", "content": json.dumps({"echo": "x"})}]}
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": json.dumps({"echo": "x"}),
+         "cache_control": {"type": "ephemeral"}}]}
 
 
 async def test_uncached_assistant_tool_calls_rebuilt_and_parallel_results_merged():
@@ -177,7 +180,8 @@ async def test_uncached_assistant_tool_calls_rebuilt_and_parallel_results_merged
         {"type": "tool_use", "id": "t2", "name": "echo", "input": {"text": "b"}}]}
     assert msgs[2] == {"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": "t1", "content": '{"echo": "a"}'},
-        {"type": "tool_result", "tool_use_id": "t2", "content": "error: boom", "is_error": True}]}
+        {"type": "tool_result", "tool_use_id": "t2", "content": "error: boom", "is_error": True,
+         "cache_control": {"type": "ephemeral"}}]}
 
 
 async def test_raw_cache_is_bounded():
@@ -310,3 +314,37 @@ def test_prompt_puts_the_time_after_the_cache_mark():
     head_a, mark, tail_a = a.rpartition(SYSTEM_DYNAMIC_MARK)
     assert mark and tail_a.startswith("Сейчас: 26.11.2026 21:00")
     assert b.rpartition(SYSTEM_DYNAMIC_MARK)[0] == head_a
+
+
+def test_cache_layout_puts_the_time_and_card_after_the_dialogue():
+    tail = "Сейчас: 21:00\n## Клиент\nИмя: «Аружан»"
+    system = "rules" + SYSTEM_DYNAMIC_MARK + tail
+    msgs = [{"role": "user", "content": "привет"}, {"role": "assistant", "content": "Здравствуйте!"},
+            {"role": "user", "content": "сколько стоит маникюр?"}]
+    sys_blocks, out = cache_layout(system, msgs, tail_as_message=True)
+    assert sys_blocks == [{"type": "text", "text": "rules", "cache_control": {"type": "ephemeral"}}]
+    assert out[:2] == msgs[:2]  # earlier turns untouched: byte-identical to the previous request
+    assert out[2] == {"role": "user", "content": [
+        {"type": "text", "text": "сколько стоит маникюр?", "cache_control": {"type": "ephemeral"}}]}
+    assert out[3] == {"role": "system", "content": tail}
+    assert msgs[2] == {"role": "user", "content": "сколько стоит маникюр?"}  # the input is not mutated
+    # fallback for a model without mid-conversation system messages: back into the system prompt
+    sys_blocks, out = cache_layout(system, msgs, tail_as_message=False)
+    assert sys_blocks[1] == {"type": "text", "text": tail}
+    assert len(out) == 3
+
+
+async def test_falls_back_when_the_model_rejects_system_messages():
+    rejected = (400, {"type": "error", "error": {"type": "invalid_request_error",
+                                                  "message": "role 'system' is not supported on this model"}})
+    api = Api(rejected, (200, _message([{"type": "text", "text": "ok"}])), (200, _message([{"type": "text", "text": "ok"}])))
+    p = api.provider()
+    msgs = [ChatMessage(role="system", content="rules" + SYSTEM_DYNAMIC_MARK + "Сейчас: 21:00"),
+            ChatMessage(role="user", content="hi")]
+    resp = await p.complete(msgs, [], "claude-haiku-5-5")
+    assert resp.text == "ok"
+    assert api.bodies[0]["messages"][-1] == {"role": "system", "content": "Сейчас: 21:00"}
+    assert api.bodies[1]["messages"][-1]["role"] == "user"
+    assert api.bodies[1]["system"][1] == {"type": "text", "text": "Сейчас: 21:00"}
+    await p.complete(msgs, [], "claude-haiku-5-5")  # remembered: no more rejected attempts
+    assert len(api.bodies) == 3 and api.bodies[2]["messages"][-1]["role"] == "user"
