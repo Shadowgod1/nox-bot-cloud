@@ -47,6 +47,13 @@ The script runs `deploy/install.sh --dir /opt/iler/clients/acme --name iler-acme
 and prints the owner's one-time setup link (`https://acme.example.kz/setup?token=...`). Send it to the
 owner privately and never post it in group chats.
 
+Bots created from the Nox portal skip the setup link. The provisioner passes the owner from the
+application in the environment of `create`: `ILER_OWNER_EMAIL`, `ILER_OWNER_NAME`, `ILER_COMPANY` and
+`ILER_OWNER_PASSWORD_HASH` (the argon2id hash of the cabinet password). They are never passed as options,
+because the command line is visible in `ps`. The script writes them to the client `.env`. On the first
+start core creates the owner from them, so the client logs in with the cabinet e-mail and password. Once
+an owner exists, core ignores them. The provisioner empties the hash in `.env` as soon as core has used it.
+
 Then:
 
 1. **LLM keys** (the technician types them; they never go into chats or documents):

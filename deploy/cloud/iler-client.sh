@@ -13,7 +13,9 @@
 # The public hostname <name>.<domain> -> http://127.0.0.1:<port> is added in the Cloudflare tunnel by
 # the technician (this script never calls the Cloudflare API). Cloud clients get the Nox brand
 # (admin UI of Nox service) unless --brand iler is given. Details: deploy/cloud/README.md.
-# Env: ILER_CLIENTS_DIR (default /opt/iler/clients).
+# Env: ILER_CLIENTS_DIR (default /opt/iler/clients). create also takes the owner account from the Nox portal
+# (never as options: the command line is visible in ps): ILER_OWNER_EMAIL, ILER_OWNER_NAME, ILER_COMPANY,
+# ILER_OWNER_PASSWORD_HASH (argon2id). They go to the client .env; core creates the owner on the first start.
 # shellcheck source-path=SCRIPTDIR
 set -euo pipefail
 
@@ -36,7 +38,21 @@ CLIENTS_DIR="${CLIENTS_DIR%/}"
 DEFAULT_PRICES='{"gpt-5.4-mini": [0.75, 4.5], "gemini-3.8-flash": [0.75, 3.75]}'
 
 usage() {
-  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# argon2id hash as argon2-cffi writes it (portal and core both hash with its PasswordHasher)
+OWNER_HASH_RE='^\$argon2id\$v=[0-9]+\$m=[0-9]+,t=[0-9]+,p=[0-9]+\$[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}$'
+OWNER_EMAIL_RE='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+
+# owner_text <value>: name / company for a single-quoted .env value (one line, no single quotes)
+owner_text() {
+  local v="${1//$'\r'/ }"
+  v="${v//$'\n'/ }"
+  v="${v//\'/’}"
+  # no slicing: under a C locale it would cut a UTF-8 letter in half; the provisioner sends at most 200 letters
+  ((${#v} <= 1000)) || die "owner name / company is too long"
+  printf '%s' "$v"
 }
 
 # 2-32 characters, a valid DNS label (it becomes <name>.<domain>): no '-' at the start or end
@@ -88,6 +104,10 @@ port_owner() {
 
 cmd_create() {
   local name="" port="" coins="" public_url="" offline="" prices="$DEFAULT_PRICES" brand="nox" dir project owner
+  # owner from the Nox portal: environment only, and not passed on to install.sh / docker (they read .env)
+  local owner_email="${ILER_OWNER_EMAIL:-}" owner_name="${ILER_OWNER_NAME:-}" company="${ILER_COMPANY:-}"
+  local owner_hash="${ILER_OWNER_PASSWORD_HASH:-}"
+  unset ILER_OWNER_EMAIL ILER_OWNER_NAME ILER_COMPANY ILER_OWNER_PASSWORD_HASH
   name="${1:-}"
   [[ $# -gt 0 ]] && shift
   while [[ $# -gt 0 ]]; do
@@ -124,6 +144,15 @@ cmd_create() {
     offline="$BUNDLE_ROOT/images.tar"
   fi
   [[ -z "$offline" || -f "$offline" ]] || die "offline archive not found: $offline"
+  owner_email="$(printf '%s' "$owner_email" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+  if [[ -n "$owner_email" || -n "$owner_hash" ]]; then
+    [[ -n "$owner_email" && -n "$owner_hash" ]] || die "ILER_OWNER_EMAIL and ILER_OWNER_PASSWORD_HASH go together"
+    [[ ${#owner_email} -le 254 && "$owner_email" =~ $OWNER_EMAIL_RE ]] || die "ILER_OWNER_EMAIL is not a valid e-mail"
+    # never echo the hash itself
+    [[ "$owner_hash" =~ $OWNER_HASH_RE ]] || die "ILER_OWNER_PASSWORD_HASH is not an argon2id hash"
+    owner_name="$(owner_text "$owner_name")"
+    company="$(owner_text "$company")"
+  fi
 
   dir="$(client_dir "$name")"
   project="$(project_of "$name")"
@@ -156,8 +185,17 @@ cmd_create() {
       echo "ILER_BRAND=$brand"
       echo "ILER_MONTHLY_COINS=${coins:-0}"
       echo "ILER_MODEL_PRICES='$prices'"
+      if [[ -n "$owner_email" ]]; then
+        # single quotes: docker compose takes the value literally (the hash is full of '$')
+        echo "# owner from the Nox portal: created on the first start while no user exists, ignored afterwards"
+        echo "ILER_OWNER_EMAIL=$owner_email"
+        echo "ILER_OWNER_NAME='$owner_name'"
+        echo "ILER_COMPANY='$company'"
+        echo "ILER_OWNER_PASSWORD_HASH='$owner_hash'"
+      fi
     } >"$dir/.env"
   )
+  [[ -z "$owner_email" ]] || log "owner account: $owner_email (from the Nox portal, same password as the cabinet)"
   local args=(--dir "$dir" --name "$project" --bind 127.0.0.1 --port "$port" --brand "$brand" --yes)
   [[ -n "$public_url" ]] && args+=(--public-url "$public_url")
   [[ -n "$offline" ]] && args+=(--offline "$offline")
@@ -174,7 +212,11 @@ cmd_create() {
   echo "Next:"
   echo "  1. LLM keys:  sudo bash $dir/deploy/set-llm-keys.sh --dir $dir"
   echo "  2. Tunnel:    Cloudflare Zero Trust -> Tunnels -> Public Hostname: ${public_url:-<name>.<domain>} -> HTTP 127.0.0.1:$port"
-  echo "  3. Send the owner the one-time setup link printed above (privately)."
+  if [[ -n "$owner_email" ]]; then
+    echo "  3. The owner logs in with the e-mail $owner_email and the password of the Nox portal cabinet."
+  else
+    echo "  3. Send the owner the one-time setup link printed above (privately)."
+  fi
   [[ -n "$coins" ]] || warn "no --coins: monthly coin limit is 0 (no limit); set it with set-llm-keys.sh"
 }
 

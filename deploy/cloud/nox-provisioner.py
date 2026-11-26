@@ -9,8 +9,11 @@ Runs from nox-provisioner.service (deploy/cloud/systemd/) with EnvironmentFile=/
 the portal's internal API on 127.0.0.1 with a shared token, and for each job:
 
   create  -> iler-client.sh create <slug> --port <free> [--coins N] --public-url https://<slug>.<domain>
-             [--brand nox], LLM access (see below), Cloudflare tunnel ingress rule + proxied CNAME, then
-             reports port, admin URL and the one-time setup URL
+             [--brand nox] with the owner from the application in its environment (ILER_OWNER_EMAIL,
+             ILER_OWNER_NAME, ILER_COMPANY, ILER_OWNER_PASSWORD_HASH: never argv, ps shows argv), LLM access (see
+             below), Cloudflare tunnel ingress rule + proxied CNAME, then reports port, admin URL and either
+             owner_preset (core created the owner: the client logs in with the cabinet e-mail and password) or the
+             one-time setup URL (older portal / core, or unusable owner data)
   suspend -> iler-client.sh stop <slug>
   resume  -> iler-client.sh start <slug>
   remove  -> iler-client.sh remove <slug> --yes, then the tunnel rule and the CNAME are removed
@@ -56,7 +59,8 @@ _REDACT = [
     (re.compile(r"sk-ant-[A-Za-z0-9._-]+"), "sk-ant-***"),
     (re.compile(r"(token=)[^\s&\"']+", re.IGNORECASE), r"\1***"),
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE), r"\1***"),
-    (re.compile(r"((?:_KEY|_TOKEN|_PASSWORD|_SECRET)=)\S+"), r"\1***"),
+    (re.compile(r"((?:_KEY|_TOKEN|_PASSWORD|_SECRET|_HASH)=)\S+"), r"\1***"),
+    (re.compile(r"\$argon2[a-z]*\$[^\s'\"]+"), "$argon2***"),
     (re.compile(r"\x1b\[[0-9;]*m"), ""),
 ]
 
@@ -168,6 +172,35 @@ def http_json(method: str, url: str, headers: dict, body: dict | None = None) ->
         return status, json.loads(raw)
     except ValueError:
         return status, {"raw": raw[:300].decode("utf-8", "replace")}
+
+
+# ---- owner of a new instance ----------------------------------------------------------------
+
+# the same e-mail and hash shapes iler-client.sh accepts; anything else -> no owner data, the setup link is used
+OWNER_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+OWNER_HASH_RE = re.compile(r"^\$argon2id\$v=[0-9]+\$m=[0-9]+,t=[0-9]+,p=[0-9]+\$[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}$")
+OWNER_TEXT_MAX = 200
+
+
+def _owner_text(value: object) -> str:
+    """Name / company for a single-quoted .env value: one line, no single quotes, no control characters."""
+    text = " ".join(str(value or "").split())
+    text = "".join(ch for ch in text if ch.isprintable()).replace("'", "\u2019")
+    return text[:OWNER_TEXT_MAX]
+
+
+def owner_env(job: dict) -> dict[str, str] | None:
+    """Environment for iler-client.sh create with the owner from the application, or None (older portal, or
+    unusable values: the instance then gets the one-time setup link as before). Never logged."""
+    email = str(job.get("owner_email") or "").strip().lower()
+    password_hash = str(job.get("owner_password_hash") or "").strip()
+    if not email and not password_hash:
+        return None
+    if len(email) > 254 or not OWNER_EMAIL_RE.match(email) or not OWNER_HASH_RE.match(password_hash):
+        log(f"{job.get('slug')}: owner data from the portal is not usable; the setup link will be used")
+        return None
+    return {"ILER_OWNER_EMAIL": email, "ILER_OWNER_NAME": _owner_text(job.get("owner_name")),
+            "ILER_COMPANY": _owner_text(job.get("company")), "ILER_OWNER_PASSWORD_HASH": password_hash}
 
 
 # ---- portal internal API --------------------------------------------------------------------
@@ -436,12 +469,18 @@ class Provisioner:
                 return port
         raise ProvisionError(f"no free port in {self.cfg.port_min}-{self.cfg.port_max}")
 
-    def _setup_state(self, port: int) -> bool | None:
-        try:
-            status, body = http_json("GET", f"http://127.0.0.1:{port}/api/setup/state", {}, None)
-        except ProvisionError:
-            return None
-        return bool(body.get("needs_setup")) if status == 200 and body else None
+    def _setup_state(self, port: int, attempts: int = 30, pause: float = 2.0) -> bool | None:
+        """needs_setup of the instance; None if core does not answer within about a minute."""
+        for attempt in range(attempts):
+            try:
+                status, body = http_json("GET", f"http://127.0.0.1:{port}/api/setup/state", {}, None)
+            except ProvisionError:
+                status, body = 0, None
+            if status == 200 and body:
+                return bool(body.get("needs_setup"))
+            if attempt + 1 < attempts:
+                time.sleep(pause)
+        return None
 
     def iler(self, *args, env: dict | None = None) -> str:
         rc, out = self.run(["bash", self.cfg.iler_client, *[str(a) for a in args]], env)
@@ -469,6 +508,7 @@ class Provisioner:
             self.iler("start", slug)
         else:
             port = self.pick_port()
+            owner = owner_env(job)
             coins = job.get("coins")
             args = ["create", slug, "--port", port, "--public-url", public_url]
             # gateway mode: the portal meters coins, the instance keeps no limit of its own
@@ -476,24 +516,37 @@ class Provisioner:
                 args += ["--coins", int(coins)]
             if self.supports_brand():
                 args += ["--brand", "nox"]
-            log(f"{slug}: creating instance on 127.0.0.1:{port}")
+            log(f"{slug}: creating instance on 127.0.0.1:{port}"
+                + (" with the owner from the application" if owner else ""))
             try:
-                self.iler(*args)
+                # the owner (with the cabinet password hash) goes through the environment, never argv
+                self.iler(*args, env=owner)
             except ProvisionError:
                 if directory.exists():
                     # created by this attempt: leave nothing half-installed, so a retry starts clean
                     log(f"{slug}: create failed, removing the partial instance")
                     self.run(["bash", self.cfg.iler_client, "remove", slug, "--yes"], None)
                 raise
+        # core creates the owner from ILER_OWNER_* on start (iler-client.sh waits until it is healthy)
+        needs_setup = self.setup_state(port)
+        owner_in_env = bool(env_get(env_file, "ILER_OWNER_EMAIL"))
+        owner_preset = owner_in_env and needs_setup is not True
+        if needs_setup is not None and env_get(env_file, "ILER_OWNER_PASSWORD_HASH"):
+            # core has used it (or refused it): the hash does not stay in .env; the restart below drops it from
+            # the container environment too
+            env_set(env_file, "ILER_OWNER_PASSWORD_HASH", "")
         self.set_llm_key(job, directory)
         self.cf.ensure_route(self.host(slug), port)
         token = env_get(env_file, "ILER_SETUP_TOKEN")
         setup_url = None
-        if token and self.setup_state(port):
+        if owner_preset:
+            log(f"{slug}: owner created from the application; the client logs in with the cabinet password")
+        elif token and needs_setup:
             setup_url = f"{public_url}/setup?token={token}"
         elif token:
             log(f"{slug}: owner account already exists (or setup state unknown); no setup link reported")
-        return {"ok": True, "port": port, "admin_url": public_url, "setup_url": setup_url}
+        return {"ok": True, "port": port, "admin_url": public_url, "setup_url": setup_url,
+                "owner_preset": owner_preset}
 
     @staticmethod
     def gateway_mode(job: dict) -> bool:

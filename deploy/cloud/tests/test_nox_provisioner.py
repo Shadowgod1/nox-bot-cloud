@@ -183,6 +183,12 @@ class FakeIlerClient:
                 f"ILER_PUBLIC_URL={args['--public-url']}\nILER_MONTHLY_COINS={args.get('--coins', 0)}\n"
                 "ILER_SETUP_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef\n"
             )
+            if env and env.get("ILER_OWNER_EMAIL"):
+                # like the real script: the owner from the environment into the seed .env, values single-quoted
+                with (d / ".env").open("a", encoding="utf-8") as fh:
+                    fh.write(f"ILER_OWNER_EMAIL={env['ILER_OWNER_EMAIL']}\nILER_OWNER_NAME='{env['ILER_OWNER_NAME']}'\n"
+                             f"ILER_COMPANY='{env['ILER_COMPANY']}'\n"
+                             f"ILER_OWNER_PASSWORD_HASH='{env['ILER_OWNER_PASSWORD_HASH']}'\n")
             (d / "deploy" / "set-llm-keys.sh").write_text("#!/bin/sh\n")
             return 0, f"ok client created\n  {args['--public-url']}/setup?token=0123456789abcdef"
         if sub == "remove":
@@ -244,7 +250,8 @@ def test_create_job_end_to_end(env):
     assert p.run_once() == 1
     report = http.reports[1]
     assert report == {"ok": True, "port": 8111, "admin_url": "https://acme.example.kz",
-                      "setup_url": "https://acme.example.kz/setup?token=0123456789abcdef0123456789abcdef0123456789abcdef"}
+                      "setup_url": "https://acme.example.kz/setup?token=0123456789abcdef0123456789abcdef0123456789abcdef",
+                      "owner_preset": False}
     create = next(c for c in runner.commands if c[2] == "create")
     assert create[3:] == ["acme", "--port", "8111", "--public-url", "https://acme.example.kz", "--coins", "30000",
                           "--brand", "nox"]
@@ -560,3 +567,97 @@ def test_gateway_url_config(env):
     assert np.Config.from_env({"NOX_GATEWAY_URL": "http://172.17.0.1:8100/"}).gateway_url == "http://172.17.0.1:8100"
     cfg.gateway_url = "https://bot.example.kz/x y"
     assert any("NOX_GATEWAY_URL" in p for p in cfg.problems())
+
+
+# ---- owner from the application (one account for cabinet and panel) ---------------------------
+
+OWNER_HASH = "$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaA"
+
+
+def owner_job(job_id=1, **extra):
+    job = gw_job(job_id=job_id)
+    job.update({"owner_email": " Owner@Salon.KZ ", "owner_name": "Айгерим", "company": "ТОО 'Aru' Beauty",
+                "owner_password_hash": OWNER_HASH, **extra})
+    return job
+
+
+def test_owner_goes_through_env_not_argv_and_no_setup_link(env, capsys):
+    cfg, clients = env
+    http = FakeHttp(jobs=[owner_job()])
+    runner = FakeIlerClient(clients)
+    make(cfg, http, runner, setup_state=lambda p: False, unseal_fn=lambda blob: GW_KEY).run_once()
+    report = http.reports[1]
+    assert report["ok"] is True, report
+    assert report["owner_preset"] is True and report["setup_url"] is None
+    create_idx = next(i for i, c in enumerate(runner.commands) if len(c) > 2 and c[2] == "create")
+    # argv (visible in ps) has neither the hash nor the e-mail; the environment of iler-client.sh has them
+    argv = " ".join(runner.commands[create_idx])
+    assert "argon2" not in argv and "salon" not in argv.lower()
+    assert runner.envs[create_idx] == {"ILER_OWNER_EMAIL": "owner@salon.kz", "ILER_OWNER_NAME": "Айгерим",
+                                       "ILER_COMPANY": "ТОО ’Aru’ Beauty",
+                                       "ILER_OWNER_PASSWORD_HASH": OWNER_HASH}
+    for i, c in enumerate(runner.commands):
+        assert not any("argon2" in str(a) for a in c)
+        if i != create_idx:
+            assert not (runner.envs[i] or {}).get("ILER_OWNER_PASSWORD_HASH"), c
+    # core used the hash: it does not stay in .env (the restart afterwards drops it from the container too)
+    text = (clients / "acme" / ".env").read_text(encoding="utf-8")
+    assert "ILER_OWNER_PASSWORD_HASH=\n" in text and "argon2" not in text
+    assert "ILER_OWNER_EMAIL=owner@salon.kz\n" in text
+    docker = [c for c in runner.commands if c[0] == "docker"]
+    assert docker, "iler-core restarted after the hash was removed"
+    # never printed
+    assert "argon2" not in capsys.readouterr().out
+
+
+def test_owner_not_created_by_core_falls_back_to_setup_link(env):
+    cfg, clients = env
+    http = FakeHttp(jobs=[owner_job()])
+    make(cfg, http, FakeIlerClient(clients), setup_state=lambda p: True, unseal_fn=lambda blob: GW_KEY).run_once()
+    report = http.reports[1]
+    assert report["owner_preset"] is False
+    assert report["setup_url"].startswith("https://acme.example.kz/setup?token=")
+
+
+def test_setup_state_unknown_keeps_the_hash_for_core(env):
+    cfg, clients = env
+    http = FakeHttp(jobs=[owner_job()])
+    make(cfg, http, FakeIlerClient(clients), setup_state=lambda p: None, unseal_fn=lambda blob: GW_KEY).run_once()
+    assert http.reports[1]["owner_preset"] is True and http.reports[1]["setup_url"] is None
+    assert f"ILER_OWNER_PASSWORD_HASH='{OWNER_HASH}'" in (clients / "acme" / ".env").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("bad", [{"owner_email": "not an email"}, {"owner_password_hash": "plain-password"},
+                                 {"owner_password_hash": "$argon2i$v=19$m=1,t=1,p=1$c2FsdA$aGFzaA"},
+                                 {"owner_password_hash": OWNER_HASH + "'\nILER_X=1"}])
+def test_unusable_owner_data_is_not_passed(env, bad):
+    cfg, clients = env
+    http = FakeHttp(jobs=[owner_job(**bad)])
+    runner = FakeIlerClient(clients)
+    make(cfg, http, runner, setup_state=lambda p: True, unseal_fn=lambda blob: GW_KEY).run_once()
+    create_idx = next(i for i, c in enumerate(runner.commands) if len(c) > 2 and c[2] == "create")
+    assert runner.envs[create_idx] is None
+    assert http.reports[1]["owner_preset"] is False and http.reports[1]["setup_url"]
+
+
+def test_retry_of_an_instance_with_preset_owner(env):
+    cfg, clients = env
+    http = FakeHttp(jobs=[owner_job()])
+    runner = FakeIlerClient(clients)
+    runner.fail.add("docker")  # the core restart after the gateway key fails: job failed, instance kept
+    make(cfg, http, runner, setup_state=lambda p: False, unseal_fn=lambda blob: GW_KEY).run_once()
+    assert http.reports[1]["ok"] is False
+    runner.fail.clear()
+    http.jobs.append(owner_job(job_id=2))
+    make(cfg, http, runner, setup_state=lambda p: False, unseal_fn=lambda blob: GW_KEY).run_once()
+    assert http.reports[2]["ok"] is True and http.reports[2]["owner_preset"] is True
+    assert http.reports[2]["setup_url"] is None
+
+
+def test_owner_env_and_redaction():
+    assert np.owner_env({"slug": "acme"}) is None
+    env = np.owner_env({"owner_email": "a@b.kz", "owner_password_hash": OWNER_HASH, "owner_name": "A\nB\tC",
+                        "company": None})
+    assert env["ILER_OWNER_NAME"] == "A B C" and env["ILER_COMPANY"] == ""
+    out = np.redact(f"ILER_OWNER_PASSWORD_HASH='{OWNER_HASH}' and {OWNER_HASH}")
+    assert "c2FsdH" not in out and "aGFzaG" not in out
