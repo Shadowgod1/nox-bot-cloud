@@ -72,7 +72,8 @@ async def test_slug_taken_by_another_email(client, other):
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "slug_taken"
     r = await other.get("/api/slug-check", params={"slug": "primer"})
-    assert r.json() == {"slug": "primer", "available": False, "message": "этот адрес уже занят"}
+    assert r.json() == {"slug": "primer", "available": False, "message": "этот адрес уже занят",
+                        "suggestion": "primer-2"}
     r = await other.get("/api/slug-check", params={"slug": "free-name"})
     assert r.json()["available"] is True
 

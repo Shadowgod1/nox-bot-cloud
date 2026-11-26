@@ -77,7 +77,7 @@ async def get_staff_config():
         sealing = False
     return StaffConfig(tariffs=tariffs.as_dicts(include_free=True), coin_presets=COIN_PRESETS,
                        instance_domain=get_settings().instance_domain, custom_key_supported=sealing,
-                       topup=TariffOut(**asdict(tariffs.TOPUP)), gateway_url=get_settings().public_url.rstrip("/"),
+                       topup=TariffOut(**asdict(tariffs.TOPUP), dialogs=tariffs.dialogs(tariffs.TOPUP.coins)), gateway_url=get_settings().public_url.rstrip("/"),
                        online_payments=payments.get_provider() is not None)
 
 
