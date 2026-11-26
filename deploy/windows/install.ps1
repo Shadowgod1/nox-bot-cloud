@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    ILER Bot installer for Windows (WSL2 + Ubuntu 24.04 + Docker Engine inside WSL).
+    Nox Bot installer for Windows (WSL2 + Ubuntu 24.04 + Docker Engine inside WSL).
 
 .DESCRIPTION
     Spec section 8 (Windows). Supported: Windows 10 22H2, Windows 11, Windows Server 2022+.
@@ -9,6 +9,8 @@
     run deploy/install.sh -> networking (mirrored on Win11 22H2+, otherwise netsh portproxy refreshed at
     boot) -> firewall rule for the local subnet only -> boot task that keeps the distro running ->
     desktop shortcut to the admin UI.
+    Customer brand: "Nox Bot" (Nox service). ILER is the internal/code name: env names, ProgramData\ILER,
+    the WSL distro, /opt/iler, task and firewall names stay unchanged so existing installs upgrade in place.
 
 .PARAMETER BundlePath
     Folder that contains compose.yml and deploy\ (default: two levels above this script).
@@ -25,7 +27,7 @@
     Folder for the Ubuntu-24.04 disk (ext4.vhdx: database, images, backups) when the distro is installed
     by this script; default: WSL's own location in the user profile. An existing distro is not moved.
 .PARAMETER KeysFile
-    Internal (set by the GUI installer): KEY=VALUE lines with ILER's LLM keys and the monthly coin limit
+    Internal (set by the GUI installer): KEY=VALUE lines with the LLM keys (Nox) and the monthly coin limit
     entered by the technician. Moved to an admin-only file under ProgramData until applied, then deleted.
 .PARAMETER ProgressFile
     Internal (set by the GUI installer): the script runs hidden and reports "percent|stage|detail" lines
@@ -54,6 +56,8 @@ $LinuxUser = 'iler'
 $WslBundleDir = '/root/iler-bundle'
 $DataDir = Join-Path $env:ProgramData 'ILER'
 $LogFile = Join-Path $DataDir 'install.log'
+# Internal names (not shown in the wizard): kept as registered by ILER-branded installs, because the
+# script re-registers / removes them by name on every run and the uninstaller deletes them by name.
 $TaskStart = 'ILER Bot - start WSL'
 $TaskPortProxy = 'ILER Bot - refresh portproxy'
 $FirewallRule = 'ILER Bot admin UI'
@@ -62,7 +66,8 @@ $RunOnceName = 'ILERSetupResume'  # legacy (RunOnce does not elevate); removed i
 # visible run after a reboot (no GUI installer reading the progress file): keep the window open
 $Interactive = [bool]($Resume -and -not $ProgressFile)
 $InstallUser = "$($env:USERDOMAIN)\$($env:USERNAME)"
-$ShortcutName = 'ILER Bot - админка.url'
+$ShortcutName = 'Nox Bot - админка.url'
+$LegacyShortcutName = 'ILER Bot - админка.url'  # ILER-branded installs; removed on upgrade
 $PendingKeys = Join-Path $DataDir 'pending-keys.env'
 $KeyVars = @('ILER_ANTHROPIC_KEY', 'ILER_OPENAI_KEY', 'ILER_GEMINI_KEY', 'ILER_MONTHLY_COINS')
 # Sources allowed to reach the admin port (RFC1918, loopback, IPv6 ULA / link-local / loopback)
@@ -406,6 +411,20 @@ function Copy-BundleToWsl {
     Write-Ok "bundle copied to $WslBundleDir"
 }
 
+function Set-BrandEnv {
+    # Customer brand of the admin UI: ILER_BRAND=nox in /opt/iler/.env on a fresh install and on an upgrade
+    # that has no ILER_BRAND yet; an existing value (also an empty one) is left alone. Runs before
+    # install.sh: it keeps unknown keys of an existing .env and adds the missing ones from .env.example
+    # (with fresh secrets) to a .env that holds only this line, so the containers start with the brand.
+    # No double quotes or $ in the command: PS 5.1 does not escape embedded quotes for wsl.exe. The
+    # extra newline guards against a last line without one (a blank line in .env is harmless).
+    $envFile = '/opt/iler/.env'
+    $cmd = "mkdir -p /opt/iler && touch $envFile && chmod 600 $envFile && if grep -q '^ILER_BRAND=' $envFile; then grep -m1 '^ILER_BRAND=' $envFile; else if [ -s $envFile ]; then echo >>$envFile; fi; echo ILER_BRAND=nox >>$envFile && echo added; fi"
+    $result = "$(Invoke-InDistro -Command $cmd)".Trim()
+    if ($result -eq 'added') { Write-Ok "brand: ILER_BRAND=nox written to $envFile" }
+    else { Write-Ok "brand: existing value kept ($result)" }
+}
+
 function Invoke-LinuxInstaller {
     Write-Step 'running deploy/install.sh inside WSL (Docker Engine, images, services)'
     $wslArgs = @('-d', $Distro, '-u', 'root', '--', 'bash', "$WslBundleDir/deploy/install.sh", '--port', "$Port", '--yes')
@@ -461,7 +480,7 @@ function Set-IlerKeys {
     }
     try {
         if ($names.Count -gt 0) {
-            Write-Step 'applying ILER keys'
+            Write-Step 'applying Nox keys'
             $env:WSLENV = ($names -join ':')
             & wsl.exe -d $Distro -u root -- bash /opt/iler/deploy/set-llm-keys.sh --yes
             if ($LASTEXITCODE -ne 0) { throw "set-llm-keys.sh failed with exit code $LASTEXITCODE" }
@@ -597,6 +616,7 @@ function New-AdminShortcut([string]$Path = '/') {
     $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
     # PowerShell variables are case-insensitive: do not name this $path (it would overwrite $Path).
     $shortcutFile = Join-Path $desktop $ShortcutName
+    Remove-Item -LiteralPath (Join-Path $desktop $LegacyShortcutName) -Force -ErrorAction SilentlyContinue
     $content = "[InternetShortcut]`r`nURL=http://localhost:$Port$Path`r`n"
     [IO.File]::WriteAllText($shortcutFile, $content, (New-Object System.Text.UTF8Encoding($false)))
     Write-Ok "desktop shortcut: $shortcutFile"
@@ -645,7 +665,7 @@ function Test-PortFree {
         }
         Stop-Install "port $Port is used by $name; free it or reinstall with another port"
     }
-    Write-Ok "port $Port is held by the existing ILER WSL stack"
+    Write-Ok "port $Port is held by the existing Nox Bot WSL stack"
 }
 
 function Test-FreeSpace {
@@ -710,7 +730,7 @@ try {
     # explicit entries (WSL grants the VM access on attach) are left alone, so no /reset here.
     if ($DistroDir) { Set-PrivateAcl -Dir $DistroDir }
     $build = Get-OsBuild
-    Write-Step "ILER Bot setup (Windows build $build, port $Port, resume=$Resume)"
+    Write-Step "Nox Bot setup (Windows build $build, port $Port, resume=$Resume)"
     if ($build -lt 19045 -and $build -ne 20348) {
         # 19045 = Windows 10 22H2, 20348 = Windows Server 2022; Server 2019 has no WSL2.
         Stop-Install "unsupported Windows build $build (need Windows 10 22H2, Windows 11 or Server 2022+)"
@@ -741,6 +761,7 @@ try {
     Set-Stage 38 'copy'
     Copy-BundleToWsl
     Set-Stage 42 'linux'
+    Set-BrandEnv
     Invoke-LinuxInstaller
     Set-Stage 90 'keys'
     Set-IlerKeys
@@ -758,7 +779,7 @@ try {
     if ($setupPath) { New-AdminShortcut -Path $setupPath } else { New-AdminShortcut }
     $lan = Get-LanAddress
     Write-Host ''
-    Write-Host 'ILER Bot is installed. Open the admin UI:' -ForegroundColor Green
+    Write-Host 'Nox Bot is installed. Open the admin UI:' -ForegroundColor Green
     if ($setupPath) {
         Write-Host 'First run: create the owner account with this one-time setup link (keep it private):' -ForegroundColor Yellow
         Write-Host "  http://localhost:$Port$setupPath"

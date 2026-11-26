@@ -1,4 +1,8 @@
-"""Builds the ILER Bot manual (HTML) from iler-vault/docs; printed to PDF with headless Edge."""
+"""Builds the Nox Bot manual (HTML) from iler-vault/docs; printed to PDF with headless Edge.
+
+Customer brand: "Nox Bot" (Nox service, noxsw.kz). The chapter texts come from the vault and must be
+rebranded there; this script only owns the cover, the title and the chapter headings.
+"""
 import html
 import os
 import re
@@ -6,7 +10,7 @@ import sys
 
 # needs: pip install markdown==3.7
 # usage: python scripts/build-manual.py <iler-vault>/docs build/manual.html <version>
-#        msedge --headless=new --no-pdf-header-footer --print-to-pdf=ILER-Bot-instrukciya-<ver>.pdf file:///.../build/manual.html
+#        msedge --headless=new --no-pdf-header-footer --print-to-pdf=Nox-Bot-instrukciya-<ver>.pdf file:///.../build/manual.html
 import markdown  # noqa: E402
 
 DOCS = sys.argv[1]
@@ -19,8 +23,8 @@ ORDER = [
     ("install-linux", "Установка на Ubuntu Server"),
     ("first-setup", "Первый запуск"),
     ("user-guide", "Руководство пользователя"),
-    ("coins", "Коины ILER"),
-    ("technician", "Для техника ILER"),
+    ("coins", "Коины"),
+    ("technician", "Для техника Nox service"),
     ("troubleshooting", "Решение проблем"),
     ("security", "Безопасность"),
 ]
@@ -37,10 +41,10 @@ for i, (name, title) in enumerate(ORDER, 1):
     sections.append(f'<section class="chapter" id="sec-{name}"><h1><span class="num">{i}</span>{html.escape(title)}</h1>{body}</section>')
     toc.append(f'<li><a href="#sec-{name}"><span class="num">{i}</span>{html.escape(title)}</a></li>')
 
-doc = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>ILER Bot — инструкция</title>
+doc = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Nox Bot — инструкция</title>
 <style>
 @page {{ size: A4; margin: 18mm 16mm 20mm 16mm; }}
-:root {{ --ink:#1c2321; --ink2:#55605c; --line:#d9dedb; --accent:#0f5f57; --soft:#eef5f3; }}
+:root {{ --ink:#1c2321; --ink2:#55605c; --line:#d9dedb; --accent:#3f6ad8; --soft:#eef2fb; }}
 * {{ box-sizing: border-box; }}
 body {{ font-family: "Segoe UI", Arial, sans-serif; color: var(--ink); font-size: 10.5pt; line-height: 1.5; margin: 0; }}
 .cover {{ height: 255mm; display: flex; flex-direction: column; justify-content: center; page-break-after: always; }}
@@ -68,12 +72,12 @@ table {{ border-collapse: collapse; width: 100%; margin: 3mm 0; font-size: 9.6pt
 tr {{ page-break-inside: avoid; }}
 th, td {{ border: 1px solid var(--line); padding: 1.6mm 2.2mm; text-align: left; vertical-align: top; }}
 th {{ background: var(--soft); }}
-blockquote {{ border-left: 3px solid var(--accent); margin: 3mm 0; padding: 1mm 4mm; color: var(--ink2); background: #f7faf9; }}
+blockquote {{ border-left: 3px solid var(--accent); margin: 3mm 0; padding: 1mm 4mm; color: var(--ink2); background: #f6f8fd; }}
 </style></head><body>
-<div class="cover"><div class="brand">ILER</div>
-<h1>ILER Bot<br>Инструкция по установке и работе</h1>
+<div class="cover"><div class="brand">NOX</div>
+<h1>Nox Bot<br>Инструкция по установке и работе</h1>
 <p>WhatsApp-ассистент на базе языковых моделей, который работает на компьютере или сервере вашего бизнеса.</p>
-<div class="meta">Версия {html.escape(VERSION)} · для владельца, операторов и техника ILER</div></div>
+<div class="meta">Версия {html.escape(VERSION)} · для владельца, операторов и техника Nox service · noxsw.kz</div></div>
 <div class="toc"><h2>Содержание</h2><ol>{''.join(toc)}</ol></div>
 {''.join(sections)}
 </body></html>"""
