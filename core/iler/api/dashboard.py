@@ -12,6 +12,7 @@ from iler.auth.deps import User, current_user
 from iler.backup import status as backup_status
 from iler.config import gateway_mode, get_settings, topup_url
 from iler.db.pool import get_pool
+from iler.errors import ApiError
 from iler.settings_models import NO_COINS_MESSAGE_DEFAULT, BotSettings
 from iler.whatsapp import monitor
 
@@ -260,3 +261,97 @@ def _parse_time(value: str | None) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+# --- payback stats ("что бот сделал за 7 / 30 дней") ----------------------------------------------
+
+DEFAULT_OFF_HOURS = ("21:00", "09:00")  # bot hours "always open": 21:00–09:00 counts as after hours
+
+
+class RoiStats(BaseModel):
+    days: Literal[7, 30]
+    since: str  # ISO-8601 start of the period (club time zone midnight)
+    bot_conversations: int  # conversations the bot answered itself (handover / no-coins replies excluded)
+    bookings: int  # booking requests the bot collected
+    after_hours_conversations: int  # conversations the bot answered outside working hours
+    handovers: int  # conversations passed to the operator (any reason)
+    coins: float  # LLM spend in the period (test chat and price photos included)
+    hours_source: Literal["settings", "default"]  # working hours from the bot settings, or 09:00–21:00
+    has_activity: bool  # any client message ever (False: a new bot, the admin shows the empty state)
+
+
+def _minutes(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def is_after_hours(local: datetime, bot: BotSettings) -> bool:
+    """Outside working hours: the bot's weekly hours when set, else 21:00–09:00 every day."""
+    t = local.hour * 60 + local.minute
+    if bot.hours.always_open:
+        start, end = (_minutes(x) for x in DEFAULT_OFF_HOURS)
+        return t >= start or t < end
+    day = getattr(bot.hours, ("mon", "tue", "wed", "thu", "fri", "sat", "sun")[local.weekday()])
+    if day.closed:
+        return True
+    open_, close = _minutes(day.open), _minutes(day.close)
+    if close <= open_:  # past midnight, e.g. 10:00–02:00
+        return not (t >= open_ or t < close)
+    return not (open_ <= t < close)
+
+
+@router.get("/api/dashboard/roi", response_model=RoiStats)
+async def get_dashboard_roi(days: int = 7, _user: User = Depends(current_user)):
+    if days not in (7, 30):
+        raise ApiError(422, "validation_error", "days: 7 or 30")
+    now = _now()
+    tz_name = get_settings().tz
+    tz = ZoneInfo(tz_name)
+    today_start, _ = today_bounds(now, tz_name)
+    since = (today_start.astimezone(tz) - timedelta(days=days - 1)).replace(tzinfo=None).replace(tzinfo=tz)
+    since_utc = since.astimezone(UTC)
+    pool = get_pool()
+    bot = await settings_store.get("bot", BotSettings)
+    # fixed replies are not the bot doing the work: handover, no coins, "write in text" / "photo to the master"
+    skip = [*_handover_texts(bot), bot.voice_message.strip(), bot.photo_message.strip()]
+    row = await pool.fetchrow(
+        """
+        SELECT
+          (SELECT count(DISTINCT conversation_id) FROM messages
+             WHERE author = 'bot' AND created_at >= $1 AND text <> ALL($2::text[])) AS bot_convs,
+          (SELECT count(*) FROM booking_requests WHERE created_at >= $1) AS bookings,
+          (SELECT count(*) FROM (
+             SELECT id FROM conversations WHERE needs_operator_at >= $1
+             UNION
+             SELECT ai_requests.conversation_id FROM tool_calls
+               JOIN ai_requests ON ai_requests.id = tool_calls.ai_request_id
+               WHERE tool_calls.name = 'handover_to_operator' AND tool_calls.error IS NULL
+                 AND ai_requests.conversation_id IS NOT NULL AND tool_calls.created_at >= $1) h) AS handovers,
+          EXISTS (SELECT 1 FROM messages WHERE author = 'client') AS has_activity
+        """,
+        since_utc, skip,
+    )
+    replies = await pool.fetch(
+        "SELECT conversation_id, created_at FROM messages"
+        " WHERE author = 'bot' AND created_at >= $1 AND text <> ALL($2::text[])",
+        since_utc, skip,
+    )
+    after_hours = {r["conversation_id"] for r in replies if is_after_hours(r["created_at"].astimezone(tz), bot)}
+    spend = await pool.fetch(
+        "SELECT model, sum(input_tokens)::bigint AS tin, sum(output_tokens)::bigint AS tout"
+        " FROM ai_requests WHERE created_at >= $1 GROUP BY model",
+        since_utc,
+    )
+    table = usage.prices()
+    coins = sum(usage.coins_for(r["model"], r["tin"], r["tout"], table) for r in spend)
+    return {
+        "days": days,
+        "since": since.isoformat(),
+        "bot_conversations": row["bot_convs"],
+        "bookings": row["bookings"],
+        "after_hours_conversations": len(after_hours),
+        "handovers": row["handovers"],
+        "coins": round(coins, 2),
+        "hours_source": "default" if bot.hours.always_open else "settings",
+        "has_activity": row["has_activity"],
+    }
