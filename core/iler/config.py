@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # Public address of a cloud instance behind the tunnel (https://client.example.kz); empty on a LAN.
     # An https:// address makes every auth cookie Secure.
     public_url: str = ""
+    # Brand of the admin UI and of user-facing texts: "iler" (on-prem, default) or "nox" (cloud edition
+    # run by Nox service). Unknown values fall back to "iler".
+    brand: str = "iler"
     data_dir: str = "/data"
     disable_workers: bool = False
     llm_fake: bool = False
@@ -43,6 +46,27 @@ class Settings(BaseSettings):
 def cookies_secure() -> bool:
     """Auth cookies get the Secure flag when the instance is served over https (cloud, behind the tunnel)."""
     return get_settings().public_url.strip().lower().startswith("https://")
+
+
+BRANDS = ("iler", "nox")
+# Product name shown to users, and the company name used in "contact ..." texts.
+_BRAND_NAMES = {"iler": ("ILER", "ILER"), "nox": ("Nox", "Nox service")}
+
+
+def brand() -> str:
+    """Configured brand id (ILER_BRAND), normalised; anything unknown is the default "iler"."""
+    value = get_settings().brand.strip().lower()
+    return value if value in BRANDS else "iler"
+
+
+def brand_name() -> str:
+    """Product name for user-facing texts: "ILER" or "Nox"."""
+    return _BRAND_NAMES[brand()][0]
+
+
+def brand_company() -> str:
+    """Company to contact in user-facing texts: "ILER" or "Nox service"."""
+    return _BRAND_NAMES[brand()][1]
 
 
 @lru_cache

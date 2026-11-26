@@ -1,5 +1,6 @@
 /* In-memory fake of the iler-core API for UI development: `npm run dev:mock` (VITE_MOCK=1).
- * Set VITE_MOCK_SETUP=1 to start in the first-run wizard. Never bundled in production builds:
+ * Set VITE_MOCK_SETUP=1 to start in the first-run wizard. Brand (GET /api/brand): open any page with
+ * ?brand=nox or ?brand=iler (remembered for the tab), or set VITE_MOCK_BRAND=nox. Never bundled in production builds:
  * client.ts imports it only behind `import.meta.env.VITE_MOCK === '1'`.
  * Response shapes, status codes and error codes mirror core (core/iler/api/*.py). */
 import type {
@@ -200,6 +201,25 @@ type Handler = (m: RegExpMatchArray, body: Record<string, unknown>, url: URL, in
 const routes: [string, RegExp, Handler][] = []
 const on = (method: string, pattern: string, h: Handler) =>
   routes.push([method, new RegExp(`^${pattern.replace(/:(\w+)/g, '([^/]+)')}$`), h])
+
+/* ---------- brand ---------- */
+
+const MOCK_BRAND_KEY = 'iler.mock.brand'
+
+/** ?brand= wins and is remembered for the tab (SPA redirects drop the query), then VITE_MOCK_BRAND. */
+function mockBrand(url: URL): string {
+  const fromQuery = url.searchParams.get('brand') ?? new URLSearchParams(window.location.search).get('brand')
+  try {
+    if (fromQuery === 'nox' || fromQuery === 'iler') window.sessionStorage.setItem(MOCK_BRAND_KEY, fromQuery)
+    const remembered = window.sessionStorage.getItem(MOCK_BRAND_KEY)
+    if (remembered) return remembered
+  } catch {
+    if (fromQuery === 'nox' || fromQuery === 'iler') return fromQuery
+  }
+  return import.meta.env.VITE_MOCK_BRAND === 'nox' ? 'nox' : 'iler'
+}
+
+on('GET', '/api/brand', (_m, _b, url) => json({ brand: mockBrand(url) }))
 
 /* ---------- setup / auth ---------- */
 
@@ -648,7 +668,7 @@ function newBackup(): BackupInfo {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-const PUBLIC = ['/api/setup/state', '/api/setup/owner', '/api/auth/login', '/api/auth/logout']
+const PUBLIC = ['/api/brand', '/api/setup/state', '/api/setup/owner', '/api/auth/login', '/api/auth/logout']
 
 export async function mockFetch(input: string, init: RequestInit = {}): Promise<Response> {
   const url = new URL(input, window.location.origin)

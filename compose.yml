@@ -72,6 +72,8 @@ services:
       ILER_TZ: ${ILER_TZ:-Asia/Almaty}
       # public address behind the tunnel (https://... -> cookies get the Secure flag); empty on a LAN
       ILER_PUBLIC_URL: ${ILER_PUBLIC_URL:-}
+      # admin UI brand and user-facing texts: iler (on-prem, default) or nox (cloud edition by Nox service)
+      ILER_BRAND: ${ILER_BRAND:-iler}
       ILER_DATA_DIR: /data
     volumes:
       # backups run inside core (scheduler worker); host path is /opt/iler/backups by default

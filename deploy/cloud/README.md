@@ -13,6 +13,7 @@ Each client is its own ILER installation:
 | Admin port | `127.0.0.1:<port>`, so it is reachable only through the tunnel. No firewall rules and no `iler.local` |
 | Public address | `https://<name>.<domain>`, a public hostname in the Cloudflare tunnel |
 | LLM keys, coin limit, model prices | the client's own `.env` (`ILER_*_KEY`, `ILER_MONTHLY_COINS`, `ILER_MODEL_PRICES`) |
+| Brand | `ILER_BRAND=nox` by default: cloud clients are clients of Nox service (see [Brand](#brand)) |
 
 Docker images are shared by all clients. Postgres, Redis and the WhatsApp gateway are never shared.
 
@@ -39,6 +40,8 @@ sudo bash deploy/cloud/iler-client.sh create acme --port 8101 --coins 30000 \
 - `--prices JSON` overrides the GPT/Gemini prices. The default is
   `{"gpt-5.4-mini": [0.75, 4.5], "gemini-3.8-flash": [0.75, 3.75]}` ($ per 1M tokens). Without prices,
   coins are billed at the highest tariff.
+- `--brand nox|iler` sets the admin UI brand. The default for cloud clients is `nox`; use
+  `--brand iler` for a client that should see the ILER brand.
 
 The script runs `deploy/install.sh --dir /opt/iler/clients/acme --name iler-acme --bind 127.0.0.1 ...`
 and prints the owner's one-time setup link (`https://acme.example.kz/setup?token=...`). Send it to the
@@ -53,6 +56,29 @@ Then:
    Use only one subdomain level, because the free certificate does not cover `a.b.example.kz`. The
    script does not call the Cloudflare API.
 3. Open `https://acme.example.kz`. The admin UI must load over HTTPS. Then send the setup link.
+
+## Brand
+
+One codebase, two brands, picked per installation by `ILER_BRAND` in the client's `.env`:
+
+| `ILER_BRAND` | Who | Admin UI |
+|---|---|---|
+| `iler` (default of `install.sh`) | on-prem installs | ILER wordmark and colours, one light theme |
+| `nox` (default of `iler-client.sh create`) | cloud clients of Nox service | Nox name and favicon, the look of the Nox service CRM, light/dark switch in the sidebar |
+
+The brand also changes user-facing texts ("Вход в Nox", "Коины Nox", "обратитесь в Nox service") and
+the server's messages to admins (coin alerts, e-mail subjects). Protocol names (`X-ILER-*` headers,
+`iler_*` cookies, `ILER_*` settings) stay the same for both.
+
+Re-running `install.sh` without `--brand` and updates through the admin UI keep the value. To switch an
+existing client:
+
+```sh
+sudo bash /opt/iler/clients/acme/deploy/install.sh --dir /opt/iler/clients/acme --brand iler --yes
+```
+
+The admin UI caches the brand in the browser and corrects it after the first request, so after a switch
+the old brand may show for a moment on the next page load.
 
 ## Behind the tunnel
 

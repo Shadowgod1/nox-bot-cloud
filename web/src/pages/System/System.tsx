@@ -14,6 +14,7 @@ import type {
   UserListItem,
   VersionInfo,
 } from '../../api/types'
+import { useBrand } from '../../brand'
 import { useAuth } from '../../hooks/useAuth'
 import { useLoad } from '../../hooks/useLoad'
 import { PageBody } from '../../components/Layout'
@@ -179,6 +180,7 @@ export const UPDATE_POLL_MS = 2000
 const isActive = (s: UpdateState | string | null | undefined) => !!s && (ACTIVE as string[]).includes(s)
 
 function UpdatePanel() {
+  const brand = useBrand()
   const version = useLoad(() => api.get<VersionInfo>('/api/system/version', { silent: true }))
   const [status, setStatus] = useState<UpdateStatus | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
@@ -214,7 +216,7 @@ function UpdatePanel() {
 
   async function start() {
     const v = version.data
-    if (!window.confirm(`Обновить ILER${v?.available ? ` до версии ${v.available}` : ''}? Перед обновлением создаётся резервная копия. Бот будет недоступен 1–3 минуты.`)) return
+    if (!window.confirm(`Обновить ${brand.name}${v?.available ? ` до версии ${v.available}` : ''}? Перед обновлением создаётся резервная копия. Бот будет недоступен 1–3 минуты.`)) return
     setStarting(true)
     try {
       const { job_id: id } = await api.post<{ job_id: string }>('/api/system/update')

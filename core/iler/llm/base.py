@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
+from iler.config import brand_company, brand_name
 from iler.tools.base import Tool
 
 
@@ -45,7 +46,10 @@ class LlmProvider(Protocol):
     async def complete(self, messages: list[ChatMessage], tools: list[Tool], model: str) -> LlmResponse: ...
 
 
-KEY_REJECTED_RU = "Ключ ILER отклонён провайдером — обратитесь в ILER"
+def key_rejected_ru() -> str:
+    return f"Ключ {brand_name()} отклонён провайдером — обратитесь в {brand_company()}"
+
+
 _HTTP_ERR = re.compile(r"\b(anthropic|openai|gemini) HTTP (\d{3})\b([^;]*)")
 
 
@@ -61,5 +65,5 @@ def public_error(message: str) -> str:
             if provider not in rejected:
                 rejected.append(provider)
     if rejected:
-        return f"{', '.join(rejected)}: {KEY_REJECTED_RU}"
+        return f"{', '.join(rejected)}: {key_rejected_ru()}"
     return message

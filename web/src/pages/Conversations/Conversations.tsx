@@ -188,7 +188,7 @@ export function Conversations() {
                       <span className="truncate text-[13px] text-ink-2">{preview(c)}</span>
                       {c.unread > 0 && (
                         <span
-                          className="tabular grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-semibold text-white"
+                          className="tabular grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-accent-solid px-1.5 text-[11px] font-semibold text-white"
                           aria-label={`Непрочитанных: ${c.unread}`}
                         >
                           {c.unread}

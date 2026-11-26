@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { CircleAlert } from 'lucide-react'
 import type { LlmProvider, LlmSettings } from '../../api/types'
+import { useBrand, type BrandCopy } from '../../brand'
 import { Input, Select } from '../../components/ui'
 
 /** Shared by the setup wizard and System → LLM settings. */
@@ -18,10 +19,12 @@ export const RECOMMENDED: Record<Exclude<LlmProvider, 'anthropic'>, string[]> = 
   gemini: ['gemini-3.8-flash', 'gemini-3.5-flash-lite'],
 }
 
-export const MODEL_HINT: Record<LlmProvider, string> = {
-  openai: 'Список моделей OpenAI, доступных через подключение ILER.',
-  gemini: 'Список моделей Gemini, доступных через подключение ILER.',
-  anthropic: 'Sonnet отвечает умнее, Haiku — быстрее и в ~20 раз дешевле.',
+export function modelHint(brand: BrandCopy): Record<LlmProvider, string> {
+  return {
+    openai: `Список моделей OpenAI, доступных через подключение ${brand.name}.`,
+    gemini: `Список моделей Gemini, доступных через подключение ${brand.name}.`,
+    anthropic: 'Sonnet отвечает умнее, Haiku — быстрее и в ~20 раз дешевле.',
+  }
 }
 
 export const PROVIDER_LABEL: Record<LlmProvider, string> = {
@@ -30,14 +33,17 @@ export const PROVIDER_LABEL: Record<LlmProvider, string> = {
   anthropic: 'Anthropic (Claude)',
 }
 
-/** Shown when the server has no ILER (vendor) key for any provider. */
-export const NO_VENDOR_KEYS = 'Ключи ILER не настроены. Обратитесь в поддержку ILER — техник добавит их при установке.'
+/** Shown when the server has no vendor (ILER / Nox) key for any provider. */
+export function noVendorKeysText(brand: BrandCopy): string {
+  return `Ключи ${brand.name} не настроены. Обратитесь в поддержку ${brand.company} — техник добавит их при установке.`
+}
 
 export function NoVendorKeys() {
+  const brand = useBrand()
   return (
     <div role="alert" className="flex items-start gap-3 rounded-[10px] border border-warn/40 bg-warn-soft px-4 py-3 text-sm text-ink">
       <CircleAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden />
-      <p>{NO_VENDOR_KEYS}</p>
+      <p>{noVendorKeysText(brand)}</p>
     </div>
   )
 }

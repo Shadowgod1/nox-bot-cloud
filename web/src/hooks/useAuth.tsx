@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { api, ApiError } from '../api/client'
-import type { SetupState, User } from '../api/types'
+import type { BrandInfo, SetupState, User } from '../api/types'
+import { isBrand, setBrand } from '../brand'
 
 type Phase = 'checking' | 'setup' | 'anonymous' | 'ready' | 'offline'
 
@@ -20,6 +21,16 @@ const AuthContext = createContext<AuthValue | null>(null)
 const PUBLIC = ['/login', '/setup']
 const OFFLINE_CODES = ['network', 'core_unavailable']
 
+/** Ask the server for the deploy-time brand; on any failure keep the cached one. */
+async function syncBrand() {
+  try {
+    const r = await api.get<BrandInfo>('/api/brand', { silent: true, noAuthRedirect: true })
+    if (isBrand(r?.brand)) setBrand(r.brand)
+  } catch {
+    /* older core or offline: the cached brand stays */
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<Phase>('checking')
   const [user, setUser] = useState<User | null>(null)
@@ -27,6 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const location = useLocation()
 
   const refresh = useCallback(async () => {
+    void syncBrand()
     try {
       const st = await api.get<SetupState>('/api/setup/state', { silent: true })
       if (st.needs_setup) {

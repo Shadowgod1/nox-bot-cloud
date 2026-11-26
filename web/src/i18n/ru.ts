@@ -7,9 +7,9 @@ import type {
   Weekday,
   WhatsAppState,
 } from '../api/types'
+import { brandCopy } from '../brand'
 
 export const ru = {
-  brand: 'ILER',
   nav: {
     dashboard: 'Обзор',
     conversations: 'Диалоги',
@@ -38,7 +38,12 @@ export const ru = {
     loadError: 'Не удалось загрузить данные.',
   },
   errors: {
-    network: 'Нет связи с сервером. Проверьте, что ILER запущен.',
+    // getter: the brand is known only after GET /api/brand answers
+    get network() {
+      return brandCopy().id === 'nox'
+        ? 'Нет связи с сервером. Проверьте подключение к интернету.'
+        : 'Нет связи с сервером. Проверьте, что ILER запущен.'
+    },
     server: 'Ошибка сервера. Попробуйте ещё раз через минуту.',
     validation: 'Проверьте заполнение полей.',
     forbidden: 'Недостаточно прав для этого действия.',

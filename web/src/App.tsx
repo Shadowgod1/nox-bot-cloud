@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Navigate, Route, Routes, useNavigate } from 'react-router'
 import { RotateCw, ServerCrash } from 'lucide-react'
 import { setNavigator } from './api/client'
+import { useBrand } from './brand'
 import { AuthProvider, useAuth } from './hooks/useAuth'
 import { Layout, Wordmark } from './components/Layout'
 import { ToastHost } from './components/ToastHost'
@@ -26,6 +27,7 @@ function NavigatorBridge() {
 
 function Shell() {
   const { phase, refresh } = useAuth()
+  const brand = useBrand()
 
   useEffect(() => {
     if (phase !== 'offline') return
@@ -49,9 +51,11 @@ function Shell() {
       <div className="grid h-dvh place-items-center px-6">
         <div role="alert" className="flex max-w-sm flex-col items-center text-center">
           <ServerCrash className="mb-3 size-8 text-ink-3" aria-hidden />
-          <h1 className="text-lg font-semibold">Сервер ILER недоступен</h1>
+          <h1 className="text-lg font-semibold">Сервер {brand.name} недоступен</h1>
           <p className="mt-1 text-sm text-ink-2">
-            Проверьте, что компьютер с ILER включён и подключён к сети. Страница обновится, когда сервер ответит.
+            {brand.id === 'nox'
+              ? 'Возможно, идут технические работы. Проверьте подключение к интернету — страница обновится, когда сервер ответит.'
+              : 'Проверьте, что компьютер с ILER включён и подключён к сети. Страница обновится, когда сервер ответит.'}
           </p>
           <Button className="mt-4" onClick={() => void refresh()} icon={<RotateCw className="size-4" aria-hidden />}>
             Проверить снова

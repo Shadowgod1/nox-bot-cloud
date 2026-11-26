@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router'
 import { Check, CheckCircle2, CircleAlert } from 'lucide-react'
 import { api, ApiError } from '../../api/client'
 import type { AnthropicEffort, LlmProvider, LlmProvidersResult, LlmSettings, LlmTestResult, User } from '../../api/types'
+import { useBrand } from '../../brand'
 import { useAuth } from '../../hooks/useAuth'
 import { useLoad } from '../../hooks/useLoad'
 import { AuthFrame } from '../Login/Login'
@@ -13,7 +14,7 @@ import { Button, CheckLine, type CheckView, ErrorState, Field, Input, Select, Sp
 import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_EFFORT_HINT, ANTHROPIC_EFFORTS } from '../System/anthropic'
 import {
   MODEL_FIELD,
-  MODEL_HINT,
+  modelHint,
   ModelSelect,
   NoVendorKeys,
   PROVIDER_LABEL,
@@ -72,8 +73,8 @@ export function Setup() {
             <span
               className={cx(
                 'tabular grid size-6 place-items-center rounded-full text-[12px] font-semibold',
-                i < step && 'bg-accent text-white',
-                i === step && 'bg-ink text-white',
+                i < step && 'bg-accent-solid text-white',
+                i === step && 'bg-ink text-surface',
                 i > step && 'bg-sunken text-ink-3',
               )}
               aria-hidden
@@ -210,6 +211,7 @@ function OwnerStep({ token, onDone }: { token: string | null; onDone: () => void
 }
 
 export function LlmStep({ onDone }: { onDone: () => void }) {
+  const brand = useBrand()
   const current = useLoad(() => api.get<LlmSettings>('/api/settings/llm', { silent: true }))
   const available = useLoad(() => api.get<LlmProvidersResult>('/api/settings/llm/providers', { silent: true }))
   const [chosenProvider, setProvider] = useState<LlmProvider | null>(null)
@@ -314,7 +316,7 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
     <>
       <StepHeader
         title="Подключите языковую модель"
-        text="Бот формулирует ответы через подключение ILER к OpenAI, Google Gemini или Anthropic Claude. Ключи доступа предоставляет ILER — вам остаётся выбрать модель."
+        text={`Бот формулирует ответы через подключение ${brand.name} к OpenAI, Google Gemini или Anthropic Claude. Ключи доступа предоставляет ${brand.company} — вам остаётся выбрать модель.`}
       />
       {current.loading || available.loading ? (
         <Spinner />
@@ -364,7 +366,7 @@ export function LlmStep({ onDone }: { onDone: () => void }) {
             </div>
           </fieldset>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Модель" hint={MODEL_HINT[provider]}>
+            <Field label="Модель" hint={modelHint(brand)[provider]}>
               <ModelSelect
                 key={provider}
                 provider={provider}

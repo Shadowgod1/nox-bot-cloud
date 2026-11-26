@@ -33,6 +33,11 @@ export interface SetupState {
   needs_setup: boolean
 }
 
+/** GET /api/brand (no session needed): deploy-time brand of the admin, from ILER_BRAND. */
+export interface BrandInfo {
+  brand: string
+}
+
 export type WhatsAppState = 'close' | 'connecting' | 'open' | 'degraded'
 
 /** GET /api/whatsapp/status and the `whatsapp.status` SSE event. */

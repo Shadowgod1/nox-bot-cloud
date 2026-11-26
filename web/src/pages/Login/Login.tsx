@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import { api, ApiError } from '../../api/client'
 import { useAuth } from '../../hooks/useAuth'
+import { useBrand } from '../../brand'
 import { Wordmark } from '../../components/Layout'
 import { Button, Field, Input } from '../../components/ui'
 
@@ -21,6 +22,7 @@ export function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const brand = useBrand()
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -41,7 +43,7 @@ export function Login() {
   return (
     <AuthFrame>
       <div className="rounded-[12px] border border-line bg-surface p-6 sm:p-7">
-        <h1 className="text-[19px] font-semibold text-ink">Вход в ILER</h1>
+        <h1 className="text-[19px] font-semibold text-ink">Вход в {brand.name}</h1>
         <p className="mt-1 text-sm text-ink-2">Админка WhatsApp-ассистента.</p>
         <form onSubmit={submit} className="mt-6 flex flex-col gap-4" noValidate>
           <Field label="E-mail">

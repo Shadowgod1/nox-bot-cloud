@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel
 
 from iler import settings_store
-from iler.config import get_settings
+from iler.config import brand_company, brand_name, get_settings
 from iler.db.pool import get_pool
 
 log = logging.getLogger("iler.usage")
@@ -229,13 +229,13 @@ async def after_spend() -> None:
         from iler.settings_models import NotifySettings
 
         if level >= 100:
-            text = (f"ILER Bot: лимит коинов на месяц исчерпан ({usage.spent:.0f} из {usage.limit}). "
+            text = (f"{brand_name()} Bot: лимит коинов на месяц исчерпан ({usage.spent:.0f} из {usage.limit}). "
                     "Бот больше не отвечает сам: новые сообщения ждут оператора в админке. "
-                    "Чтобы увеличить лимит, обратитесь в ILER.")
+                    f"Чтобы увеличить лимит, обратитесь в {brand_company()}.")
         else:
             pct = math.floor(usage.spent / usage.limit * 100 + 1e-9)  # floor: never claim more than was used
             out = f" При текущем темпе лимит закончится {usage.runs_out_on:%d.%m}." if usage.runs_out_on else ""
-            text = f"ILER Bot: израсходовано {pct}% коинов на месяц ({usage.spent:.0f} из {usage.limit}).{out}"
+            text = f"{brand_name()} Bot: израсходовано {pct}% коинов на месяц ({usage.spent:.0f} из {usage.limit}).{out}"
         statuses = await sender.notify_admins(text, key=f"coins:{month}:{usage.limit}:{level}")
         if not any(st != "failed" for st in statuses):
             targets = sender.admin_targets(await settings_store.get("notify", NotifySettings))

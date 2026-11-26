@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator
 
 from iler.auth.deps import User, csrf_protect, current_user
+from iler.config import brand_name
 from iler.errors import ApiError
 
 log = logging.getLogger("iler.api.test_chat")
@@ -50,7 +51,7 @@ async def post_test_chat(body: TestChatRequest, _user: User = Depends(current_us
     except BotNotConfigured as e:
         raise ApiError(409, "bot_not_configured", "Промпт бота пуст: настройте бота по шаблону") from e
     except CoinsExhausted as e:
-        raise ApiError(409, "coins_exhausted", "Лимит коинов ILER на этот месяц исчерпан") from e
+        raise ApiError(409, "coins_exhausted", f"Лимит коинов {brand_name()} на этот месяц исчерпан") from e
     except LlmError as e:
         raise ApiError(502, "llm_error", public_error(str(e))) from e
     return {"reply": "\n\n".join(outcome.reply_parts), "tool_calls": list(outcome.tool_calls)}

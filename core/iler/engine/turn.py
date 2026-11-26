@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from iler import settings_store, usage
-from iler.config import get_settings
+from iler.config import brand_name, get_settings
 from iler.engine import admission, prompt, sender, store
 from iler.engine.pii import PiiMasker, mask_phone_for_log
 from iler.llm import router
@@ -91,7 +91,7 @@ async def _handover_no_coins(conv, turn_id: str) -> None:
     who = conv["name"] or "клиент"
     phone = f" +{conv['phone']}" if conv["phone"] else ""
     await sender.notify_admins(
-        f"Лимит коинов ILER исчерпан: бот не отвечает сам. Сообщение ({who}{phone}) ждёт оператора в админке.",
+        f"Лимит коинов {brand_name()} исчерпан: бот не отвечает сам. Сообщение ({who}{phone}) ждёт оператора в админке.",
         key=f"coins-conv:{conv['id']}:{datetime.now(UTC):%Y-%m-%d}",
     )
     log.info("conversation %s handed to the operator: coin limit reached", conv["id"])

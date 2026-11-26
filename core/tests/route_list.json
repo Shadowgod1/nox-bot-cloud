@@ -4,6 +4,10 @@
 "/api/setup/state"
 ],
 [
+"get",
+"/api/brand"
+],
+[
 "post",
 "/api/setup/owner"
 ],
