@@ -232,7 +232,9 @@ async def run_turn(conversation_id: int | None, *, dry_run: bool = False,
     requests = list(getattr(result, "requests", []) or [])
     outcome = TurnOutcome(
         reply_parts=parts, tool_calls=tool_calls, handed_over=handed_over,
-        coins=round(sum(usage.coins_for(r.model or "", r.input_tokens, r.output_tokens) for r in requests), 3),
+        coins=round(sum(usage.coins_for(r.model or "", r.input_tokens, r.output_tokens,
+                                        cache_read=r.cache_read_tokens, cache_write=r.cache_write_tokens)
+                        for r in requests), 3),
         input_tokens=sum(r.input_tokens for r in requests),
         output_tokens=sum(r.output_tokens for r in requests),
     )

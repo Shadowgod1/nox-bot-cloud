@@ -4,7 +4,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 
 
 class Settings(BaseSettings):

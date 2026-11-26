@@ -145,11 +145,12 @@ async def _log_request(conversation_id: int | None, provider: str, model: str,
         from iler.db.pool import get_pool
 
         return await get_pool().fetchval(
-            "INSERT INTO ai_requests (conversation_id, provider, model, input_tokens, output_tokens, latency_ms, error)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+            "INSERT INTO ai_requests (conversation_id, provider, model, input_tokens, output_tokens, latency_ms, error,"
+            " cache_read_tokens, cache_write_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
             conversation_id, provider, (resp.model if resp and resp.model else model),
             resp.input_tokens if resp else 0, resp.output_tokens if resp else 0, latency_ms,
             error[:_ERR_MAX] if error else None,
+            resp.cache_read_tokens if resp else 0, resp.cache_write_tokens if resp else 0,
         )
     except Exception as e:  # noqa: BLE001 - journaling must not break the turn
         log.warning("ai_requests logging failed: %s", type(e).__name__)

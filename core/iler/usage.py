@@ -49,6 +49,11 @@ DEFAULT_PRICES: dict[str, tuple[float, float]] = {
     "claude-haiku-5-5": (0.10, 0.50),
 }
 FALLBACK_PRICE = (2.0, 10.0)
+# Anthropic prompt caching, relative to the input price: a 5-minute cache write costs 1.25x; a cache read
+# 0.1x, except Claude Sonnet 5.5 at 0.05x ($0.10 per 1M). Same numbers as the portal gateway's price table.
+CACHE_WRITE_FACTOR = 1.25
+CACHE_READ_FACTORS: dict[str, float] = {"claude-sonnet-5-5": 0.05}
+CACHE_READ_FACTOR = 0.1
 ALERT_LEVELS = (80, 95, 100)  # spent share: 20 % left, 5 % left, exhausted
 _CACHE_S = 30.0
 
@@ -94,9 +99,19 @@ def is_priced(model: str, table: dict[str, tuple[float, float]] | None = None) -
 
 
 def coins_for(model: str, input_tokens: int, output_tokens: int,
-              table: dict[str, tuple[float, float]] | None = None) -> float:
+              table: dict[str, tuple[float, float]] | None = None, *,
+              cache_read: int = 0, cache_write: int = 0) -> float:
+    """Coins of a request. ``input_tokens`` is all input; ``cache_read`` / ``cache_write`` are the parts of it
+    read from / written to the prompt cache, billed at their own rates."""
     pin, pout = price_for(model, table)
-    return (input_tokens * pin + output_tokens * pout) / 1_000_000 / COIN_USD
+    cache_read = max(0, min(cache_read, input_tokens))
+    cache_write = max(0, min(cache_write, input_tokens - cache_read))
+    plain = input_tokens - cache_read - cache_write
+    read_factor = next((f for p, f in sorted(CACHE_READ_FACTORS.items(), key=lambda kv: -len(kv[0]))
+                        if model.startswith(p)), CACHE_READ_FACTOR)
+    usd = (plain * pin + cache_write * pin * CACHE_WRITE_FACTOR + cache_read * pin * read_factor
+           + output_tokens * pout) / 1_000_000
+    return usd / COIN_USD
 
 
 def _tz() -> ZoneInfo:
@@ -145,7 +160,8 @@ async def month_usage(now: datetime | None = None) -> MonthUsage:
     dim = calendar.monthrange(start.year, start.month)[1]
     rows = await get_pool().fetch(
         "SELECT (created_at AT TIME ZONE $2)::date AS day, model,"
-        " sum(input_tokens)::bigint AS tin, sum(output_tokens)::bigint AS tout, min(created_at) AS first_at"
+        " sum(input_tokens)::bigint AS tin, sum(output_tokens)::bigint AS tout,"
+        " sum(cache_read_tokens)::bigint AS tcr, sum(cache_write_tokens)::bigint AS tcw, min(created_at) AS first_at"
         " FROM ai_requests WHERE created_at >= $1 GROUP BY 1, 2",
         start.astimezone(UTC), str(tz),
     )
@@ -153,7 +169,7 @@ async def month_usage(now: datetime | None = None) -> MonthUsage:
     per_day: dict[date, float] = {}
     per_model: dict[str, float] = {}
     for r in rows:
-        c = coins_for(r["model"], r["tin"], r["tout"], table)
+        c = coins_for(r["model"], r["tin"], r["tout"], table, cache_read=r["tcr"], cache_write=r["tcw"])
         per_day[r["day"]] = per_day.get(r["day"], 0.0) + c
         per_model[r["model"]] = per_model.get(r["model"], 0.0) + c
     days = [(start.date() + timedelta(days=i), round(per_day.get(start.date() + timedelta(days=i), 0.0), 2))

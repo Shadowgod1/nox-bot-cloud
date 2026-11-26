@@ -24,7 +24,7 @@ COIN_USD = Decimal("0.001")
 # Claude: same numbers as core/iler/usage.py DEFAULT_PRICES / FALLBACK_PRICE. GPT / Gemini: the models of
 # the admin UI, same as DEFAULT_PRICES in deploy/cloud/iler-client.sh (ILER_MODEL_PRICES of cloud clients).
 DEFAULT_PRICES: dict[str, tuple[float, float]] = {
-    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-sonnet-5-5": (2.0, 10.0, 2.5, 0.10),  # cache read $0.10 per 1M (0.05x), not the default 0.1x
     "claude-haiku-5-5": (0.10, 0.50),
     "gpt-5.4-mini": (0.75, 4.5),
     "gemini-3.8-flash": (0.75, 3.75),

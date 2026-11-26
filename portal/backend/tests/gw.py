@@ -20,8 +20,8 @@ ANTHROPIC_MSG = {
     "usage": {"input_tokens": 1000, "output_tokens": 500, "cache_creation_input_tokens": 2000,
               "cache_read_input_tokens": 4000},
 }
-# sonnet 2/10 $/Mtok, cache write 2.5, cache read 0.2: 2000 + 5000 + 5000 + 800 = 12800 micro-$ = 12.8 coins
-ANTHROPIC_MSG_COINS = "12.800"
+# sonnet 2/10 $/Mtok, cache write 2.5, cache read 0.10 (0.05x): 2000 + 5000 + 5000 + 400 = 12400 micro-$ = 12.4 coins
+ANTHROPIC_MSG_COINS = "12.400"
 
 ANTHROPIC_SSE = (
     b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_02","type":"message",'

@@ -11,8 +11,8 @@ import pytest
 from pydantic import SecretStr
 
 from iler.llm import router
-from iler.llm.anthropic_provider import FALLBACK_BETA, AnthropicProvider
-from iler.llm.base import ChatMessage, LlmError, LlmResponse
+from iler.llm.anthropic_provider import FALLBACK_BETA, AnthropicProvider, system_blocks
+from iler.llm.base import SYSTEM_DYNAMIC_MARK, ChatMessage, LlmError, LlmResponse
 from iler.llm.fake import FakeLLM
 from iler.settings_models import BotSettings, LlmSettings
 from iler.tools.base import ToolContext, ToolResult
@@ -97,7 +97,9 @@ async def test_request_mapping_system_tools_effort():
 
     body = api.bodies[0]
     assert body["model"] == "claude-opus-5-5"
-    assert body["system"] == "sys"
+    # prompt caching: a breakpoint on the system prompt and automatic caching of the dialogue tail
+    assert body["system"] == [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]
+    assert body["cache_control"] == {"type": "ephemeral"}
     assert body["messages"] == [{"role": "user", "content": "hi"}]
     assert body["tools"] == [{"name": "echo", "description": "Echo back the text",
                               "input_schema": EchoTool.parameters}]
@@ -115,6 +117,7 @@ async def test_request_mapping_system_tools_effort():
     assert resp.text == "Здравствуйте" and resp.tool_calls == []
     assert resp.provider == "anthropic" and resp.model == "claude-opus-5-5"
     assert resp.input_tokens == 15 and resp.output_tokens == 3
+    assert resp.cache_read_tokens == 4 and resp.cache_write_tokens == 0
 
 
 async def test_no_tools_omits_tool_params_and_haiku_skips_fallbacks():
@@ -281,3 +284,29 @@ def test_settings_defaults():
     s = LlmSettings()
     assert s.anthropic_model == "claude-sonnet-5-5" and s.anthropic_effort == "low"
     assert LlmSettings(provider="anthropic", emergency_provider="anthropic").provider == "anthropic"
+
+
+def test_system_blocks_cache_the_stable_part_and_leave_the_time_out():
+    system = "rules\nbusiness" + SYSTEM_DYNAMIC_MARK + "Сейчас: 26.11.2026 21:00"
+    assert system_blocks(system) == [
+        {"type": "text", "text": "rules\nbusiness", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "Сейчас: 26.11.2026 21:00"},
+    ]
+    # the stable part is byte-identical whatever the time is, so every message re-reads the same cache entry
+    later = "rules\nbusiness" + SYSTEM_DYNAMIC_MARK + "Сейчас: 26.11.2026 21:07"
+    assert system_blocks(later)[0] == system_blocks(system)[0]
+    assert system_blocks("only rules") == [{"type": "text", "text": "only rules", "cache_control": {"type": "ephemeral"}}]
+
+
+def test_prompt_puts_the_time_after_the_cache_mark():
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    from iler.engine.prompt import build_system
+
+    bot = BotSettings(prompt="Салон Aru Beauty")
+    a = build_system(bot, dt(2026, 11, 26, 21, 0, tzinfo=ZoneInfo("Asia/Almaty")), "Asia/Almaty")
+    b = build_system(bot, dt(2026, 11, 26, 21, 7, tzinfo=ZoneInfo("Asia/Almaty")), "Asia/Almaty")
+    head_a, mark, tail_a = a.rpartition(SYSTEM_DYNAMIC_MARK)
+    assert mark and tail_a.startswith("Сейчас: 26.11.2026 21:00")
+    assert b.rpartition(SYSTEM_DYNAMIC_MARK)[0] == head_a

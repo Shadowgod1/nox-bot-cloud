@@ -7,7 +7,10 @@ Notes for the Claude 5.5 models (the bot uses Sonnet 5.5 or Haiku 5.5):
 - an assistant turn with ``tool_use`` must be echoed back unchanged (thinking blocks included) on the
   next request of the tool loop, so the raw content of such turns is cached per tool_use id;
 - a policy decline is HTTP 200 with ``stop_reason == "refusal"``; server-side fallbacks
-  (``fallbacks: "default"``, beta ``server-side-fallback-2026-07-01``) retry it on another model first.
+  (``fallbacks: "default"``, beta ``server-side-fallback-2026-07-01``) retry it on another model first;
+- prompt caching: an explicit breakpoint on the stable system prefix (tools + rules + business + prices,
+  shared by every conversation of the install) and top-level automatic caching for the growing dialogue.
+  The current time comes after SYSTEM_DYNAMIC_MARK, past the breakpoint, so it never breaks the cache.
 """
 
 import time
@@ -15,7 +18,7 @@ from collections import OrderedDict
 
 import anthropic
 
-from iler.llm.base import ChatMessage, LlmError, LlmResponse, ToolCall, body_error_type
+from iler.llm.base import SYSTEM_DYNAMIC_MARK, ChatMessage, LlmError, LlmResponse, ToolCall, body_error_type
 from iler.tools.base import Tool
 
 TIMEOUT_S = 60.0
@@ -28,6 +31,15 @@ DEFAULT_BASE_URL = "https://api.anthropic.com"
 _FALLBACK_MODEL_PREFIXES = ("claude-opus-5-5", "claude-sonnet-5-5")
 _RAW_CACHE_MAX = 500
 _ERROR_PREFIX = "error: "  # how router.complete_with_tools reports a failed tool to the model
+CACHE ={"type": "ephemeral"}  # 5-minute TTL: a WhatsApp dialogue and a busy bot re-read well within it
+
+
+def system_blocks(system: str) -> list[dict]:
+    """The system prompt as content blocks: the stable part with a cache breakpoint, then the per-request tail."""
+    head, mark, tail = system.rpartition(SYSTEM_DYNAMIC_MARK)
+    if not mark or not head.strip():
+        return [{"type": "text", "text": system, "cache_control": CACHE}]
+    return [{"type": "text", "text": head, "cache_control": CACHE}, {"type": "text", "text": tail}]
 
 
 def _redact(text: str, secret: str) -> str:
@@ -119,7 +131,8 @@ class AnthropicProvider:
             "output_config": {"effort": self.effort},
         }
         if system:
-            kwargs["system"] = system
+            kwargs["system"] = system_blocks(system)
+        kwargs["extra_body"] = {"cache_control": CACHE}  # automatic caching of the dialogue tail
         if tools:
             kwargs["tools"] = to_anthropic_tools(tools)
             kwargs["tool_choice"] = {"type": "auto"}
@@ -161,16 +174,19 @@ class AnthropicProvider:
             if calls:
                 self._remember(tuple(c.id for c in calls), [b.to_dict(mode="json") for b in resp.content])
             usage = resp.usage
-            input_tokens = 0
+            input_tokens = cache_read = cache_write = 0
             if usage is not None:
-                input_tokens = ((usage.input_tokens or 0) + (usage.cache_read_input_tokens or 0)
-                                + (usage.cache_creation_input_tokens or 0))
+                cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+                cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                input_tokens = (usage.input_tokens or 0) + cache_read + cache_write
             return LlmResponse(
                 text="".join(texts),
                 tool_calls=calls,
                 model=resp.model or model,
                 provider=self.name,
                 input_tokens=input_tokens,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
                 output_tokens=(usage.output_tokens or 0) if usage is not None else 0,
                 latency_ms=latency,
             )

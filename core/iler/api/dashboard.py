@@ -343,12 +343,14 @@ async def get_dashboard_roi(days: int = 7, _user: User = Depends(current_user)):
         hours_tz = tz
     after_hours = {r["conversation_id"] for r in replies if is_after_hours(r["created_at"].astimezone(hours_tz), bot)}
     spend = await pool.fetch(
-        "SELECT model, sum(input_tokens)::bigint AS tin, sum(output_tokens)::bigint AS tout"
+        "SELECT model, sum(input_tokens)::bigint AS tin, sum(output_tokens)::bigint AS tout,"
+        " sum(cache_read_tokens)::bigint AS tcr, sum(cache_write_tokens)::bigint AS tcw"
         " FROM ai_requests WHERE created_at >= $1 GROUP BY model",
         since_utc,
     )
     table = usage.prices()
-    coins = sum(usage.coins_for(r["model"], r["tin"], r["tout"], table) for r in spend)
+    coins = sum(usage.coins_for(r["model"], r["tin"], r["tout"], table, cache_read=r["tcr"], cache_write=r["tcw"])
+                for r in spend)
     return {
         "days": days,
         "since": since.isoformat(),

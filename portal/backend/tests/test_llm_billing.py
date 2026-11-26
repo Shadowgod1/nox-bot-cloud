@@ -328,11 +328,11 @@ async def test_cabinet_usage_by_day_and_model(client, other, pool, upstream):
     me = (await other.get("/api/me")).json()
     assert me["llm_enabled"] is True and me["local_install"] is True
     u = (await other.get("/api/me/usage")).json()
-    assert u["balance"]["spent"] == 25.6 and u["balance"]["coins_left"] == 974
+    assert u["balance"]["spent"] == 24.8 and u["balance"]["coins_left"] == 975
     today = datetime.now(ZoneInfo("Asia/Almaty")).date().isoformat()
-    assert u["by_day"] == [{"day": today, "coins": 25.6}]
+    assert u["by_day"] == [{"day": today, "coins": 24.8}]
     assert u["by_model"] == [{"provider": "anthropic", "model": "claude-sonnet-5-5", "requests": 2,
-                              "input_tokens": 14000, "output_tokens": 1000, "coins": 25.6}]
+                              "input_tokens": 14000, "output_tokens": 1000, "coins": 24.8}]
 
 
 async def test_usage_requires_gateway(other, pool):
@@ -347,7 +347,7 @@ async def test_daily_summary(client, pool, upstream):
     await settled()
     mailer.OUTBOX.clear()
     text = await renewal.daily_summary(datetime.now(ZoneInfo("Asia/Almaty")).date())
-    assert "anthropic: 12.8 коинов ($0.01)" in text and "запросов 1" in text
+    assert "anthropic: 12.4 коинов ($0.01)" in text and "запросов 1" in text
     assert mailer.OUTBOX[0].to == "staff@example.kz"
     empty = await renewal.daily_summary(date(2020, 1, 1))
     assert "запросов не было" in empty

@@ -23,15 +23,22 @@ class ChatMessage:
     tool_calls: list[ToolCall] | None = None
 
 
+# Separates the stable system prompt from its per-request tail (the current time): the Anthropic provider
+# caches everything before it. An invisible separator, harmless for the other providers.
+SYSTEM_DYNAMIC_MARK = "\n⁣"
+
+
 @dataclass
 class LlmResponse:
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     model: str = ""
     provider: str = ""
-    input_tokens: int = 0
+    input_tokens: int = 0  # all input, cached parts included
     output_tokens: int = 0
     latency_ms: int = 0
+    cache_read_tokens: int = 0  # part of input_tokens read from the prompt cache (Anthropic)
+    cache_write_tokens: int = 0  # part of input_tokens written to the prompt cache (Anthropic)
 
 
 class LlmError(Exception):

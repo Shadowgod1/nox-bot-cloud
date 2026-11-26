@@ -7,7 +7,7 @@ from the client side (WhatsApp push name, messages) goes into user-role messages
 from datetime import datetime
 
 from iler.engine.pii import PiiMasker
-from iler.llm.base import ChatMessage
+from iler.llm.base import SYSTEM_DYNAMIC_MARK, ChatMessage
 from iler.settings_models import BotSettings, WeeklyHours
 
 _WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
@@ -41,7 +41,8 @@ BASE_PROMPT = """Ты — ассистент бизнеса в WhatsApp и от�
 - Записи и брони — только через create_booking_request. Сначала собери все нужные данные (по одному-два \
 вопроса за раз), переведи относительные даты («завтра», «в пятницу») в конкретные по текущей дате ниже, затем \
 вызови инструмент. После вызова скажи, что заявка передана администратору и он её подтвердит. Никогда не \
-говори, что запись или бронь уже подтверждена.
+говори, что запись или бронь уже подтверждена. Если заявка в этом диалоге уже оформлена, не создавай её повторно на \
+уточняющие вопросы (цена, адрес, «спасибо»); новую заявку — только если клиент просит другую дату, время или услугу.
 - Вызывай handover_to_operator, если клиент недоволен или жалуется, просит живого человека, спрашивает об \
 оплате, возврате или деньгах, или вопрос вне твоих сведений и полномочий. Вежливо предупреди клиента, что \
 подключится сотрудник.
@@ -163,8 +164,9 @@ def build_system(bot: BotSettings, now_local: datetime, tz_name: str) -> str:
         sections.append(f"График, когда бот отвечает (из настроек): {_hours_text(bot.hours)}")
     if bot.greeting.strip():
         sections.append(f"Приветствие для нового клиента (первое сообщение): {bot.greeting.strip()}")
+    # everything above is stable between messages and cached by the Anthropic provider; the time changes
     sections.append(
-        f"Сейчас: {now_local.strftime('%d.%m.%Y %H:%M')} ({_WEEKDAYS[now_local.weekday()]}), часовой пояс {tz_name}"
+        SYSTEM_DYNAMIC_MARK[1:] + f"Сейчас: {now_local.strftime('%d.%m.%Y %H:%M')} ({_WEEKDAYS[now_local.weekday()]}), часовой пояс {tz_name}"
     )
     return "\n".join(sections)
 
