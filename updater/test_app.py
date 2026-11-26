@@ -118,6 +118,19 @@ def test_backup_called_before_pull(ilerdir):
     assert (ilerdir / "VERSION").read_text().strip() == "0.2.0"
 
 
+def test_update_keeps_brand_and_other_settings(ilerdir):
+    env = ilerdir / ".env"
+    env.write_text(env.read_text() + "ILER_BRAND=nox\nILER_PUBLIC_URL=https://bot.example.kz\n")
+    calls: list = []
+    upd, _ = make_updater(ilerdir, calls)
+    job = upd.new_job()
+    upd.run_job(job)
+    assert job.state == "healthy"
+    text = env.read_text()
+    assert "ILER_VERSION=0.2.0" in text
+    assert "ILER_BRAND=nox" in text and "ILER_PUBLIC_URL=https://bot.example.kz" in text
+
+
 def test_backup_failure_stops_before_pull(ilerdir):
     calls: list = []
     upd, _ = make_updater(ilerdir, calls, backup_ok=False)

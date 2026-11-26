@@ -2,7 +2,7 @@
 # ILER cloud: client instances on one machine, one command each (run by the ILER technician as root).
 #
 #   sudo bash deploy/cloud/iler-client.sh create <name> --port N [--coins N] [--public-url URL]
-#                                         [--offline images.tar] [--prices JSON]
+#                                         [--offline images.tar] [--prices JSON] [--brand nox|iler]
 #   sudo bash deploy/cloud/iler-client.sh stop <name>
 #   sudo bash deploy/cloud/iler-client.sh start <name>
 #   sudo bash deploy/cloud/iler-client.sh remove <name> [--yes]
@@ -11,7 +11,8 @@
 # Every client is its own docker compose project "iler-<name>" in /opt/iler/clients/<name> (own .env,
 # database, WhatsApp session, backups, coin limit), with the admin port published on 127.0.0.1 only.
 # The public hostname <name>.<domain> -> http://127.0.0.1:<port> is added in the Cloudflare tunnel by
-# the technician (this script never calls the Cloudflare API). Details: deploy/cloud/README.md.
+# the technician (this script never calls the Cloudflare API). Cloud clients get the Nox brand
+# (admin UI of Nox service) unless --brand iler is given. Details: deploy/cloud/README.md.
 # Env: ILER_CLIENTS_DIR (default /opt/iler/clients).
 # shellcheck source-path=SCRIPTDIR
 set -euo pipefail
@@ -35,7 +36,7 @@ CLIENTS_DIR="${CLIENTS_DIR%/}"
 DEFAULT_PRICES='{"gpt-5.4-mini": [0.75, 4.5], "gemini-3.8-flash": [0.75, 3.75]}'
 
 usage() {
-  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # 2-32 characters, a valid DNS label (it becomes <name>.<domain>): no '-' at the start or end
@@ -86,7 +87,7 @@ port_owner() {
 # ---- create -------------------------------------------------------------------------------
 
 cmd_create() {
-  local name="" port="" coins="" public_url="" offline="" prices="$DEFAULT_PRICES" dir project owner
+  local name="" port="" coins="" public_url="" offline="" prices="$DEFAULT_PRICES" brand="nox" dir project owner
   name="${1:-}"
   [[ $# -gt 0 ]] && shift
   while [[ $# -gt 0 ]]; do
@@ -101,6 +102,8 @@ cmd_create() {
       --offline=*) offline="${1#*=}"; shift ;;
       --prices) prices="${2:-}"; shift 2 ;;
       --prices=*) prices="${1#*=}"; shift ;;
+      --brand) brand="${2:-}"; shift 2 ;;
+      --brand=*) brand="${1#*=}"; shift ;;
       *) usage >&2; die "unknown option for create: $1" ;;
     esac
   done
@@ -108,6 +111,7 @@ cmd_create() {
   [[ -n "$port" ]] || die "--port is required (one free port per client, e.g. 8101)"
   [[ "$port" =~ ^[1-9][0-9]{3,4}$ && "$port" -le 65535 ]] || die "invalid --port: $port (1000-65535, no leading zeros)"
   [[ -z "$coins" || "$coins" =~ ^[0-9]{1,9}$ ]] || die "invalid --coins: $coins (whole number, 0 = no limit)"
+  [[ "$brand" == "nox" || "$brand" == "iler" ]] || die "invalid --brand: $brand (nox or iler)"
   [[ "$prices" != *"'"* && "$prices" != *$'\n'* ]] || die "--prices must be one line of JSON without single quotes"
   have python3 || die "python3 is required to check --prices"
   python3 -c 'import json, sys; json.loads(sys.argv[1])' "$prices" 2>/dev/null || die "--prices is not valid JSON: $prices"
@@ -139,7 +143,7 @@ cmd_create() {
   [[ -n "$public_url" ]] || warn "no --public-url: cookies are not Secure and the setup link points to 127.0.0.1; re-run install.sh --public-url later"
 
   # Seed .env with the client's own values; install.sh adds every other key and generates the secrets.
-  log "creating client '$name' (project $project, port 127.0.0.1:$port)"
+  log "creating client '$name' (project $project, port 127.0.0.1:$port, brand $brand)"
   mkdir -p "$dir"
   (
     umask 077
@@ -149,11 +153,12 @@ cmd_create() {
       echo "ILER_HTTP_BIND=127.0.0.1"
       echo "ILER_HTTP_PORT=$port"
       echo "ILER_PUBLIC_URL=$public_url"
+      echo "ILER_BRAND=$brand"
       echo "ILER_MONTHLY_COINS=${coins:-0}"
       echo "ILER_MODEL_PRICES='$prices'"
     } >"$dir/.env"
   )
-  local args=(--dir "$dir" --name "$project" --bind 127.0.0.1 --port "$port" --yes)
+  local args=(--dir "$dir" --name "$project" --bind 127.0.0.1 --port "$port" --brand "$brand" --yes)
   [[ -n "$public_url" ]] && args+=(--public-url "$public_url")
   [[ -n "$offline" ]] && args+=(--offline "$offline")
   if ! bash "$DEPLOY_DIR/install.sh" "${args[@]}"; then

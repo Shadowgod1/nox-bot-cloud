@@ -3,7 +3,7 @@
 #
 #   sudo bash deploy/install.sh [--port 8080] [--dir /opt/iler] [--offline images.tar]
 #   sudo bash deploy/install.sh --dir /opt/iler/clients/acme --name iler-acme --port 8101 \
-#        --public-url https://acme.example.kz            # cloud instance (see deploy/cloud/README.md)
+#        --public-url https://acme.example.kz --brand nox  # cloud instance (see deploy/cloud/README.md)
 #   sudo bash deploy/install.sh --restore /path/iler-backup-YYYYMMDD-HHMMSS.tar.gz [--env /path/old.env]
 #   sudo bash deploy/install.sh --uninstall [--purge]
 #   curl -fsSL <release>/install.sh | sudo bash          # downloads the bundle first
@@ -70,6 +70,8 @@ Usage: sudo bash install.sh [options]
   --public-url URL    public address behind the tunnel, e.g. https://acme.example.kz (cloud; implies
                       --bind 127.0.0.1). Cloud mode (--public-url or --bind 127.x): no firewall rules,
                       no iler.local, Secure cookies for https, setup link printed with this address
+  --brand NAME        admin UI brand: iler (default) or nox (cloud edition by Nox service);
+                      a re-install without --brand keeps the value in .env
   --restore FILE      restore a backup archive after installing (databases + WhatsApp session)
   --env FILE          with --restore: take ILER_SECRET_KEY from the ORIGINAL server's .env, so
                       stored secrets (SMTP password, SENET key) can be decrypted;
@@ -93,6 +95,7 @@ PROJECT_NAME=""
 HTTP_BIND=""
 PUBLIC_URL=""
 PUBLIC_URL_SET=0
+BRAND=""
 CLOUD=0
 
 while [[ $# -gt 0 ]]; do
@@ -105,6 +108,8 @@ while [[ $# -gt 0 ]]; do
     --bind=*) HTTP_BIND="${1#*=}"; shift ;;
     --public-url) PUBLIC_URL="${2:-}"; PUBLIC_URL_SET=1; shift 2 ;;
     --public-url=*) PUBLIC_URL="${1#*=}"; PUBLIC_URL_SET=1; shift ;;
+    --brand) BRAND="${2:-}"; shift 2 ;;
+    --brand=*) BRAND="${1#*=}"; shift ;;
     --dir) ILER_DIR_PATH="${2:-}"; shift 2 ;;
     --dir=*) ILER_DIR_PATH="${1#*=}"; shift ;;
     --offline) OFFLINE_TAR="${2:-}"; shift 2 ;;
@@ -138,6 +143,9 @@ if [[ -n "$PUBLIC_URL" ]]; then
   [[ "$PUBLIC_URL" =~ ^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$ ]] \
     || die "invalid --public-url: $PUBLIC_URL (expected https://host[:port], no path)"
   [[ "$PUBLIC_URL" == https://* ]] || warn "--public-url is not https: session cookies will not be Secure"
+fi
+if [[ -n "$BRAND" && "$BRAND" != "iler" && "$BRAND" != "nox" ]]; then
+  die "invalid --brand: $BRAND (iler or nox)"
 fi
 if [[ "$PURGE" == "1" && "$UNINSTALL" != "1" ]]; then
   die "--purge is only valid together with --uninstall"
@@ -353,9 +361,12 @@ configure_env() {
   env_set "$envfile" ILER_PROJECT "$PROJECT_NAME"
   env_set "$envfile" ILER_HTTP_BIND "$HTTP_BIND"
   env_set "$envfile" ILER_PUBLIC_URL "$PUBLIC_URL"
+  # --brand wins; otherwise keep the installed brand (render_env added ILER_BRAND=iler to an older .env)
+  [[ -n "$BRAND" ]] && env_set "$envfile" ILER_BRAND "$BRAND"
+  BRAND="$(env_get "$envfile" ILER_BRAND)"
   chmod 600 "$envfile"
   printf '%s\n' "$(env_get "$envfile" ILER_VERSION)" >"$ILER_DIR_PATH/VERSION"
-  ok ".env ready (version $(env_get "$envfile" ILER_VERSION), project $PROJECT_NAME, port ${HTTP_BIND:-*}:$PORT)"
+  ok ".env ready (version $(env_get "$envfile" ILER_VERSION), project $PROJECT_NAME, port ${HTTP_BIND:-*}:$PORT, brand ${BRAND:-iler})"
 }
 
 # Take ILER_SECRET_KEY from the original server's .env (--env). Other values (DB passwords etc.)
