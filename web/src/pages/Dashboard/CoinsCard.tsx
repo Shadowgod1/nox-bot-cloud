@@ -1,5 +1,6 @@
 import { CircleAlert, CircleCheck, TrendingUp } from 'lucide-react'
 import type { DashboardCoins } from '../../api/types'
+import { useBrand } from '../../brand'
 import { Badge, Panel, cx } from '../../components/ui'
 import { plural } from '../../i18n/ru'
 import { coinsForecast, coinsLevel, formatDayMonth, formatNumber, formatPercent, modelLabel, type Level } from './health'
@@ -20,10 +21,11 @@ export function CoinsCard({ coins }: { coins: DashboardCoins }) {
   const forecast = coinsForecast(coins)
   const percent = coins.percent ?? (hasLimit ? (coins.spent / coins.limit) * 100 : 0)
   const remaining = coins.remaining ?? Math.max(0, coins.limit - coins.spent)
+  const brand = useBrand()
 
   return (
     <Panel
-      title="Коины ILER"
+      title={`Коины ${brand.name}`}
       description="Расход на работу модели в этом месяце."
       actions={
         hasLimit ? (
@@ -89,7 +91,7 @@ export function CoinsCard({ coins }: { coins: DashboardCoins }) {
           <p data-testid="coins-unpriced" className="mt-3 text-[12px] text-ink-3">
             {coins.unpriced_models.length === 1 ? 'Для модели' : 'Для моделей'}{' '}
             {coins.unpriced_models.map(modelLabel).join(', ')} нет цены — расход посчитан по максимальному
-            тарифу, уточните у ILER.
+            тарифу, уточните у {brand.company}.
           </p>
         )}
       </div>
@@ -100,7 +102,7 @@ export function CoinsCard({ coins }: { coins: DashboardCoins }) {
       </div>
 
       <p className="border-t border-line px-5 py-3 text-[12px] text-ink-3">
-        1 коин ≈ $0.001 расходов на модель. Чтобы увеличить лимит, обратитесь в ILER.
+        1 коин ≈ $0.001 расходов на модель. Чтобы увеличить лимит, обратитесь в {brand.company}.
       </p>
     </Panel>
   )

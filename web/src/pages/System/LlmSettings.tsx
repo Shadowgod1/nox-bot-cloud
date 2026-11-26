@@ -8,14 +8,14 @@ import { toast } from '../../components/toast'
 import { ru } from '../../i18n/ru'
 
 import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_EFFORT_HINT, ANTHROPIC_EFFORTS } from './anthropic'
-import { MODEL_HINT, ModelSelect, NoVendorKeys, PROVIDER_LABEL, type LlmModelsResult } from './models'
+import { useBrand } from '../../brand'
+import { modelHint, ModelSelect, NoVendorKeys, PROVIDER_LABEL, type LlmModelsResult } from './models'
 
 type Listable = 'openai' | 'gemini'
 
 const TITLE = 'Языковая модель'
-const DESCRIPTION = 'Провайдер и модели, на которых работает бот. Ключи доступа к провайдерам предоставляет ILER.'
 
-/** Keep the selected providers within those ILER has keys for. */
+/** Keep the selected providers within those the vendor (ILER / Nox) has keys for. */
 function toForm(s: LlmSettings, available: LlmProvider[]): LlmSettings {
   return {
     ...s,
@@ -39,6 +39,9 @@ function toPayload(f: LlmSettings): LlmSettings {
 }
 
 export function LlmSettingsPanel() {
+  const brand = useBrand()
+  const DESCRIPTION = `Провайдер и модели, на которых работает бот. Ключи доступа к провайдерам предоставляет ${brand.company}.`
+  const MODEL_HINT = modelHint(brand)
   const { data, error, loading, reload } = useLoad(() =>
     Promise.all([
       api.get<LlmSettings>('/api/settings/llm', { silent: true }),

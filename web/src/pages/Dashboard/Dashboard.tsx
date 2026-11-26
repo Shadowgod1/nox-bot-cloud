@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router'
 import { ArrowRight, CircleCheck, LogOut, Smartphone } from 'lucide-react'
 import { api } from '../../api/client'
 import type { BotSettings, Dashboard as DashboardData, WhatsAppStatus } from '../../api/types'
+import { useBrand } from '../../brand'
 import { useLoad } from '../../hooks/useLoad'
 import { useEvent } from '../../hooks/useEvents'
 import { PageBody } from '../../components/Layout'
@@ -20,6 +21,7 @@ const waTone = { open: 'ok', connecting: 'warn', close: 'danger', degraded: 'dan
 const REFRESH_MS = 60_000
 
 export function Dashboard() {
+  const brand = useBrand()
   const { data, error, loading, reload, setData } = useLoad(() => api.get<DashboardData>('/api/dashboard', { silent: true }))
   const [params, setParams] = useSearchParams()
   const [connecting, setConnecting] = useState(params.get('connect') === '1')
@@ -62,7 +64,7 @@ export function Dashboard() {
   }
 
   async function logoutWa() {
-    if (!window.confirm('Отключить номер от ILER? Бот перестанет отвечать, пока вы не подключите WhatsApp снова.')) return
+    if (!window.confirm(`Отключить номер от ${brand.name}? Бот перестанет отвечать, пока вы не подключите WhatsApp снова.`)) return
     setLoggingOut(true)
     try {
       await api.post('/api/whatsapp/logout')

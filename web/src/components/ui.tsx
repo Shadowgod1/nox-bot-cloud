@@ -19,10 +19,10 @@ export function cx(...parts: (string | false | null | undefined)[]) {
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-ghost'
 
 const variants: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-white hover:bg-accent-hover border border-transparent',
+  primary: 'bg-accent-solid text-white hover:bg-accent-hover border border-transparent',
   secondary: 'bg-surface text-ink border border-line-strong hover:bg-sunken',
   ghost: 'bg-transparent text-ink-2 hover:bg-sunken hover:text-ink border border-transparent',
-  danger: 'bg-danger text-white hover:brightness-95 border border-transparent',
+  danger: 'bg-danger-solid text-white hover:brightness-95 border border-transparent',
   'danger-ghost': 'bg-transparent text-danger hover:bg-danger-soft border border-transparent',
 }
 

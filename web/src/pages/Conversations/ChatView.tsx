@@ -256,7 +256,7 @@ function MessageBubble({ m, showAuthor }: { m: Message; showAuthor: boolean }) {
           'max-w-[min(560px,85%)] rounded-[12px] px-3.5 py-2 text-sm leading-relaxed break-words whitespace-pre-wrap',
           !mine && 'rounded-tl-[4px] border border-line bg-surface text-ink',
           mine && m.author === 'bot' && 'rounded-tr-[4px] bg-accent-soft text-ink',
-          mine && m.author === 'operator' && 'rounded-tr-[4px] bg-[oklch(93%_0.03_250)] text-ink',
+          mine && m.author === 'operator' && 'rounded-tr-[4px] bg-operator text-ink',
         )}
       >
         {m.text || <span className="text-ink-3 italic">вложение</span>}

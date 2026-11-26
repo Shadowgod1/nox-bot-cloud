@@ -67,7 +67,7 @@ export function TemplatePicker({
             <span
               className={cx(
                 'grid size-9 shrink-0 place-items-center rounded-[8px] transition-colors duration-150',
-                active ? 'bg-accent text-white' : 'bg-sunken text-ink-2 group-hover:text-ink',
+                active ? 'bg-accent-solid text-white' : 'bg-sunken text-ink-2 group-hover:text-ink',
               )}
             >
               <Icon className="size-[18px]" aria-hidden />
