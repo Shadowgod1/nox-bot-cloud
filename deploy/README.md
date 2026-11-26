@@ -23,7 +23,7 @@ Requirements (full list: iler-vault, docs/requirements.md):
   TCP 8080 from the LAN only, no inbound connections from the internet, machine on 24/7 with sleep off, a
   separate WhatsApp number.
 
-Windows: run `ILER-Setup-<version>.exe` as Administrator. It enables WSL2 (may ask for one reboot and then
+Windows: run `Nox-Bot-Setup-<version>.exe` (customer brand of ILER Bot) as Administrator. It enables WSL2 (may ask for one reboot and then
 continues automatically), installs its own Ubuntu 24.04 distro with Docker Engine inside, loads the
 bundled images and starts the stack.
 

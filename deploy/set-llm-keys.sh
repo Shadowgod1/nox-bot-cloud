@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck source-path=SCRIPTDIR
-# Set ILER's LLM API keys and the monthly coin limit on a client server (run by the ILER technician,
-# never by the client).
+# Set the Nox Bot LLM API keys and the monthly coin limit on a client server (run by the Nox service
+# technician, never by the client).
 #
 #   sudo bash /opt/iler/deploy/set-llm-keys.sh            # asks for each key (input hidden) and the limit
 #   sudo ILER_ANTHROPIC_KEY=... ILER_MONTHLY_COINS=30000 bash set-llm-keys.sh --yes   # non-interactive
@@ -29,7 +29,7 @@ done
 
 require_root
 ENV_FILE="$ILER_DIR_PATH/.env"
-[[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found (is ILER Bot installed in $ILER_DIR_PATH?)"
+[[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found (is Nox Bot installed in $ILER_DIR_PATH?)"
 
 mask() { local v="$1"; if [[ -z "$v" ]]; then echo "не задан"; else echo "••••${v: -4}"; fi; }
 
@@ -70,7 +70,7 @@ if [[ -n "$value" ]]; then
 fi
 
 if [[ "$changed" == "1" ]]; then
-  log "restarting iler-core"
+  log "restarting the bot core (iler-core)"
   docker compose --project-directory "$ILER_DIR_PATH" -f "$ILER_DIR_PATH/compose.yml" --env-file "$ENV_FILE" \
     up -d --no-build iler-core >/dev/null
   ok "done: providers with a key appear in the admin UI (Система → Языковая модель)"
