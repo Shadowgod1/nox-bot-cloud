@@ -95,7 +95,7 @@ export function TestChat({ embedded = false }: { embedded?: boolean }) {
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-surface px-4 py-4 sm:px-6 lg:px-8">
           <div className="min-w-0">
             <h1 className="text-[18px] font-semibold text-ink">Тестовый чат</h1>
-            <p className="text-[13px] text-ink-2">
+            <p className="max-w-[80ch] text-[13px] text-ink-2">
               Напишите как клиент — бот ответит на текущих настройках. WhatsApp для этого не нужен, сообщения не уходят клиентам и не попадают в «Диалоги».
             </p>
           </div>
@@ -107,7 +107,7 @@ export function TestChat({ embedded = false }: { embedded?: boolean }) {
       )}
 
       <div ref={logRef} role="log" aria-live="polite" aria-label="Тестовая переписка" className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 lg:px-8">
-        <div className="mx-auto flex max-w-[760px] flex-col gap-3">
+        <div className="mx-auto flex max-w-[920px] flex-col gap-3">
           {entries.length === 0 &&
             (notConfigured ? (
               <EmptyState
@@ -186,7 +186,7 @@ export function TestChat({ embedded = false }: { embedded?: boolean }) {
           void send(text)
         }}
       >
-        <div className="mx-auto max-w-[760px]">
+        <div className="mx-auto max-w-[920px]">
           {entries.length === 0 && !notConfigured && (
             <div className="mb-2.5 flex flex-wrap gap-1.5" aria-label="Примеры вопросов">
               {suggestions.map((s) => (

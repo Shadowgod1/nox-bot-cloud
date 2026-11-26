@@ -15,12 +15,22 @@ export function Integrations() {
   return (
     <PageBody>
       <PageHeader title="Интеграции" description="Подключение клубной системы и куда присылать уведомления администратору." />
-      <div className="flex flex-col gap-5">
-        <SenetPanel />
-        <Panel id="leads" title="Уведомления о заявках" description="Куда бот присылает новые заявки и просьбы позвать человека.">
+      {/* 2xl+: two columns: SENET and extra channels on the left, lead notifications on the right */}
+      <div className="grid items-start gap-5 2xl:grid-cols-2">
+        <div className="min-w-0 2xl:col-start-1 2xl:row-start-1">
+          <SenetPanel />
+        </div>
+        <Panel
+          id="leads"
+          title="Уведомления о заявках"
+          description="Куда бот присылает новые заявки и просьбы позвать человека."
+          className="min-w-0 2xl:col-start-2 2xl:row-span-2 2xl:row-start-1"
+        >
           <LeadNotifications />
         </Panel>
-        <NotifyPanel />
+        <div className="min-w-0 2xl:col-start-1 2xl:row-start-2">
+          <NotifyPanel />
+        </div>
       </div>
     </PageBody>
   )

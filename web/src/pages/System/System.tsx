@@ -31,16 +31,23 @@ export function System() {
         title="Система"
         description={isOwner ? 'Модель, пользователи, обновления и резервные копии.' : 'Ваша учётная запись. Остальные разделы доступны владельцу.'}
       />
-      <div className="flex flex-col gap-5">
+      {/* 2xl+: the model settings on the left; users, updates, backups and the account on the right */}
+      <div className="grid items-start gap-5 2xl:grid-cols-2">
         {isOwner && (
-          <>
+          <div className="min-w-0">
             <LlmSettingsPanel />
-            <UsersPanel />
-            <UpdatePanel />
-            <BackupsPanel />
-          </>
+          </div>
         )}
-        <AccountPanel />
+        <div className="flex min-w-0 flex-col gap-5">
+          {isOwner && (
+            <>
+              <UsersPanel />
+              <UpdatePanel />
+              <BackupsPanel />
+            </>
+          )}
+          <AccountPanel />
+        </div>
       </div>
     </PageBody>
   )
@@ -96,7 +103,7 @@ function UsersPanel() {
       ) : (
         <ul className="divide-y divide-line">
           {list.data.map((u) => (
-            <li key={u.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3">
+            <li key={u.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 sm:px-5">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-ink">
                   {u.name || u.email}
@@ -350,8 +357,9 @@ function BackupsPanel() {
       ) : (
         <ul className="divide-y divide-line">
           {list.data.map((b) => (
-            <li key={b.name} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3">
-              <div className="min-w-0 flex-1">
+            <li key={b.name} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 sm:px-5">
+              {/* phones: the date gets its own line, size and buttons go below */}
+              <div className="min-w-0 flex-1 max-sm:basis-full">
                 <p className="text-sm font-medium text-ink">{formatDateTime(b.created_at)}</p>
                 <p className="truncate font-mono text-[12px] text-ink-3" title={b.name}>
                   {b.name}

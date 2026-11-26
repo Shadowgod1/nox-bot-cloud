@@ -79,20 +79,24 @@ export function Knowledge() {
           void save()
         }}
       >
-        <Panel title="Услуги и цены" description="Цена может быть «от» или диапазоном. Пустая цена — бот скажет, что её уточнит администратор.">
-          <ServicesEditor value={form.services} onChange={(services) => setForm((f) => (f ? { ...f, services } : f))} />
-        </Panel>
-        <Panel
-          title={clinic ? 'Врачи' : 'Мастера'}
-          description="Бот ответит, работает ли специалист в нужный день и до скольки, и примет заявку. Свободное время он не видит — время подтверждает администратор."
-        >
-          <StaffEditor
-            value={form.staff}
-            serviceNames={serviceNames}
-            title={clinic ? 'врачей' : 'мастеров'}
-            onChange={(staff) => setForm((f) => (f ? { ...f, staff } : f))}
-          />
-        </Panel>
+        {/* 2xl+: price list and staff side by side */}
+        <div className="grid items-start gap-5 2xl:grid-cols-2">
+          <Panel className="min-w-0" title="Услуги и цены" description="Цена может быть «от» или диапазоном. Пустая цена — бот скажет, что её уточнит администратор.">
+            <ServicesEditor value={form.services} onChange={(services) => setForm((f) => (f ? { ...f, services } : f))} />
+          </Panel>
+          <Panel
+            className="min-w-0"
+            title={clinic ? 'Врачи' : 'Мастера'}
+            description="Бот ответит, работает ли специалист в нужный день и до скольки, и примет заявку. Свободное время он не видит — время подтверждает администратор."
+          >
+            <StaffEditor
+              value={form.staff}
+              serviceNames={serviceNames}
+              title={clinic ? 'врачей' : 'мастеров'}
+              onChange={(staff) => setForm((f) => (f ? { ...f, staff } : f))}
+            />
+          </Panel>
+        </div>
 
         <div
           className={cx(
