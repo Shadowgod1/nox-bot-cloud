@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     payment_mock_allowed: bool = False
     # mock only: pretend the provider returns an opaque recurring token
     payment_mock_recurring: bool = False
+    # kaspi ("Платежи на Kaspi.kz" service provider): QR / deeplink template with {account} and {amount}; the
+    # exact URL comes from Kaspi with the contract. Empty = the kaspi provider is off.
+    kaspi_pay_url_template: str = ""
+    # Kaspi check/pay callbacks are accepted only from these IPs / CIDRs (comma separated; the visitor IP comes
+    # from the portal nginx, i.e. CF-Connecting-IP behind the tunnel) ...
+    kaspi_allowed_ips: str = ""
+    # ... and/or with HTTP Basic auth "user:password" (if Kaspi supports it). At least one must be set.
+    kaspi_basic_auth: str = ""
 
     # ---- LLM gateway (/llm/<provider>/...) ----
     # Nox company keys of the providers; a provider without a key answers 503. Only in this .env.

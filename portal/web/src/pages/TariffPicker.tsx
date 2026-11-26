@@ -46,7 +46,7 @@ export function TariffPicker({ current, onChosen, upgrade = false }: Props) {
     setError(null)
     try {
       const me = await api.post<ClientMe>('/api/me/tariff', isFree ? { tariff: selected } : { tariff: selected, method: chosenMethod })
-      if (!isFree && chosenMethod === 'online' && me.payment_url) {
+      if (!isFree && chosenMethod === 'online' && me.payment_url && config?.online_mode !== 'qr') {
         goToCheckout(me.payment_url)
         return
       }
@@ -131,7 +131,13 @@ export function TariffPicker({ current, onChosen, upgrade = false }: Props) {
                 onClick={() => setMethod('online')}
                 icon={<CreditCard className="size-5" aria-hidden />}
                 title="Оплатить онлайн"
-                text={config?.online_methods.includes('kaspi_qr') ? 'Картой или Kaspi QR, бот создаётся сразу после оплаты' : 'Картой, бот создаётся сразу после оплаты'}
+                text={
+                  config?.online_mode === 'qr'
+                    ? 'Kaspi QR: оплата в приложении Kaspi, бот создаётся сразу после оплаты'
+                    : config?.online_methods.includes('kaspi_qr')
+                      ? 'Картой или Kaspi QR, бот создаётся сразу после оплаты'
+                      : 'Картой, бот создаётся сразу после оплаты'
+                }
               />
             )}
             <MethodCard

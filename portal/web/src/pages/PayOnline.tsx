@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { CreditCard } from 'lucide-react'
 import { api, goToCheckout, loadPublicConfig, type CheckoutOut, type PublicConfig } from '../api'
+import { PaymentQr } from '../components/PaymentQr'
 import { Alert, Button } from '../components/ui'
 
 export function usePublicConfig(): PublicConfig | null {
@@ -18,14 +19,19 @@ export function PayOnlineButton({ number, size }: { number: string; size?: 'sm' 
   const config = usePublicConfig()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [qr, setQr] = useState<string | null>(null)
   if (!config?.online_payments) return null
+  if (qr) return <PaymentQr url={qr} number={number} />
 
   async function pay() {
     setBusy(true)
     setError(null)
     try {
       const r = await api.post<CheckoutOut>(`/api/me/invoices/${encodeURIComponent(number)}/pay-online`)
-      if (r.redirect_url) goToCheckout(r.redirect_url)
+      if (config?.online_mode === 'qr' && (r.qr_payload || r.redirect_url)) {
+        setQr(r.qr_payload || r.redirect_url)
+        setBusy(false)
+      } else if (r.redirect_url) goToCheckout(r.redirect_url)
       else setBusy(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось начать оплату')

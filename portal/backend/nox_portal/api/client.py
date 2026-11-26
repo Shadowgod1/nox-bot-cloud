@@ -54,6 +54,12 @@ async def _payment_url(conn, account_id: int) -> str | None:
 
 async def _me(conn, account_id: int) -> ClientMe:
     row = await conn.fetchrow(f"SELECT {_ACCOUNT_COLS} FROM accounts WHERE id = $1", account_id)
+    provider = payments.get_provider()
+    if provider is not None and provider.invoice_based:
+        # QR providers (Kaspi): the payment link of the issued invoice while the online payment is awaited
+        url = (provider.pay_url(row["invoice_no"], row["invoice_amount"])  # type: ignore[attr-defined]
+               if row["status"] == "payment_pending" and row["invoice_no"] and row["invoice_amount"] else None)
+        return client_me(row, url)
     return client_me(row, await _payment_url(conn, account_id))
 
 
@@ -70,7 +76,9 @@ async def _send_code(to: str, name: str, purpose: str, code: str) -> None:
 async def get_public_config():
     provider = payments.get_provider()
     return {"instance_domain": get_settings().instance_domain, "online_payments": provider is not None,
-            "online_methods": sorted(provider.supports) if provider else [], "free_days": get_settings().free_days}
+            "online_methods": sorted(provider.supports) if provider else [], "free_days": get_settings().free_days,
+            # qr: show a QR / deeplink of the invoice (Kaspi); redirect: go to the provider checkout page
+            "online_mode": ("qr" if provider.invoice_based else "redirect") if provider else None}
 
 
 @router.get("/api/slug-check", response_model=SlugCheck)
@@ -348,6 +356,14 @@ async def post_choose_tariff(body: TariffChoice, request: Request, client: Princ
                     f"{VOID_INVOICE} updated_at = now() WHERE id = $1", client.id, tariff.code)
                 checkout = {"purpose": "subscription", "amount_kzt": tariff.price_kzt, "tariff": tariff.code,
                             "coins": tariff.coins, "description": f"Nox Bot, тариф «{tariff.name}», 1 месяц"}
+                provider = payments.get_provider()
+                if provider is not None and provider.invoice_based:
+                    # a QR provider pays an invoice by its number: the invoice is issued now (it is valid for a
+                    # bank transfer too); the status stays payment_pending
+                    acc = await billing.issue_subscription_invoice(conn, client.id, tariff.code, tariff.price_kzt, "")
+                    await conn.execute("UPDATE accounts SET status = 'payment_pending', pay_method = 'online'"
+                                       " WHERE id = $1", client.id)
+                    checkout["invoice_no"] = acc["invoice_no"]
             else:
                 await conn.execute(
                     f"UPDATE accounts SET status = 'awaiting_invoice', tariff = $2, pay_method = 'invoice',"
@@ -463,9 +479,20 @@ async def post_topup(request: Request, body: TopupChoice | None = None, client: 
         raise ApiError(409, "llm_disabled", "Пополнение доступно после подключения бота")
     pack = tariffs.TOPUP
     if body.method == "online":
+        provider = payments.get_provider()
+        if provider is None:
+            raise online.disabled()
+        invoice_no = None
+        if provider.invoice_based:
+            async with pool.acquire() as conn, conn.transaction():
+                await conn.execute("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE", client.id)
+                inv = await billing.open_topup_invoice(conn, client.id) or await billing.insert_invoice(
+                    conn, client.id, "topup", pack.code, pack.price_kzt, pack.coins, note="онлайн-оплата")
+            invoice_no = inv["number"]
         created = await online.start(pool, client.id, purpose="topup", amount_kzt=pack.price_kzt, coins=pack.coins,
-                                     tariff=pack.code, description=f"Nox Bot, пакет {pack.coins} коинов")
-        return TopupOut(kind="online", redirect_url=created.redirect_url)
+                                     tariff=pack.code, invoice_no=invoice_no,
+                                     description=f"Nox Bot, пакет {pack.coins} коинов")
+        return TopupOut(kind="online", invoice_number=invoice_no, redirect_url=created.redirect_url)
     created_request = False
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE", client.id)

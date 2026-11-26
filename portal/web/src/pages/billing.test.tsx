@@ -149,6 +149,50 @@ describe('Cabinet states', () => {
   })
 })
 
+describe('Kaspi QR mode', () => {
+  const KASPI = { ...CONFIG_OFF, online_payments: true, online_methods: ['kaspi_qr'], online_mode: 'qr' }
+  const LINK = 'https://kaspi.example/pay/nox?account=202600005&amount=15000'
+
+  it('online choice stays in the cabinet (no redirect) and the cabinet shows the QR', async () => {
+    const go = vi.spyOn(browser, 'go').mockImplementation(() => undefined)
+    mockFetch({
+      'GET /api/tariffs': () => json(TARIFFS),
+      'GET /api/public-config': () => json(KASPI),
+      'POST /api/me/tariff': () => json({ status: 'payment_pending', payment_url: LINK }),
+    })
+    const onChosen = vi.fn()
+    const user = userEvent.setup()
+    render(<TariffPicker onChosen={onChosen} />)
+    await user.click(await screen.findByRole('radio', { name: /Старт/ }))
+    const card = await screen.findByRole('radio', { name: /Оплатить онлайн/ })
+    expect(card).toHaveTextContent('Kaspi QR')
+    await user.click(card)
+    await user.click(screen.getByRole('button', { name: 'Перейти к оплате' }))
+    await waitFor(() => expect(onChosen).toHaveBeenCalled())
+    expect(go).not.toHaveBeenCalled()
+  })
+
+  it('payment_pending: QR, «Открыть в Kaspi» and the invoice for a bank transfer', async () => {
+    mockFetch({
+      'GET /api/me': () =>
+        json({
+          kind: 'client', email: 'o@example.kz', company: 'ТОО', contact_name: 'А', phone: '+7', slug: 'primer',
+          bot_host: 'primer.example.kz', admin_url: null, reject_reason: null, setup_link_available: false, tariff: 'start',
+          created_at: '2026-11-20T00:00:00Z', status: 'payment_pending', invoice_no: 'NOX-2026-00005', invoice_amount: 15000,
+          payment_url: LINK,
+        }),
+      'GET /api/tariffs': () => json(TARIFFS),
+      'GET /api/public-config': () => json(KASPI),
+    })
+    renderAt('/cabinet', <Cabinet />)
+    expect(await screen.findByRole('img', { name: 'QR-код для оплаты в Kaspi' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Открыть в Kaspi/ })).toHaveAttribute('href', LINK)
+    expect(screen.getByText('К оплате: 15 000 ₸')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /для банковского перевода/ })).toHaveAttribute('href', '/invoice')
+    expect(screen.queryByRole('link', { name: 'Перейти к оплате' })).toBeNull()
+  })
+})
+
 describe('Mock checkout', () => {
   it('«Оплачено» posts the signed webhook and returns to the cabinet', async () => {
     const fetch = mockFetch({

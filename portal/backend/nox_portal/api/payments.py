@@ -4,13 +4,17 @@ import hashlib
 import logging
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 
 from nox_portal import mailer, payments, ratelimit
 from nox_portal.db import get_pool
 from nox_portal.deps import Principal, audit, csrf_protect, current_client
 from nox_portal.errors import ApiError
+from nox_portal.payments import kaspi
+from nox_portal.payments import kaspi_protocol as wire
 from nox_portal.payments import mock as mock_provider
 from nox_portal.payments import service
+from nox_portal.payments.base import PaymentEvent
 from nox_portal.schemas import MockResult
 
 log = logging.getLogger("nox_portal.payments")
@@ -41,6 +45,78 @@ async def post_webhook(provider: str, request: Request):
     for to, mail in mails:
         await mailer.send_quiet(to, *mail)
     return {"ok": True, "outcome": outcome}
+
+
+# ---- Kaspi check / pay (NOX_PAYMENT_PROVIDER=kaspi) ---------------------------------------------
+
+
+@router.api_route("/api/payments/kaspi", methods=["GET", "POST"])
+async def kaspi_callback(request: Request):
+    """Kaspi "Платежи" service-provider callback: check (is this invoice open, how much) and pay (credit it).
+    Accepted only from NOX_KASPI_ALLOWED_IPS and/or with NOX_KASPI_BASIC_AUTH; pay is idempotent by txn_id and
+    needs the exact invoice amount. Wire format: payments/kaspi_protocol.py (unverified, see the TODO there)."""
+    ip = ratelimit.client_ip(request)
+    await ratelimit.hit("kaspi:ip", ip)
+    prov = payments.get_provider()
+    if prov is None or prov.name != "kaspi":
+        raise ApiError(404, "not_found", "Not found")
+    pool = get_pool()
+    if not kaspi.protection_configured() or not kaspi.ip_allowed(ip) or not kaspi.auth_ok(
+            request.headers.get("authorization")):
+        log.warning("kaspi callback from %s refused (allowlist / auth)", ip)
+        await audit(pool, "payment.kaspi_refused", ip=ip)
+        return JSONResponse({"result": wire.OTHER_ERROR, "comment": "forbidden"}, status_code=403)
+    body = await request.body()
+    if len(body) > MAX_WEBHOOK_BYTES:
+        raise ApiError(413, "too_large", "payload too large")
+    query = dict(request.query_params)
+    try:
+        req = wire.parse(query, body, request.headers.get("content-type", ""))
+    except wire.BadRequest as exc:
+        return wire.response(query.get("txn_id", "")[:64], wire.BAD_FORMAT, f"неверный параметр: {exc}")
+    try:
+        if req.command == "check":
+            inv = await kaspi.find_invoice(pool, req.account)
+            if inv is None or not inv["payable"]:
+                return wire.response(req.txn_id, wire.ACCOUNT_NOT_FOUND, "счёт не найден или уже оплачен")
+            problem = kaspi.sum_problem(req.sum, inv["amount"])
+            if problem is not None:
+                return wire.response(req.txn_id, problem, f"сумма к оплате {inv['amount']} ₸", amount=inv["amount"])
+            return wire.response(req.txn_id, wire.OK, f"Nox Bot, счёт № {inv['number']}", amount=inv["amount"])
+        if req.command == "pay":
+            existing = await pool.fetchrow("SELECT id, status FROM online_payments WHERE provider = 'kaspi'"
+                                           " AND provider_payment_id = $1", req.txn_id)
+            if existing is not None and existing["status"] == "succeeded":
+                return wire.response(req.txn_id, wire.OK, "уже зачислено", prv_txn=str(existing["id"]))
+            if req.sum is None:
+                return wire.response(req.txn_id, wire.BAD_FORMAT, "нет суммы")
+            if existing is None:
+                inv = await kaspi.find_invoice(pool, req.account)
+                if inv is None or not inv["payable"]:
+                    return wire.response(req.txn_id, wire.ACCOUNT_NOT_FOUND, "счёт не найден или уже оплачен")
+                problem = kaspi.sum_problem(req.sum, inv["amount"])
+                if problem is not None:
+                    return wire.response(req.txn_id, problem, f"сумма к оплате {inv['amount']} ₸",
+                                         amount=inv["amount"])
+                op_id, _ = await kaspi.record_pay(pool, req, inv)
+            else:
+                op_id = existing["id"]  # an earlier attempt of this txn stopped half-way: finish it
+            digest = hashlib.sha256(
+                "&".join(f"{k}={v}" for k, v in sorted({**query, "_body": body.decode("utf-8", "replace")}.items()))
+                .encode()).hexdigest()
+            outcome, mails = await service.apply_event(
+                pool, "kaspi", PaymentEvent(payment_id=req.txn_id, status="succeeded", amount_kzt=int(req.sum),
+                                            event_id=req.txn_id), digest)
+            for to, mail in mails:
+                await mailer.send_quiet(to, *mail)
+            if outcome == "amount_mismatch":
+                return wire.response(req.txn_id, wire.SUM_TOO_SMALL, "сумма не совпадает со счётом")
+            comment = "зачислено" if outcome in ("applied", "duplicate") else "зачислено, проверит менеджер"
+            return wire.response(req.txn_id, wire.OK, comment, prv_txn=str(op_id))
+        return wire.response(req.txn_id, wire.OTHER_ERROR, "неизвестная команда")
+    except Exception:  # noqa: BLE001 - Kaspi retries on a temporary error
+        log.exception("kaspi %s %s failed", req.command, req.txn_id)
+        return wire.response(req.txn_id, wire.TEMPORARY_ERROR, "временная ошибка, повторите")
 
 
 # ---- mock checkout (NOX_PAYMENT_PROVIDER=mock only) ---------------------------------------------

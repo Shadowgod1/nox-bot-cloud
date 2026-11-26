@@ -46,6 +46,7 @@ LIMITS: dict[str, tuple[int, int]] = {
     "llm-badkey:ip": (60, 600),
     # online payment webhooks per IP (providers retry; a flood is cut here and in nginx)
     "payhook:ip": (120, 60),
+    "kaspi:ip": (300, 60),
 }
 
 

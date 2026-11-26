@@ -118,6 +118,8 @@ export interface PublicConfig {
   online_payments: boolean
   online_methods: string[]
   free_days?: number
+  /** qr: the invoice is paid by a QR / deeplink (Kaspi); redirect: provider checkout page */
+  online_mode?: 'qr' | 'redirect' | null
 }
 
 export interface CheckoutOut {

@@ -5,7 +5,8 @@ import { api, ApiError, formatDate, formatDay, FREE_CODE, money, type ClientMe, 
 import { Shell } from '../components/Shell'
 import { Alert, Button, Card, StatusBadge } from '../components/ui'
 import { CoinsPanel } from './CoinsPanel'
-import { PayOnlineButton } from './PayOnline'
+import { PaymentQr } from '../components/PaymentQr'
+import { PayOnlineButton, usePublicConfig } from './PayOnline'
 import { TariffPicker } from './TariffPicker'
 
 function StateBlock({ icon, title, children }: { icon: ReactNode; title: string; children?: ReactNode }) {
@@ -134,14 +135,22 @@ function AwaitingInvoice({ me, onChange }: { me: ClientMe; onChange: (me: Client
 
 function PaymentPending({ me, onChange }: { me: ClientMe; onChange: (me: ClientMe) => void }) {
   const name = useTariffName(me.tariff)
+  const config = usePublicConfig()
+  const qr = config?.online_mode === 'qr' && !!me.payment_url
   return (
     <StateBlock icon={<CreditCard className="size-9 text-warn" />} title="Ожидаем онлайн-оплату">
       <p>
         Тариф «{name}». Как только платёж подтвердится, бот встанет в очередь на создание — страница обновится сама.
         {!me.payment_url && ' Предыдущая попытка не прошла: оплатите ещё раз или выберите оплату по счёту.'}
       </p>
+      {qr && me.payment_url && <PaymentQr url={me.payment_url} amount={me.invoice_amount} number={me.invoice_no} />}
       <div className="mt-3 flex flex-wrap gap-2">
-        {me.payment_url && (
+        {qr && me.invoice_no && (
+          <Link to="/invoice" className="inline-flex h-10 items-center gap-1.5 rounded-nx border border-line-strong px-4 text-sm font-semibold text-ink hover:bg-sunken">
+            <FileText className="size-4" aria-hidden /> Счёт (PDF) для банковского перевода
+          </Link>
+        )}
+        {me.payment_url && !qr && (
           <a
             href={me.payment_url}
             className="inline-flex h-10 items-center gap-1.5 rounded-nx bg-accent px-4 text-sm font-semibold text-white hover:bg-accent-hover"

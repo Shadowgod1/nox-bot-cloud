@@ -34,6 +34,12 @@ async def start(pool: asyncpg.Pool, account_id: int, *, purpose: str, amount_kzt
     if provider is None:
         raise disabled()
     acc = await pool.fetchrow("SELECT id, email, company, phone FROM accounts WHERE id = $1", account_id)
+    if provider.invoice_based:
+        # QR / deeplink for an issued invoice; the payment row appears when the provider calls back (pay)
+        if not invoice_no:
+            raise ApiError(409, "invoice_required", "Для этой оплаты нужен выставленный счёт")
+        return await provider.create_payment(Account(acc["id"], acc["email"], acc["company"], acc["phone"]),
+                                             purpose, amount_kzt, description, "", invoice_no)  # type: ignore[arg-type]
     op_id = await pool.fetchval(
         "INSERT INTO online_payments(account_id, purpose, amount_kzt, provider, tariff, coins, invoice_no)"
         " VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",

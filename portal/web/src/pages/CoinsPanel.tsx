@@ -6,6 +6,7 @@ import {
   type InvoiceListItem, type PublicConfig, type TopupOut, type UsageOut,
 } from '../api'
 import { Alert, Button, Card } from '../components/ui'
+import { PaymentQr } from '../components/PaymentQr'
 import { PayOnlineButton } from './PayOnline'
 
 /** Cabinet: coin balance of the period, spend by day and model, "Пополнить" (online or through a manager), invoices. */
@@ -18,6 +19,7 @@ export function CoinsPanel() {
   const [choosing, setChoosing] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [config, setConfig] = useState<PublicConfig | null>(null)
+  const [qr, setQr] = useState<{ url: string; number: string | null } | null>(null)
 
   useEffect(() => {
     api.get<UsageOut>('/api/me/usage').then(setUsage).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'))
@@ -33,6 +35,12 @@ export function CoinsPanel() {
     setNotice(null)
     try {
       const r = await api.post<TopupOut>('/api/me/topup', { method })
+      if (r.kind === 'online' && r.redirect_url && config?.online_mode === 'qr') {
+        setQr({ url: r.redirect_url, number: r.invoice_number })
+        setChoosing(false)
+        setBusy(null)
+        return
+      }
       if (r.kind === 'online' && r.redirect_url) {
         goToCheckout(r.redirect_url)
         return
@@ -81,6 +89,7 @@ export function CoinsPanel() {
           <Alert tone="ok">{notice}</Alert>
         </div>
       )}
+      {qr && <PaymentQr url={qr.url} number={qr.number} />}
       {error && (
         <div className="mt-3">
           <Alert>{error}</Alert>

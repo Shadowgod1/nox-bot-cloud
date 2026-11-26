@@ -53,6 +53,9 @@ class ProviderError(Exception):
 class PaymentProvider(Protocol):
     name: str
     supports: frozenset[str]
+    # True: the client pays an issued invoice by its number (QR / deeplink, e.g. Kaspi), no checkout session;
+    # the provider calls back with its own protocol. False: create_payment opens a checkout + signed webhook.
+    invoice_based: bool
 
     async def create_payment(self, account: Account, purpose: Purpose, amount_kzt: int, description: str,
                              return_url: str, order_id: str) -> CreatedPayment: ...

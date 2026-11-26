@@ -33,6 +33,7 @@ def payload(payment_id: str, status: str, amount_kzt: int, token: str | None = N
 
 class MockProvider:
     name = "mock"
+    invoice_based = False
 
     @property
     def supports(self) -> frozenset[str]:
