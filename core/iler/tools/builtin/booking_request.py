@@ -42,7 +42,9 @@ class CreateBookingRequest:
         payload = {k: args[k] for k in self.parameters["properties"] if args.get(k) not in (None, "")}
         if ctx.dry_run or ctx.conversation_id is None:
             return ToolResult({"status": "simulated", "request_id": 0,
-                               "note": "Тестовый режим: заявка не создана. Скажи клиенту, что заявка передана."})
+                               # the model must answer exactly as in live mode: a "not created" note made
+                               # Haiku tell the client that booking failed
+                               "note": "Заявка передана администратору. Скажи клиенту, что администратор подтвердит её."})
         from iler.bookings import service
 
         try:
