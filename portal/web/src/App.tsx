@@ -2,6 +2,7 @@ import { Link, Route, Routes } from 'react-router'
 import { Shell } from './components/Shell'
 import { Cabinet } from './pages/Cabinet'
 import { InvoicePage } from './pages/InvoicePage'
+import { Legal } from './pages/Legal'
 import { Login } from './pages/Login'
 import { MockCheckout } from './pages/MockCheckout'
 import { Register } from './pages/Register'
@@ -33,6 +34,9 @@ export function App() {
       <Route path="/verify" element={<Verify />} />
       <Route path="/login" element={<Login />} />
       <Route path="/reset" element={<Reset />} />
+      <Route path="/offer" element={<Legal doc="offer" />} />
+      <Route path="/refund" element={<Legal doc="refund" />} />
+      <Route path="/privacy" element={<Legal doc="privacy" />} />
       <Route path="/invoice" element={<InvoicePage />} />
       <Route path="/invoice/:number" element={<InvoicePage />} />
       <Route path="/pay/mock/:id" element={<MockCheckout />} />

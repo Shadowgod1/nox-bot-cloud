@@ -20,7 +20,9 @@ async function fillRegister(user: ReturnType<typeof userEvent.setup>, over: Part
   await user.type(screen.getByLabelText('Контактное лицо'), v.contact)
   await user.type(screen.getByLabelText('E-mail'), v.email)
   await user.type(screen.getByLabelText('Телефон'), v.phone)
-  await user.type(screen.getByRole('textbox', { name: 'Адрес бота' }), v.slug)
+  const slug = screen.getByRole('textbox', { name: 'Адрес бота' })
+  await user.clear(slug) // it was filled in from the company name
+  await user.type(slug, v.slug)
   await user.type(screen.getByLabelText('Пароль'), v.password)
   await user.type(screen.getByLabelText('Повторите пароль'), v.password2 ?? v.password)
 }

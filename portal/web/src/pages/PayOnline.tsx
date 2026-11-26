@@ -1,18 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { CreditCard } from 'lucide-react'
-import { api, goToCheckout, loadPublicConfig, type CheckoutOut, type PublicConfig } from '../api'
+import { api, goToCheckout, type CheckoutOut } from '../api'
 import { PaymentQr } from '../components/PaymentQr'
+import { usePublicConfig } from '../components/Support'
 import { Alert, Button } from '../components/ui'
 
-export function usePublicConfig(): PublicConfig | null {
-  const [config, setConfig] = useState<PublicConfig | null>(null)
-  useEffect(() => {
-    loadPublicConfig()
-      .then(setConfig)
-      .catch(() => undefined)
-  }, [])
-  return config
-}
+export { usePublicConfig }
 
 /** "Оплатить онлайн" for an issued invoice (shown only when an online provider is configured). */
 export function PayOnlineButton({ number, size }: { number: string; size?: 'sm' | 'md' }) {

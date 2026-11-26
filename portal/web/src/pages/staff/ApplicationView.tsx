@@ -175,6 +175,33 @@ export function ApplicationView() {
               )}
             </Card>
 
+            {app.setup_help_requested_at && (
+              <Section title="Помощь с настройкой">
+                {app.setup_help_contacted_at ? (
+                  <p className="text-[13.5px] text-ink-2" data-testid="setup-help-done">
+                    Клиент просил помощь с настройкой {formatDate(app.setup_help_requested_at)}. Связались{' '}
+                    {formatDate(app.setup_help_contacted_at)}.
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    <Alert tone="warn">
+                      Просит помощь с настройкой с {formatDate(app.setup_help_requested_at)}: подключить WhatsApp и заполнить
+                      услуги вместе с клиентом. Телефон: {app.phone}
+                    </Alert>
+                    <div>
+                      <Button
+                        variant="primary"
+                        loading={busy === 'setup-help/contacted'}
+                        onClick={() => act('setup-help/contacted', {}, 'Отмечено: с клиентом связались')}
+                      >
+                        Отметить, что связались
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </Section>
+            )}
+
             <Section title="Счёт и платежи">
               {app.invoice_no ? (
                 <p className="text-[14px] text-ink">

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router'
 import { api, ApiError } from '../api'
 import { AuthCard } from '../components/Shell'
 import { Alert, Button, Field, Input } from '../components/ui'
+import { slugFromCompany } from '../slug'
 import { rememberEmail } from './pendingEmail'
 
 const SLUG_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/
@@ -18,6 +19,7 @@ interface SlugCheck {
   slug: string
   available: boolean
   message: string | null
+  suggestion?: string | null
 }
 
 export function Register() {
@@ -26,6 +28,9 @@ export function Register() {
   const [form, setForm] = useState({ company: '', contact_name: '', email: '', phone: '', slug: '', password: '', password2: '' })
   const [consent, setConsent] = useState(false)
   const [slugMsg, setSlugMsg] = useState<string | null>(null)
+  const [suggestion, setSuggestion] = useState<string | null>(null)
+  // the address follows the company name until the visitor edits it
+  const [slugEdited, setSlugEdited] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -36,21 +41,49 @@ export function Register() {
       .catch(() => undefined)
   }, [])
 
-  const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm((f) => ({ ...f, [key]: key === 'slug' ? e.target.value.toLowerCase().trim() : e.target.value }))
+  const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value
+    if (key === 'company') {
+      setForm((f) => ({ ...f, company: value, slug: slugEdited ? f.slug : slugFromCompany(value) }))
+      if (!slugEdited) {
+        setSlugMsg(null)
+        setSuggestion(null)
+      }
+      return
+    }
+    if (key === 'slug') {
+      const slug = value.toLowerCase().trim()
+      setSlugEdited(slug !== '')
+      setSuggestion(null)
+      setForm((f) => ({ ...f, slug }))
+      return
+    }
+    setForm((f) => ({ ...f, [key]: value }))
+  }
 
-  async function checkSlug() {
-    const local = slugProblem(form.slug)
-    if (local || !form.slug) {
+  /** keepMessage: the server already refused the address (slug_taken) — only look for a free variant. */
+  async function checkSlug(slug: string = form.slug, keepMessage = false) {
+    const local = slugProblem(slug)
+    setSuggestion(null)
+    if (local || !slug) {
       setSlugMsg(local)
       return
     }
     try {
-      const r = await api.get<SlugCheck>(`/api/slug-check?slug=${encodeURIComponent(form.slug)}`)
-      setSlugMsg(r.available ? null : r.message)
+      const r = await api.get<SlugCheck>(`/api/slug-check?slug=${encodeURIComponent(slug)}`)
+      if (!keepMessage) setSlugMsg(r.available ? null : r.message)
+      setSuggestion(r.available ? null : (r.suggestion ?? null))
     } catch {
       setSlugMsg(null)
     }
+  }
+
+  function takeSuggestion() {
+    if (!suggestion) return
+    setForm((f) => ({ ...f, slug: suggestion }))
+    setSlugEdited(true)
+    setSlugMsg(null)
+    setSuggestion(null)
   }
 
   const passwordShort = form.password.length > 0 && form.password.length < 10
@@ -88,8 +121,10 @@ export function Register() {
       rememberEmail(email)
       navigate('/verify', { state: { email } })
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'slug_taken') setSlugMsg(err.message)
-      else setError(err instanceof Error ? err.message : 'Не удалось отправить заявку.')
+      if (err instanceof ApiError && err.code === 'slug_taken') {
+        setSlugMsg(err.message)
+        void checkSlug(form.slug, true)
+      } else setError(err instanceof Error ? err.message : 'Не удалось отправить заявку.')
     } finally {
       setBusy(false)
     }
@@ -102,7 +137,14 @@ export function Register() {
     >
       <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
         <Field label="Название компании">
-          <Input value={form.company} onChange={set('company')} autoComplete="organization" required maxLength={200} />
+          <Input
+            value={form.company}
+            onChange={set('company')}
+            onBlur={() => !slugEdited && form.slug && void checkSlug()}
+            autoComplete="organization"
+            required
+            maxLength={200}
+          />
         </Field>
         <Field label="Контактное лицо">
           <Input value={form.contact_name} onChange={set('contact_name')} autoComplete="name" required maxLength={200} />
@@ -115,12 +157,23 @@ export function Register() {
             <Input type="tel" value={form.phone} onChange={set('phone')} autoComplete="tel" placeholder="+7 7__ ___ __ __" required />
           </Field>
         </div>
-        <Field label="Адрес бота" hint={!slugMsg ? `Панель бота будет по адресу https://${form.slug || 'имя'}.${domain}` : undefined} error={slugMsg}>
+        <Field
+          label="Адрес панели бота"
+          hint={
+            !slugMsg ? (
+              <>
+                Здесь будет панель управления ботом: https://{form.slug || 'имя'}.{domain}. Клиенты этот адрес не видят.
+                {!slugEdited && form.slug ? ' Подставили из названия — можно поправить.' : ''}
+              </>
+            ) : undefined
+          }
+          error={slugMsg}
+        >
           <div className="flex items-stretch">
             <Input
               value={form.slug}
               onChange={set('slug')}
-              onBlur={checkSlug}
+              onBlur={() => void checkSlug()}
               className="rounded-r-none"
               placeholder="company"
               autoCapitalize="none"
@@ -133,6 +186,16 @@ export function Register() {
             </span>
           </div>
         </Field>
+        {suggestion && (
+          <div className="-mt-2 flex flex-wrap items-center gap-2 text-[13px] text-ink-2" data-testid="slug-suggestion">
+            <span>
+              Свободен адрес <span className="font-semibold text-ink">{suggestion}</span>
+            </span>
+            <Button size="sm" onClick={takeSuggestion}>
+              Взять его
+            </Button>
+          </div>
+        )}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Пароль" error={passwordShort ? 'Не короче 10 символов' : null}>
             <Input type="password" value={form.password} onChange={set('password')} autoComplete="new-password" required />
@@ -148,7 +211,17 @@ export function Register() {
             onChange={(e) => setConsent(e.target.checked)}
             className="mt-0.5 size-4 accent-[var(--nx-accent)]"
           />
-          <span>Согласен на сбор и обработку персональных данных для подключения и обслуживания бота.</span>
+          <span>
+            Принимаю{' '}
+            <a href="/offer" target="_blank" rel="noopener" className="font-semibold text-accent hover:text-accent-hover">
+              условия оферты
+            </a>{' '}
+            и согласен на обработку персональных данных по{' '}
+            <a href="/privacy" target="_blank" rel="noopener" className="font-semibold text-accent hover:text-accent-hover">
+              политике конфиденциальности
+            </a>
+            .
+          </span>
         </label>
         {error && <Alert>{error}</Alert>}
         <Button type="submit" variant="primary" loading={busy} disabled={!complete} className="mt-1 w-full">
