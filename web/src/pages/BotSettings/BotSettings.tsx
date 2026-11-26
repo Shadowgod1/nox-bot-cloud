@@ -1,12 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, CircleAlert, PenLine, WandSparkles } from 'lucide-react'
 import { api } from '../../api/client'
-import { WEEKDAYS, type AfterHoursMode, type BotSettings, type DayHours, type TemplateMeta } from '../../api/types'
+import type { BotPauseState, BotSettings, TemplateMeta } from '../../api/types'
 import { useLoad } from '../../hooks/useLoad'
 import { PageBody } from '../../components/Layout'
 import { PromptEditor } from '../../components/PromptEditor'
 import { OVERWRITE_CONFIRM, TemplateFields, TemplatePicker, missingRequired, renderTemplate, valuesFor } from '../../components/TemplateBuilder'
-import { Badge, Button, ErrorState, Field, Input, PageHeader, Panel, Select, Spinner, Switch, Textarea, cx } from '../../components/ui'
+import { ReplyRulesFields, useKnownCount } from '../../components/ReplyRules'
+import { Badge, Button, ErrorState, Field, Input, PageHeader, Panel, Spinner, Textarea, cx } from '../../components/ui'
 import { toast } from '../../components/toast'
 import { ru } from '../../i18n/ru'
 
@@ -14,6 +15,7 @@ import { ru } from '../../i18n/ru'
 export function BotSettingsPage() {
   const { data, error, loading, reload, setData } = useLoad(() => api.get<BotSettings>('/api/settings/bot', { silent: true }))
   const templates = useLoad(() => api.get<TemplateMeta[]>('/api/templates', { silent: true }))
+  const knownCount = useKnownCount()
   const [form, setForm] = useState<BotSettings | null>(null)
   const [choice, setChoice] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -78,7 +80,14 @@ export function BotSettingsPage() {
     if (!form) return
     setSaving(true)
     try {
-      const saved = await api.put<BotSettings>('/api/settings/bot', form)
+      // the header switch may have paused / resumed the bot since this page loaded: keep its current state
+      let enabled = form.enabled
+      try {
+        enabled = (await api.get<BotPauseState>('/api/settings/bot/pause', { silent: true })).enabled
+      } catch {
+        /* keep the loaded value */
+      }
+      const saved = await api.put<BotSettings>('/api/settings/bot', { ...form, enabled })
       setData(saved && typeof saved === 'object' ? saved : form)
       toast.success(ru.common.saved)
     } catch {
@@ -181,19 +190,22 @@ export function BotSettingsPage() {
           </Panel>
         </div>
 
+        <Panel
+          id="reply-rules"
+          title="Кому и когда отвечает бот"
+          description="Бот сам никому не пишет первым — только отвечает тем, кто написал. Выключить его целиком можно кнопкой «Бот на паузе» вверху страницы."
+          className="scroll-mt-6"
+        >
+          <ReplyRulesFields value={form} onChange={setForm} knownCount={knownCount} />
+        </Panel>
+
         <Collapsible
           id="behavior"
           title="Поведение"
-          description="Имя, приветствие, часы работы, паузы и ответы по заявкам."
+          description="Имя, приветствие, темп ответа и тексты по заявкам."
         >
           <div className="flex flex-col divide-y divide-line">
             <div className="grid gap-5 pb-6">
-              <Switch
-                checked={form.enabled}
-                onChange={(v) => set('enabled', v)}
-                label="Бот отвечает клиентам"
-                description="Если выключить, входящие продолжат сохраняться в «Диалогах»."
-              />
               <div className="grid gap-5 md:grid-cols-2">
                 <Field label="Имя бота" hint="Так бот называет себя в переписке.">
                   <Input value={form.name} onChange={(e) => set('name', e.target.value)} maxLength={80} />
@@ -204,56 +216,10 @@ export function BotSettingsPage() {
               </div>
             </div>
 
-            <SubSection title="Часы работы">
-              <Switch checked={form.hours.always_open} onChange={(v) => set('hours', { ...form.hours, always_open: v })} label="Работаем круглосуточно" />
-              {!form.hours.always_open && (
-                <fieldset className="rounded-[9px] border border-line">
-                  <legend className="sr-only">Часы по дням недели</legend>
-                  <ul className="divide-y divide-line">
-                    {WEEKDAYS.map((d) => {
-                      const h = form.hours[d]
-                      const setDay = (patch: Partial<DayHours>) => set('hours', { ...form.hours, [d]: { ...h, ...patch } })
-                      return (
-                        <li key={d} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5">
-                          <span className="w-28 text-sm text-ink">{ru.weekdays[d]}</span>
-                          <label className="flex items-center gap-2 text-[13px] text-ink-2">
-                            <input type="checkbox" checked={h.closed} onChange={(e) => setDay({ closed: e.target.checked })} className="accent-[var(--color-accent)]" />
-                            Выходной
-                          </label>
-                          <div className={cx('flex items-center gap-2', h.closed && 'opacity-40')}>
-                            <Input type="time" required aria-label={`${ru.weekdays[d]}: открытие`} value={h.open} disabled={h.closed} onChange={(e) => e.target.value && setDay({ open: e.target.value })} className="tabular w-[110px]" />
-                            <span className="text-ink-3" aria-hidden>—</span>
-                            <TimeOrMidnight label={`${ru.weekdays[d]}: закрытие`} value={h.close} disabled={h.closed} onChange={(v) => setDay({ close: v })} />
-                          </div>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </fieldset>
-              )}
-              <div className="grid gap-4 md:grid-cols-2">
-                <Field label="Вне рабочего времени">
-                  <Select value={form.after_hours_mode} onChange={(e) => set('after_hours_mode', e.target.value as AfterHoursMode)}>
-                    <option value="reply">Отвечать как обычно</option>
-                    <option value="fixed_message">Отправлять готовое сообщение</option>
-                    <option value="silent">Не отвечать</option>
-                  </Select>
-                </Field>
-                {form.after_hours_mode === 'fixed_message' && (
-                  <Field label="Сообщение вне рабочего времени" className="md:col-span-2">
-                    <Textarea rows={2} value={form.after_hours_message} onChange={(e) => set('after_hours_message', e.target.value)} placeholder="Мы откроемся в 10:00 и сразу ответим." />
-                  </Field>
-                )}
-              </div>
-            </SubSection>
-
             <SubSection title="Темп и память">
-              <div className="grid gap-5 md:grid-cols-3">
+              <div className="grid gap-5 md:grid-cols-2">
                 <Field label="Задержка склейки, сек" hint="Бот ждёт, пока клиент допишет несколько сообщений подряд. От 3 до 120.">
                   <Input type="number" min={3} max={120} value={form.buffer_delay_seconds} onChange={(e) => set('buffer_delay_seconds', clamp(e.target.value, 3, 120, 8))} className="tabular" />
-                </Field>
-                <Field label="Пауза после оператора, мин" hint="Сколько бот молчит после ответа человека в диалоге.">
-                  <Input type="number" min={1} max={1440} value={form.handover_pause_minutes} onChange={(e) => set('handover_pause_minutes', clamp(e.target.value, 1, 1440, 60))} className="tabular" />
                 </Field>
                 <Field label="Память, сообщений" hint="Сколько последних сообщений бот учитывает в ответе.">
                   <Input type="number" min={2} max={100} value={form.memory_messages} onChange={(e) => set('memory_messages', clamp(e.target.value, 2, 100, 20))} className="tabular" />
@@ -364,19 +330,5 @@ function Collapsible({ id, title, description, children }: { id: string; title: 
         </div>
       )}
     </section>
-  )
-}
-
-/** "24:00" (end of day) is not a valid <input type=time> value, so offer it as a checkbox. */
-function TimeOrMidnight({ label, value, onChange, disabled }: { label: string; value: string; onChange: (v: string) => void; disabled?: boolean }) {
-  const midnight = value === '24:00'
-  return (
-    <span className="flex items-center gap-2">
-      {!midnight && <Input type="time" required aria-label={label} value={value} disabled={disabled} onChange={(e) => e.target.value && onChange(e.target.value)} className="tabular w-[110px]" />}
-      <label className="flex items-center gap-1.5 text-[13px] text-ink-2">
-        <input type="checkbox" checked={midnight} disabled={disabled} onChange={(e) => onChange(e.target.checked ? '24:00' : '23:00')} className="accent-[var(--color-accent)]" />
-        до конца дня
-      </label>
-    </span>
   )
 }

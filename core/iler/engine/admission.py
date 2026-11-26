@@ -122,7 +122,12 @@ def decide(conv, bot: BotSettings, now: datetime, now_local: datetime) -> Admiss
         return Admission("skip", "closed")
     if is_paused(conv["status"], conv["paused_until"], now):
         return Admission("skip", conv["status"])
-    if not within_hours(bot.hours, now_local):
+    open_now = within_hours(bot.hours, now_local)
+    # reply rules: "only outside working hours" — the staff answers during the day (`always_open` means
+    # there are no working hours, so the bot is never silent for this reason)
+    if open_now and not bot.hours.always_open and getattr(bot, "work_hours_mode", "reply") == "silent":
+        return Admission("skip", "work_hours")
+    if not open_now:
         if bot.after_hours_mode == "silent":
             return Admission("skip", "after_hours")
         if bot.after_hours_mode == "fixed_message":

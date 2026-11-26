@@ -109,31 +109,43 @@ async def list_requests(status: str | None = None, limit: int = 200) -> list[Boo
     return [BookingRequest(**dict(r)) for r in rows]
 
 
-def _admin_details(payload: dict) -> str:
-    """Like `details`, but every value is one sanitized line and client-written text is quoted «…», so it can
-    neither break the message into fake "system" lines nor pass for the bot's own wording."""
-    parts = []
-    date = one_line(payload.get("date"), 20)
-    time_ = one_line(payload.get("time"), 10)
+def _format_phone(digits: str) -> str:
+    d = "".join(ch for ch in digits or "" if ch.isdigit())
+    if len(d) == 11 and d.startswith("7"):
+        return f"+7 {d[1:4]} {d[4:7]} {d[7:9]} {d[9:]}"
+    return f"+{d}" if d else ""
+
+
+def admin_text(b: BookingRequest, link: str = "") -> str:
+    """Lead notification for the admin (WhatsApp / Telegram). One fact per line; every client-written value is
+    one sanitized line in «…», so it can neither add fake lines nor pass for the bot's own wording."""
+    p = b.payload
+    name = one_line(p.get("name"), NAME_MAX) or one_line(b.name, NAME_MAX)
+    lines = [f"Новая заявка #{b.id}"]
+    lines.append(f"Имя: «{name}»" if name else "Имя: не указано")
+    if b.phone:
+        lines.append(f"Телефон: {_format_phone(b.phone)}")
+    service = one_line(p.get("service"), ZONE_MAX) or one_line(p.get("zone"), ZONE_MAX)
+    if service:
+        lines.append(f"Услуга: «{service}»")
+    when = []
+    date = one_line(p.get("date"), 20)
+    time_ = one_line(p.get("time"), 10)
     if date or time_:
-        parts.append(" в ".join(x for x in (date, time_) if x))
-    if payload.get("duration_hours") not in (None, ""):
-        parts.append(f"{one_line(payload['duration_hours'], 10)} ч")
-    if payload.get("seats") not in (None, ""):
-        parts.append(f"мест: {one_line(payload['seats'], 10)}")
-    for key, label, limit in (("zone", "зона ", ZONE_MAX), ("name", "имя ", NAME_MAX),
-                              ("comment", "комментарий: ", COMMENT_MAX)):
-        value = one_line(payload.get(key), limit)
-        if value:
-            parts.append(f"{label}«{value}»")
-    return ", ".join(parts)
-
-
-def admin_text(b: BookingRequest) -> str:
-    name = one_line(b.name, NAME_MAX)
-    who = " ".join(x for x in (f"«{name}»" if name else "", f"+{b.phone}" if b.phone else "") if x) or "неизвестен"
-    return (f"Заявка #{b.id}: {_admin_details(b.payload)}. Клиент: {who}. "
-            f"Ответьте \"+{b.id}\" чтобы подтвердить или \"-{b.id} причина\" чтобы отклонить.")
+        when.append(" в ".join(x for x in (date, time_) if x))
+    if p.get("duration_hours") not in (None, ""):
+        when.append(f"{one_line(p['duration_hours'], 10)} ч")
+    if p.get("seats") not in (None, ""):
+        when.append(f"мест: {one_line(p['seats'], 10)}")
+    if when:
+        lines.append(f"Когда: {', '.join(when)}")
+    comment = one_line(p.get("comment"), COMMENT_MAX)
+    if comment:
+        lines.append(f"Комментарий: «{comment}»")
+    if link:
+        lines.append(f"Диалог: {link}")
+    lines.append(f"Ответьте \"+{b.id}\" — подтвердить, \"-{b.id} причина\" — отклонить.")
+    return "\n".join(lines)
 
 
 def clean_payload(payload: dict) -> dict:
@@ -150,7 +162,9 @@ def clean_payload(payload: dict) -> dict:
 
 
 async def _announce(b: BookingRequest) -> None:
-    await sender.notify_admins(admin_text(b), key=f"booking:{b.id}")
+    from iler.notify import conversation_link
+
+    await sender.notify_admins(admin_text(b, await conversation_link(b.conversation_id)), key=f"booking:{b.id}")
     _publish(b)
 
 

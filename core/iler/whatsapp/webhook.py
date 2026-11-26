@@ -3,6 +3,7 @@
 Reachable only inside the docker network (nginx does not proxy /internal/), authenticated with the
 `apikey` header, never rate limited (spec 11.5). MESSAGES_UPSERT is stored in `inbound_events`
 (dedup by Evolution message id) and answered 200 right away; processing runs in the background.
+MESSAGES_SET / CHATS_SET (history sync after linking) only feed the known-contacts list.
 """
 
 import hmac
@@ -15,7 +16,7 @@ from iler import inbound
 from iler.config import get_settings
 from iler.errors import ApiError
 from iler.whatsapp import monitor
-from iler.whatsapp.parse import event_name, message_payloads
+from iler.whatsapp.parse import event_name, history_contacts, message_payloads
 
 log = logging.getLogger("iler.whatsapp.webhook")
 
@@ -66,5 +67,16 @@ async def evolution_webhook(request: Request):
                 str(data["state"]), wuid=data.get("wuid"), status_reason=data.get("statusReason")
             )
         return {"ok": True}
+
+    if name in ("MESSAGES_SET", "CHATS_SET"):
+        # history sync of a freshly linked device: remember who already wrote to this number
+        from iler import reply_rules
+
+        try:
+            known = await reply_rules.remember(history_contacts(payload), "history")
+        except Exception:  # noqa: BLE001 - never make Evolution retry a huge history payload
+            log.exception("could not store history contacts")
+            known = 0
+        return {"ok": True, "known": known}
 
     return {"ok": True, "ignored": True}

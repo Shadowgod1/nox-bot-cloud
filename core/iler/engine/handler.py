@@ -3,7 +3,9 @@
 - Admin chats (admin phones / admin group) never reach the LLM: the admin handler (+N/-N parser,
   registered by `iler.bookings.admin_reply`) gets them; anything else from admins is ignored.
 - `fromMe` messages: the bot's own echo is ignored; anything else is an operator replying from the phone,
-  which pauses the bot for `handover_pause_minutes`.
+  which pauses the bot for `handover_pause_minutes`. A chat the phone owner started is a known contact.
+- Messages written before the current WhatsApp link (history delivered to the new device) are never
+  answered: their chat is remembered as a known contact (reply rules) and nothing else happens.
 - Client messages are persisted before returning (the inbound event is marked processed when the handler
   returns) and a turn is scheduled through the merge buffer.
 - `install()` also schedules a startup recovery for client messages left unanswered by a restart;
@@ -14,7 +16,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
-from iler import inbound, settings_store
+from iler import inbound, reply_rules, settings_store
 from iler.db.pool import get_pool
 from iler.engine import admission, buffer, store, turn
 from iler.engine.pii import mask_phone_for_log
@@ -82,7 +84,13 @@ async def _is_bot_echo(msg: IncomingMessage) -> bool:
 async def _handle_operator_reply(msg: IncomingMessage) -> None:
     if await store.message_exists(msg.evo_id) or await _is_bot_echo(msg):
         return
+    if await reply_rules.is_history(msg.sent_at):
+        await reply_rules.remember([(msg.phone, msg.jid)], "history")
+        return
     bot = await settings_store.get("bot", BotSettings)
+    if await store.get_conversation_by_jid(msg.jid) is None:
+        # the owner wrote first from the phone: a personal contact, not a client who found the number
+        await reply_rules.remember([(msg.phone, msg.jid)], "phone_first")
     conv = await store.upsert_conversation(msg.jid, msg.phone, "", client_message=False)
     await store.insert_message(conv["id"], "out", "operator", msg.text, media=msg.media, evo_message_id=msg.evo_id)
     await store.set_status(conv["id"], "paused", pause_minutes=bot.handover_pause_minutes)
@@ -101,6 +109,12 @@ async def handle_incoming(msg: IncomingMessage) -> None:
 
     if msg.from_me:
         await _handle_operator_reply(msg)
+        return
+
+    if await reply_rules.is_history(msg.sent_at):
+        # written before the bot was linked: the person already talks to the owner, never answer it
+        await reply_rules.remember([(msg.phone, msg.jid)], "history")
+        log.info("history message from %s skipped", mask_phone_for_log(msg.phone))
         return
 
     duplicate = await store.message_exists(msg.evo_id)

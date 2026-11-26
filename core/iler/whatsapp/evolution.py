@@ -16,7 +16,9 @@ from iler.config import Settings
 
 log = logging.getLogger("iler.whatsapp")
 
-WEBHOOK_EVENTS = ["MESSAGES_UPSERT", "CONNECTION_UPDATE"]
+# MESSAGES_SET / CHATS_SET: the history WhatsApp passes to a freshly linked device; only the chat ids are
+# used (reply rule "only new contacts", iler.reply_rules).
+WEBHOOK_EVENTS = ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "MESSAGES_SET", "CHATS_SET"]
 
 
 class EvolutionError(Exception):

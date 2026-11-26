@@ -156,7 +156,11 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
           </h2>
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[13px] text-ink-2">
             {conversation?.name && <span className="tabular">{conversation.phone}</span>}
-            {conversation && <StatusBadge conversation={conversation} />}
+            {conversation && (
+              <span className="max-sm:hidden">
+                <StatusBadge conversation={conversation} />
+              </span>
+            )}
           </div>
         </div>
         {botActive ? (
@@ -165,8 +169,14 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
           </Button>
         ) : (
           <Button onClick={() => act('release')} loading={acting} icon={<Bot className="size-4" aria-hidden />}>
-            Вернуть боту
+            Вернуть бота
           </Button>
+        )}
+        {/* phones: the status gets its own row so "Ведёт оператор до 21:30" is never cut by the button */}
+        {conversation && (
+          <div className="basis-full sm:hidden">
+            <StatusBadge conversation={conversation} />
+          </div>
         )}
       </header>
 
