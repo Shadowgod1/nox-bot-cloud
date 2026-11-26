@@ -53,6 +53,8 @@ def _build(mail: Mail) -> EmailMessage:
     msg["From"] = formataddr(("Nox service", s.smtp_from)) if "<" not in s.smtp_from else s.smtp_from
     msg["To"] = mail.to
     msg["Subject"] = mail.subject
+    if s.smtp_reply_to.strip():
+        msg["Reply-To"] = s.smtp_reply_to.strip()
     msg["Message-ID"] = make_msgid(domain=(s.smtp_from.rsplit("@", 1)[-1].strip(">") or "noxsw.kz"))
     body = f"{mail.text}\n\n{SIGNATURE}\n"
     msg.set_content(body)

@@ -37,7 +37,8 @@ async def post_claim():
     if job is None:
         return Response(status_code=204)
     return ClaimedJob(id=job["id"], kind=job["kind"], slug=job["slug"], coins=job["coins"],
-                      public_url=jobs.public_url_for(job["slug"]), llm_key_sealed=job["llm_key_sealed"])
+                      public_url=jobs.public_url_for(job["slug"]), llm_key_sealed=job["llm_key_sealed"],
+                      gateway_key_sealed=job["gateway_key_sealed"])
 
 
 @router.post("/jobs/{job_id}/result", response_model=Ok)

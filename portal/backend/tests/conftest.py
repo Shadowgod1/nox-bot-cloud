@@ -34,6 +34,15 @@ os.environ["NOX_INSTANCE_DOMAIN"] = "example.kz"
 os.environ["NOX_STAFF_NOTIFY"] = "staff@example.kz"
 os.environ["NOX_PROVISIONER_TOKEN_SHA256"] = hashlib.sha256(PROVISIONER_TOKEN.encode()).hexdigest()
 os.environ["NOX_PROVISIONER_PUBKEY_FILE"] = _pub.name
+# LLM gateway: fake company keys and upstream hosts answered by httpx.MockTransport (no network)
+os.environ["NOX_UPSTREAM_ANTHROPIC_KEY"] = "sk-ant-api03-company-test-key"
+os.environ["NOX_UPSTREAM_OPENAI_KEY"] = "sk-proj-company-test-key"
+os.environ["NOX_UPSTREAM_GEMINI_KEY"] = "gemini-company-test-key"
+os.environ["NOX_UPSTREAM_ANTHROPIC_BASE_URL"] = "https://anthropic.test"
+os.environ["NOX_UPSTREAM_OPENAI_BASE_URL"] = "https://openai.test"
+os.environ["NOX_UPSTREAM_GEMINI_BASE_URL"] = "https://gemini.test"
+os.environ["NOX_BILLING_TICK_SECONDS"] = "0"
+os.environ["NOX_ALERT_TELEGRAM_API"] = "https://telegram.test"
 
 from asgi_lifespan import LifespanManager  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
@@ -112,12 +121,21 @@ async def clean_db(request):
     p = get_pool()
     tables = [r["tablename"] for r in await p.fetch(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'schema_migrations'")]
-    # the payments ledger refuses TRUNCATE (append-only trigger): lift it for the test reset only
+    # the ledgers refuse TRUNCATE (append-only triggers): lift them for the test reset only
+    from nox_portal import alerts, gateway
+
+    await gateway.drain()
+    await alerts.drain()
+    ledgers = ("payments", "coin_grants", "llm_usage")
     async with p.acquire() as conn, conn.transaction():
-        await conn.execute("ALTER TABLE payments DISABLE TRIGGER payments_no_truncate")
+        for t in ledgers:
+            await conn.execute(f"ALTER TABLE {t} DISABLE TRIGGER {t}_no_truncate")
         await conn.execute("TRUNCATE " + ", ".join(f'"{t}"' for t in tables) + " RESTART IDENTITY CASCADE")
-        await conn.execute("ALTER TABLE payments ENABLE TRIGGER payments_no_truncate")
+        for t in ledgers:
+            await conn.execute(f"ALTER TABLE {t} ENABLE TRIGGER {t}_no_truncate")
         await conn.execute("ALTER SEQUENCE invoice_seq RESTART")
+    gateway.reset_limits()
+    alerts.reset()
     yield
 
 

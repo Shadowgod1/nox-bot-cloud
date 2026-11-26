@@ -112,3 +112,84 @@ def resumed(name: str, admin_url: str) -> tuple[str, str]:
         "Бот Nox Bot снова работает",
         f"Здравствуйте, {name}!\n\nРабота вашего бота возобновлена. Панель управления: {admin_url}",
     )
+
+
+def _date(value) -> str:
+    from zoneinfo import ZoneInfo
+
+    return value.astimezone(ZoneInfo(get_settings().tz)).strftime("%d.%m.%Y")
+
+
+def _n(value: int) -> str:
+    return f"{value:,}".replace(",", " ")
+
+
+def renewal_invoice(name: str, number: str, tariff_name: str, amount: str, period_start,
+                    grace_days: int) -> tuple[str, str]:
+    return (
+        f"Счёт {number}: продление Nox Bot",
+        f"Здравствуйте, {name}!\n\n"
+        f"Выставлен счёт {number} за следующий месяц обслуживания Nox Bot (тариф «{tariff_name}») на {amount}. "
+        f"Новый месяц начинается {_date(period_start)}, тогда же начисляется месячный пакет коинов.\n\n"
+        f"Счёт для печати (PDF) — в личном кабинете: {_portal()}/cabinet\n\n"
+        f"Если оплата не поступит в течение {grace_days} дней после начала нового месяца, работа бота будет "
+        "приостановлена (данные сохранятся).",
+    )
+
+
+def topup_invoice(name: str, number: str, amount: str, coins: int) -> tuple[str, str]:
+    return (
+        f"Счёт {number}: пакет коинов Nox Bot",
+        f"Здравствуйте, {name}!\n\n"
+        f"Выставлен счёт {number} на пакет {_n(coins)} коинов: {amount}.\n"
+        "Коины начислятся сразу после поступления оплаты и не сгорают в конце месяца.\n\n"
+        f"Счёт для печати (PDF): {_portal()}/cabinet",
+    )
+
+
+def staff_invoice_issued(company: str, number: str, what: str, amount: str) -> tuple[str, str]:
+    return (
+        f"Выставлен счёт {number}: {company}",
+        f"{what}: счёт {number} на {amount}.\n\nПосле поступления оплаты отметьте её в портале: {_portal()}/staff",
+    )
+
+
+def coins_added(name: str, coins: int) -> tuple[str, str]:
+    return (
+        "Коины Nox Bot начислены",
+        f"Здравствуйте, {name}!\n\nОплата получена, на баланс начислено {_n(coins)} коинов.\n\n"
+        f"Баланс и расход: {_portal()}/cabinet",
+    )
+
+
+def low_balance(name: str, left: int, percent: int) -> tuple[str, str]:
+    return (
+        f"Nox Bot: осталось {percent}% коинов",
+        f"Здравствуйте, {name}!\n\nНа балансе осталось {_n(left)} коинов (около {percent}% пакета). Когда коины "
+        "закончатся, бот перестанет отвечать сам и будет передавать диалоги оператору.\n\n"
+        f"Пополнить баланс: {_portal()}/cabinet",
+    )
+
+
+def suspended_unpaid(name: str) -> tuple[str, str]:
+    return (
+        "Бот Nox Bot приостановлен: нет оплаты",
+        f"Здравствуйте, {name}!\n\nСчёт за продление не оплачен, поэтому работа бота приостановлена. Данные "
+        f"сохранены. После оплаты бот снова заработает. Счёт — в личном кабинете: {_portal()}/cabinet",
+    )
+
+
+def staff_suspended_unpaid(company: str, number: str) -> tuple[str, str]:
+    return (
+        f"Приостановлен за неоплату: {company}",
+        f"Счёт {number} не оплачен после отсрочки: аккаунт приостановлен, ключ шлюза отключён.\n\n{_portal()}/staff",
+    )
+
+
+def local_account(name: str, email: str) -> tuple[str, str]:
+    return (
+        "Личный кабинет Nox Bot",
+        f"Здравствуйте, {name}!\n\nДля вашего бота Nox Bot создан личный кабинет: в нём видно баланс коинов, "
+        "расход и счета, там же можно пополнить баланс.\n\n"
+        f"Чтобы войти, задайте пароль: {_portal()}/reset (e-mail: {email})",
+    )

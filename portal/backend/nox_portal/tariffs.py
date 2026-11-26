@@ -24,6 +24,10 @@ TARIFFS: tuple[Tariff, ...] = (
 
 BY_CODE = {t.code: t for t in TARIFFS}
 
+# Extra coin pack bought on top of the monthly coins (cabinet "Пополнить"). Not a subscription tariff:
+# get() does not return it. Top-up coins do not expire at the period end (monthly coins do).
+TOPUP = Tariff("topup", "Пакет коинов", 9900, 10000, "10 000 коинов сверх месячного пакета, не сгорают")
+
 
 def get(code: str | None) -> Tariff | None:
     return BY_CODE.get(code or "")
