@@ -46,8 +46,8 @@ export function Wordmark({ className }: { className?: string }) {
   const brand = useBrand()
   if (brand.id === 'nox') {
     return (
-      // a chat-bubble mark + NOX SW in Neue Machina (the noxsw.kz wordmark) + a solid BOT pill
-      <span className={cx('inline-flex items-center gap-2.5 text-ink select-none', className)} aria-label={`${brand.name} Bot`}>
+      // a living bot mark (blinks, glances around, the antenna glows noxsw lime) + NOX SW in Neue Machina
+      <span className={cx('nox-wordmark inline-flex items-center gap-2.5 text-ink select-none', className)} aria-label={`${brand.name} Bot`}>
         <svg aria-hidden viewBox="0 0 32 32" className="size-8 shrink-0 drop-shadow-[0_1px_2px_rgba(41,85,200,0.35)]">
           <defs>
             <linearGradient id="nox-mark" x1="0" y1="0" x2="1" y2="1">
@@ -56,17 +56,19 @@ export function Wordmark({ className }: { className?: string }) {
             </linearGradient>
           </defs>
           <rect width="32" height="32" rx="9" fill="url(#nox-mark)" />
-          <path d="M9 10.5h14a2.5 2.5 0 0 1 2.5 2.5v6a2.5 2.5 0 0 1-2.5 2.5h-7.2l-4.3 3.2v-3.2H9A2.5 2.5 0 0 1 6.5 19v-6A2.5 2.5 0 0 1 9 10.5Z" fill="#fff" />
-          <circle cx="12.5" cy="16" r="1.6" fill="#2955c8" />
-          <circle cx="19.5" cy="16" r="1.6" fill="#2955c8" />
+          <line x1="16" y1="10" x2="16" y2="6.6" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" />
+          <circle className="nox-antenna" cx="16" cy="5.6" r="2" fill="#c6ff3d" />
+          <rect x="6" y="10" width="20" height="15" rx="6" fill="#fff" />
+          <g className="nox-eyes">
+            <rect className="nox-eye" x="11" y="14.5" width="3" height="5.5" rx="1.5" fill="#2955c8" />
+            <rect className="nox-eye" x="18" y="14.5" width="3" height="5.5" rx="1.5" fill="#2955c8" />
+          </g>
         </svg>
-        <span className="inline-flex items-center gap-1.5 md:max-lg:hidden">
-          <span aria-hidden className="font-['Neue_Machina',var(--font-sans)] text-[1em] leading-none font-extrabold tracking-[-0.01em] whitespace-nowrap">
-            NOX SW
-          </span>
-          <span aria-hidden className="rounded-full bg-accent px-2 py-[3px] text-[10px] leading-none font-extrabold tracking-[0.12em] text-white">
-            BOT
-          </span>
+        <span
+          aria-hidden
+          className="font-['Neue_Machina',var(--font-sans)] text-[1em] leading-none font-extrabold tracking-[-0.01em] whitespace-nowrap md:max-lg:hidden"
+        >
+          NOX SW
         </span>
       </span>
     )

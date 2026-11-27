@@ -319,3 +319,29 @@ html[data-brand='nox'] .field-control:disabled {
     transform: none;
   }
 }
+
+/* Nox wordmark: the bot mark is alive — blinks, glances around, the antenna glows (off with reduced motion) */
+@keyframes nox-blink {
+  0%, 88%, 100% { transform: scaleY(1); }
+  91% { transform: scaleY(0.12); }
+  94% { transform: scaleY(1); }
+  96% { transform: scaleY(0.12); }
+  98% { transform: scaleY(1); }
+}
+@keyframes nox-look {
+  0%, 38% { transform: translateX(0); }
+  44%, 58% { transform: translateX(1.4px); }
+  64%, 78% { transform: translateX(-1.4px); }
+  84%, 100% { transform: translateX(0); }
+}
+@keyframes nox-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.nox-eyes { animation: nox-look 9s ease-in-out infinite; }
+.nox-eye { transform-box: fill-box; transform-origin: center; animation: nox-blink 5s infinite; }
+.nox-antenna { animation: nox-glow 2.4s ease-in-out infinite; }
+.nox-wordmark:hover .nox-eye { animation-duration: 1.2s; }
+@media (prefers-reduced-motion: reduce) {
+  .nox-eyes, .nox-eye, .nox-antenna { animation: none; }
+}
