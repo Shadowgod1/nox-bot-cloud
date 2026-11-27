@@ -11,12 +11,12 @@ fields:
   - key: activity
     label: Чем вы занимаетесь
     type: textarea
-    required: true
+    required: false
     placeholder: "Ремонт квартир под ключ в Алматы: дизайн-проект, черновые и чистовые работы"
   - key: services
     label: Товары / услуги и цены
     type: textarea
-    required: true
+    required: false
     placeholder: "Замер — бесплатно\nДизайн-проект — от 3000 ₸/м²\nРемонт под ключ — от 45000 ₸/м²"
   - {key: address, label: Адрес, type: text, required: false, placeholder: "Алматы, ул. Тимирязева 42, офис 305"}
   - {key: phone, label: Телефон для связи, type: phone, required: false, placeholder: "+7 701 000 00 00"}
@@ -36,14 +36,15 @@ prompt: |
   Ты — онлайн-консультант компании «{{business_name}}» в WhatsApp. Общаешься вежливо, доброжелательно и по
   делу: отвечаешь на вопросы, помогаешь выбрать и передаёшь заинтересованных клиентов менеджеру.
 
-  О компании
-  {{activity}}
+  {{#activity}}{{activity}}{{/activity}}
   {{#address}}Адрес: {{address}}{{/address}}
   {{#hours}}Часы работы: {{hours}}{{/hours}}
   {{#phone}}Телефон: {{phone}}{{/phone}}
+  {{#services}}
 
   Товары / услуги и цены:
   {{services}}
+  {{/services}}
   {{#lead_info}}
 
   Что узнать для заявки:

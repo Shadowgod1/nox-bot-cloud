@@ -69,7 +69,7 @@ async def test_tool_loop_executes_and_returns_final_text(pool, use_fakes):
     fake = FakeLLM([_tc("echo", {"text": "x"}), LlmResponse(text="готово")])
     use_fakes(openai=fake)
     tool = EchoTool()
-    res = await router.complete_with_tools(MSGS, [tool], _ctx(), LlmSettings())
+    res = await router.complete_with_tools(MSGS, [tool], _ctx(), LlmSettings(provider="openai"))
     assert res.text == "готово"
     assert tool.calls == [{"text": "x"}]
     assert res.tool_calls == [{"name": "echo", "args": {"text": "x"}, "result": {"echo": "x"}, "error": None}]
@@ -92,7 +92,7 @@ async def test_logs_conversation_id(pool, use_fakes):
     conv_id = await pool.fetchval(
         "INSERT INTO conversations (chat_jid, phone) VALUES ('1@s.whatsapp.net', '1') RETURNING id")
     use_fakes(openai=FakeLLM([LlmResponse(text="ok", model="m", input_tokens=5, output_tokens=2)]))
-    await router.complete_with_tools(MSGS, [], _ctx(conv_id), LlmSettings())
+    await router.complete_with_tools(MSGS, [], _ctx(conv_id), LlmSettings(provider="openai"))
     row = await pool.fetchrow("SELECT * FROM ai_requests")
     assert row["conversation_id"] == conv_id and row["input_tokens"] == 5 and row["output_tokens"] == 2
 
@@ -101,7 +101,7 @@ async def test_tool_loop_stops_after_4_iterations(pool, use_fakes):
     fake = FakeLLM([_tc("echo", {"text": str(i)}, f"c{i}") for i in range(10)])
     use_fakes(openai=fake)
     tool = EchoTool()
-    res = await router.complete_with_tools(MSGS, [tool], _ctx(), LlmSettings())
+    res = await router.complete_with_tools(MSGS, [tool], _ctx(), LlmSettings(provider="openai"))
     assert len(tool.calls) == 4
     assert len(fake.calls) == 5  # 4 tool rounds + final call without tools
     assert fake.calls[-1]["tools"] == []
@@ -112,7 +112,7 @@ async def test_tool_loop_stops_after_4_iterations(pool, use_fakes):
 async def test_tool_exception_reported_to_model_not_raised(pool, use_fakes):
     fake = FakeLLM([_tc("boom", {}), LlmResponse(text="извините")])
     use_fakes(openai=fake)
-    res = await router.complete_with_tools(MSGS, [BoomTool()], _ctx(), LlmSettings())
+    res = await router.complete_with_tools(MSGS, [BoomTool()], _ctx(), LlmSettings(provider="openai"))
     assert res.text == "извините"
     tool_msg = fake.calls[1]["messages"][-1]
     assert tool_msg.role == "tool" and tool_msg.content.startswith("error: ") and "kaput" in tool_msg.content
@@ -124,7 +124,7 @@ async def test_tool_exception_reported_to_model_not_raised(pool, use_fakes):
 async def test_unknown_tool_reported_to_model(pool, use_fakes):
     fake = FakeLLM([_tc("nope", {}), LlmResponse(text="ok")])
     use_fakes(openai=fake)
-    res = await router.complete_with_tools(MSGS, [EchoTool()], _ctx(), LlmSettings())
+    res = await router.complete_with_tools(MSGS, [EchoTool()], _ctx(), LlmSettings(provider="openai"))
     assert res.text == "ok"
     assert fake.calls[1]["messages"][-1].content.startswith("error: ")
 
@@ -132,7 +132,7 @@ async def test_unknown_tool_reported_to_model(pool, use_fakes):
 async def test_fallback_model_used_on_error(pool, use_fakes):
     fake = FakeLLM([LlmError("503"), LlmResponse(text="from fallback")])
     use_fakes(openai=fake)
-    s = LlmSettings(openai_model="main", openai_fallback_model="backup")
+    s = LlmSettings(provider="openai", openai_model="main", openai_fallback_model="backup")
     res = await router.complete_with_tools(MSGS, [], _ctx(), s)
     assert res.text == "from fallback"
     assert [c["model"] for c in fake.calls] == ["main", "backup"]
@@ -155,7 +155,7 @@ async def test_emergency_provider_used_when_primary_fails(pool, use_fakes):
 
 async def test_all_providers_fail_hands_over(pool, use_fakes):
     use_fakes(openai=FakeLLM([LlmError("x")] * 5), gemini=FakeLLM([LlmError("y")] * 5, name="gemini"))
-    s = LlmSettings(openai_fallback_model="backup", emergency_provider="gemini")
+    s = LlmSettings(provider="openai", openai_fallback_model="backup", emergency_provider="gemini")
     with pytest.raises(LlmError) as ei:
         await router.complete_with_tools(MSGS, [], _ctx(), s)
     assert ei.value.retryable is False
@@ -165,24 +165,24 @@ async def test_all_providers_fail_hands_over(pool, use_fakes):
 async def test_unexpected_provider_exception_is_wrapped(pool, use_fakes):
     use_fakes(openai=FakeLLM([ValueError("sdk blew up")]))
     with pytest.raises(LlmError):
-        await router.complete_with_tools(MSGS, [], _ctx(), LlmSettings())
+        await router.complete_with_tools(MSGS, [], _ctx(), LlmSettings(provider="openai"))
 
 
 async def test_llm_fake_env(pool, monkeypatch):
     from iler import config
 
     monkeypatch.setattr(config.get_settings(), "llm_fake", True)
-    res = await router.complete_with_tools(MSGS, [EchoTool()], _ctx(), LlmSettings())
+    res = await router.complete_with_tools(MSGS, [EchoTool()], _ctx(), LlmSettings(provider="openai"))
     assert res.text == "Здравствуйте! Чем помочь?"
-    await router.check_key(LlmSettings())  # no key needed in fake mode
+    await router.check_key(LlmSettings(provider="openai"))  # no key needed in fake mode
 
 
 async def test_check_key(use_fakes):
     use_fakes(openai=FakeLLM([LlmResponse(text="pong")]))
-    await router.check_key(LlmSettings())
+    await router.check_key(LlmSettings(provider="openai"))
     use_fakes(openai=FakeLLM([LlmError("401 invalid key", retryable=False)]))
     with pytest.raises(LlmError):
-        await router.check_key(LlmSettings())
+        await router.check_key(LlmSettings(provider="openai"))
 
 
 async def test_missing_key_raises_llm_error():
@@ -335,7 +335,7 @@ async def test_chain_skips_providers_without_ilER_key(monkeypatch):
     monkeypatch.setattr(cfg, "openai_key", "")
     monkeypatch.setattr(cfg, "gemini_key", "")
     chain = router._chain(LlmSettings(provider="openai", emergency_provider="gemini"))
-    assert chain == [("anthropic", "claude-sonnet-5-5")]
+    assert chain == [("anthropic", "claude-haiku-5-5")]
     assert router.available_providers() == ["anthropic"]
 
 
@@ -372,7 +372,7 @@ async def test_router_refuses_when_coin_limit_reached(pool, use_fakes, monkeypat
     fake = FakeLLM([LlmResponse(text="must not be used")])
     use_fakes(openai=fake)
     with pytest.raises(usage.CoinsExhausted):
-        await router.complete_with_tools(MSGS, [], _ctx(), LlmSettings())
+        await router.complete_with_tools(MSGS, [], _ctx(), LlmSettings(provider="openai"))
     assert fake.calls == []
     assert spent == []
     assert await pool.fetchval("SELECT count(*) FROM ai_requests") == 0
@@ -392,8 +392,8 @@ async def test_router_refreshes_coins_after_success_and_failure(pool, use_fakes,
     monkeypatch.setattr(usage, "limit_reached", not_reached)
     monkeypatch.setattr(usage, "after_spend", after_spend)
     use_fakes(openai=FakeLLM([LlmResponse(text="ok"), LlmError("down")]))
-    await router.complete_with_tools(MSGS, [], _ctx(), LlmSettings())
+    await router.complete_with_tools(MSGS, [], _ctx(), LlmSettings(provider="openai"))
     assert spent == [1]
     with pytest.raises(LlmError):
-        await router.complete_with_tools(MSGS, [], _ctx(), LlmSettings())
+        await router.complete_with_tools(MSGS, [], _ctx(), LlmSettings(provider="openai"))
     assert spent == [1, 1]

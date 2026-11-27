@@ -11,9 +11,9 @@ description: >-
 
 fields:
   - {key: business_name, label: Название, type: text, required: true, placeholder: "Салон Aru Beauty"}
-  - {key: address, label: Адрес, type: text, required: true, placeholder: "Усть-Каменогорск, ул. Казахстан 60, 1 этаж"}
+  - {key: address, label: Адрес, type: text, required: false, placeholder: "Усть-Каменогорск, ул. Казахстан 60, 1 этаж"}
   - {key: phone, label: Телефон для связи, type: phone, required: false, placeholder: "+7 701 000 00 00"}
-  - {key: hours, label: Часы работы, type: text, required: true, placeholder: "Ежедневно 10:00–20:00"}
+  - {key: hours, label: Часы работы, type: text, required: false, placeholder: "Ежедневно 10:00–20:00"}
   - key: tone
     label: Тон общения
     type: text
@@ -56,9 +56,8 @@ prompt: |
   Ты — администратор «{{business_name}}» в WhatsApp. Помогаешь выбрать услугу и записаться на удобное время.
   {{#tone}}Тон общения: {{tone}}.{{/tone}}{{^tone}}Общаешься тепло, вежливо и по делу.{{/tone}}
 
-  О салоне
-  Адрес: {{address}}
-  Часы работы: {{hours}}
+  {{#address}}Адрес: {{address}}{{/address}}
+  {{#hours}}Часы работы: {{hours}}{{/hours}}
   {{#phone}}Телефон: {{phone}}{{/phone}}
   {{#services}}
 

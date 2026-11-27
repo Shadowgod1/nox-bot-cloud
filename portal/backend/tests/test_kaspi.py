@@ -51,8 +51,8 @@ async def test_online_choice_issues_invoice_and_shows_qr(client, other, pool, ka
     r = await other.post("/api/me/tariff", headers=csrf(other), json={"tariff": "start", "method": "online"})
     assert r.status_code == 200, r.text
     me = r.json()
-    assert me["status"] == "payment_pending" and me["invoice_no"] and me["invoice_amount"] == 70000
-    assert me["payment_url"] == TEMPLATE.replace("{account}", _code(me["invoice_no"])).replace("{amount}", "70000")
+    assert me["status"] == "payment_pending" and me["invoice_no"] and me["invoice_amount"] == 59990
+    assert me["payment_url"] == TEMPLATE.replace("{account}", _code(me["invoice_no"])).replace("{amount}", "59990")
     assert (await other.get("/api/me/invoice")).json()["paid"] is False, "valid for a bank transfer too"
     assert (await other.get("/api/me")).json()["payment_url"] == me["payment_url"]
     assert await pool.fetchval("SELECT count(*) FROM online_payments") == 0, "the row appears on pay"
@@ -61,15 +61,15 @@ async def test_online_choice_issues_invoice_and_shows_qr(client, other, pool, ka
 async def test_check_and_pay_subscription(client, other, pool, internal, kaspi):
     aid, number = await _awaiting_invoice(client, other, pool)
     code = _code(number)
-    r = await client.get(URL, params={"command": "check", "txn_id": "1001", "account": code, "sum": "70000.00"},
+    r = await client.get(URL, params={"command": "check", "txn_id": "1001", "account": code, "sum": "59990.00"},
                          headers=KASPI_IP)
     assert r.status_code == 200
-    assert r.json() == {"txn_id": "1001", "result": 0, "comment": f"Nox Bot, счёт № {number}", "sum": "70000.00"}
+    assert r.json() == {"txn_id": "1001", "result": 0, "comment": f"Nox Bot, счёт № {number}", "sum": "59990.00"}
     # check without a sum tells the amount
     r = await client.get(URL, params={"command": "check", "txn_id": "1002", "account": code}, headers=KASPI_IP)
-    assert r.json()["result"] == 0 and r.json()["sum"] == "70000.00"
+    assert r.json()["result"] == 0 and r.json()["sum"] == "59990.00"
     mailer.OUTBOX.clear()
-    pay = {"command": "pay", "txn_id": "1003", "account": code, "sum": "70000.00", "txn_date": "20261126143000"}
+    pay = {"command": "pay", "txn_id": "1003", "account": code, "sum": "59990.00", "txn_date": "20261126143000"}
     r = await client.get(URL, params=pay, headers=KASPI_IP)
     assert r.json()["result"] == 0 and r.json()["txn_id"] == "1003", r.text
     prv = r.json()["prv_txn"]
@@ -77,7 +77,7 @@ async def test_check_and_pay_subscription(client, other, pool, internal, kaspi):
     acc = await pool.fetchrow("SELECT status, invoice_no FROM accounts")
     assert (acc["status"], acc["invoice_no"]) == ("approved", number)
     p = await pool.fetchrow("SELECT method, amount_kzt, reference, invoice_no FROM payments")
-    assert tuple(p) == ("online:kaspi", 70000, "1003", number)
+    assert tuple(p) == ("online:kaspi", 59990, "1003", number)
     job = (await internal.post("/internal/jobs/claim")).json()
     assert job["kind"] == "create" and job["coins"] == tariffs.get("start").coins
     assert any("Онлайн-оплата" in m.subject for m in mailer.OUTBOX)

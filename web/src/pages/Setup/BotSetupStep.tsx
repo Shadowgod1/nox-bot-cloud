@@ -1,81 +1,88 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { WandSparkles } from 'lucide-react'
-import { api } from '../../api/client'
-import type { BotSettings, ServiceItem, TemplateMeta } from '../../api/types'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { Sparkles } from 'lucide-react'
+import { api, ApiError } from '../../api/client'
+import type { BotSettings, TemplateMeta } from '../../api/types'
 import { useLoad } from '../../hooks/useLoad'
-import { PromptEditor } from '../../components/PromptEditor'
-import { OVERWRITE_CONFIRM, TemplateFields, TemplatePicker, missingRequired, renderTemplate, valuesFor, withDefaults } from '../../components/TemplateBuilder'
-import { ServicesEditor, cleanServices } from '../../components/ServicesEditor'
-import { Button, EmptyState, ErrorState, Spinner } from '../../components/ui'
+import { TemplatePicker, renderTemplate, valuesFor, withDefaults } from '../../components/TemplateBuilder'
+import { cleanServices } from '../../components/ServicesEditor'
+import { Button, EmptyState, ErrorState, Field, Input, Spinner, Textarea } from '../../components/ui'
 import { StepHeader } from './StepHeader'
 
+export const STORY_MIN = 10
+const STORY_MAX = 6000
 
+interface AiFillResult {
+  values: Record<string, string>
+  prompt: string
+  missing: string[]
+}
 
-/** Last wizard step: pick a template, fill its fields, review the generated prompt, save (the bot is enabled). */
+/**
+ * The only bot step of the wizard: a business type, the company name and, optionally, a few words about the business
+ * in the owner's own words (the bot's model lays them out over the template). The bot starts at once on a universal
+ * prompt; the address, prices and the prompt itself are edited later in «Настройки бота».
+ */
 export function BotSetupStep({ onDone }: { onDone: (saved: boolean) => void }) {
   const templates = useLoad(() => api.get<TemplateMeta[]>('/api/templates', { silent: true }))
   const bot = useLoad(() => api.get<BotSettings>('/api/settings/bot', { silent: true }))
   const [choice, setChoice] = useState<string | null>(null)
-  const [values, setValues] = useState<Record<string, string>>({})
-  const [prompt, setPrompt] = useState('')
-  const [edited, setEdited] = useState(false)
-  const [renderedKey, setRenderedKey] = useState<string | null>(null)
-  const [showErrors, setShowErrors] = useState(false)
-  const [building, setBuilding] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [services, setServices] = useState<ServiceItem[]>([])
-  const [servicesTouched, setServicesTouched] = useState(false)
-  const promptRef = useRef<HTMLDivElement>(null)
+  const [name, setName] = useState('')
+  const [story, setStory] = useState('')
+  const [touched, setTouched] = useState(false)
+  const [busy, setBusy] = useState<null | 'ai' | 'save'>(null)
+  const [aiError, setAiError] = useState<string | null>(null)
   const initialized = useRef(false)
 
   useEffect(() => {
     if (initialized.current || !templates.data || !bot.data) return
     initialized.current = true
     const b = bot.data
+    // the universal template first: it fits any business until the owner picks a narrower one
     const known = templates.data.find((t) => t.id === b.template_id)
-    const first = known ?? templates.data[0]
-    setChoice(first?.id ?? null)
-    setValues(first ? withDefaults(first, b.template_values ?? {}) : (b.template_values ?? {}))
-    if (b.services?.length) {
-      setServices(b.services)
-      setServicesTouched(true) // the owner's own list: never replaced by a template's typical one
-    } else {
-      setServices(first?.defaults.services ?? [])
-    }
-    setPrompt(b.prompt ?? '')
-    setEdited(Boolean(b.prompt_edited))
+    const generic = templates.data.find((t) => t.id === 'generic')
+    setChoice((known ?? generic ?? templates.data[0])?.id ?? null)
+    setName(b.template_values?.business_name ?? '') // the company from the Nox portal application
   }, [templates.data, bot.data])
 
   const template = templates.data?.find((t) => t.id === choice) ?? null
-  const currentKey = useMemo(() => (template ? `${template.id}:${JSON.stringify(valuesFor(template, values))}` : null), [template, values])
-  const stale = Boolean(prompt.trim() && renderedKey && renderedKey !== currentKey)
+  const nameError = touched && !name.trim() ? 'Укажите название компании' : null
+  const storyUsed = story.trim().length >= STORY_MIN
 
-  async function build() {
-    if (!template) return
-    if (missingRequired(template, values).length) {
-      setShowErrors(true)
+  async function launch(e: FormEvent) {
+    e.preventDefault()
+    setTouched(true)
+    if (!bot.data || !template || !name.trim()) return
+    setAiError(null)
+    let values: Record<string, string>
+    let prompt: string
+    try {
+      if (storyUsed) {
+        setBusy('ai')
+        const r = await api.post<AiFillResult>(
+          `/api/templates/${encodeURIComponent(template.id)}/ai-fill`,
+          { business_name: name.trim(), description: story.trim() },
+          { silent: true },
+        )
+        values = r.values
+        prompt = r.prompt
+      } else {
+        setBusy('save')
+        values = withDefaults(template, { business_name: name.trim() })
+        prompt = (await renderTemplate(template, values)).prompt
+      }
+    } catch (err) {
+      setBusy(null)
+      // the owner's text is kept: they can retry, shorten it or launch without it
+      setAiError(
+        err instanceof ApiError
+          ? `${err.message}. Можно запустить бота без рассказа и дописать данные позже.`
+          : 'Не удалось разобрать рассказ. Можно запустить бота без него и дописать данные позже.',
+      )
       return
     }
-    if (prompt.trim() && edited && !window.confirm(OVERWRITE_CONFIRM)) return
-    setBuilding(true)
+    setBusy('save')
     try {
-      const r = await renderTemplate(template, values)
-      setPrompt(r.prompt)
-      setEdited(false)
-      setRenderedKey(currentKey)
-      setShowErrors(r.missing.length > 0)
-      requestAnimationFrame(() => promptRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
-    } catch {
-      /* toast */
-    } finally {
-      setBuilding(false)
-    }
-  }
-
-  async function save() {
-    if (!bot.data || !template || !prompt.trim()) return
-    setSaving(true)
-    try {
+      const services = bot.data.services?.length ? bot.data.services : (template.defaults.services ?? [])
       const payload: BotSettings = {
         ...bot.data,
         ...template.defaults,
@@ -83,7 +90,7 @@ export function BotSetupStep({ onDone }: { onDone: (saved: boolean) => void }) {
         template_id: template.id,
         template_values: valuesFor(template, values),
         prompt,
-        prompt_edited: edited,
+        prompt_edited: false,
         enabled: true,
       }
       await api.put<BotSettings>('/api/settings/bot', payload)
@@ -91,14 +98,14 @@ export function BotSetupStep({ onDone }: { onDone: (saved: boolean) => void }) {
     } catch {
       /* toast */
     } finally {
-      setSaving(false)
+      setBusy(null)
     }
   }
 
   const header = (
     <StepHeader
-      title="Настройка бота"
-      text="Выберите тип бизнеса и заполните данные. Из них соберётся промпт — инструкция, по которой бот отвечает клиентам. Перед сохранением его можно поправить."
+      title="Ваш бот"
+      text="Выберите тип бизнеса и укажите название — бот сразу начнёт отвечать клиентам по универсальным правилам. Адрес, цены и промпт можно дописать позже в «Настройках бота»."
     />
   )
 
@@ -124,91 +131,56 @@ export function BotSetupStep({ onDone }: { onDone: (saved: boolean) => void }) {
   return (
     <>
       {header}
-      <div className="flex flex-col gap-7">
+      <form onSubmit={launch} className="flex flex-col gap-6" noValidate>
         <section aria-labelledby="bs-type" className="flex flex-col gap-3">
           <h2 id="bs-type" className="text-[13px] font-semibold text-ink">
             Тип бизнеса
           </h2>
-          <TemplatePicker
-            templates={templates.data}
-            value={choice}
-            onChange={(id) => {
-              setChoice(id)
-              setShowErrors(false)
-              const next = templates.data?.find((t) => t.id === id)
-              if (next) {
-                setValues((cur) => withDefaults(next, cur))
-                if (!servicesTouched) setServices(next.defaults.services ?? [])
-              }
-            }}
-          />
+          <TemplatePicker templates={templates.data} value={choice} onChange={setChoice} />
         </section>
 
-        <section aria-labelledby="bs-data" className="flex flex-col gap-3">
-          <h2 id="bs-data" className="text-[13px] font-semibold text-ink">
-            Данные бизнеса
-          </h2>
-          <TemplateFields
-            template={template}
-            values={values}
-            showErrors={showErrors}
-            onChange={(k, v) => setValues((cur) => ({ ...cur, [k]: v }))}
-          />
-          <div className="flex flex-wrap items-center gap-3 pt-1">
-            <Button
-              variant={prompt.trim() && !stale ? 'secondary' : 'primary'}
-              icon={<WandSparkles className="size-4" aria-hidden />}
-              loading={building}
-              onClick={build}
-            >
-              {prompt.trim() ? 'Собрать заново' : 'Собрать промпт'}
-            </Button>
-            {stale && <span className="text-[13px] text-warn">Данные изменились — соберите промпт заново.</span>}
-          </div>
-        </section>
+        <Field label="Название компании" error={nameError}>
+          <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={200} placeholder="Например, Салон Aru Beauty" />
+        </Field>
 
-        <section aria-labelledby="bs-services" className="flex flex-col gap-3">
-          <div>
-            <h2 id="bs-services" className="text-[13px] font-semibold text-ink">
-              Услуги и цены
-            </h2>
-            <p className="mt-0.5 text-[13px] text-ink-2">
-              Мы подставили типовые услуги — впишите свои цены, лишнее удалите или загрузите свой прайс. Мастеров и дни их работы добавите потом в разделе «Услуги и мастера».
-            </p>
-          </div>
-          <ServicesEditor
-            value={services}
-            onChange={(v) => {
-              setServices(v)
-              setServicesTouched(true)
-            }}
+        <Field
+          label="Расскажите о бизнесе своими словами — необязательно"
+          hint="Адрес, часы работы, услуги и цены, как обращаться к клиентам. ИИ разложит это по шаблону; если пропустить, бот будет честно говорить, что уточнит у администратора."
+        >
+          <Textarea
+            rows={5}
+            value={story}
+            maxLength={STORY_MAX}
+            onChange={(e) => setStory(e.target.value)}
+            placeholder="Салон на Абая 10, работаем каждый день с 10 до 20. Стрижка от 5000 ₸, маникюр 7000 ₸, окрашивание от 15000 ₸. Общаемся на «вы», тепло."
           />
-        </section>
+        </Field>
 
-        {prompt.trim() || renderedKey ? (
-          <section ref={promptRef} className="scroll-mt-6 flex flex-col gap-3 border-t border-line pt-6">
-            <PromptEditor
-              label="Промпт бота"
-              value={prompt}
-              onChange={(v) => {
-                setPrompt(v)
-                setEdited(true)
-              }}
-              minRows={14}
-              hint="Именно этот текст бот использует в разговоре. Допишите, что важно: акции, ограничения, тон."
-            />
-          </section>
-        ) : null}
+        {aiError && (
+          <p role="alert" className="rounded-[8px] border border-danger/30 bg-danger-soft px-3.5 py-2.5 text-sm text-danger">
+            {aiError}
+          </p>
+        )}
 
         <div className="flex flex-wrap items-center gap-3 border-t border-line pt-5">
-          <Button variant="primary" loading={saving} disabled={!prompt.trim()} onClick={save}>
-            Сохранить и включить бота
+          <Button
+            type="submit"
+            variant="primary"
+            loading={busy !== null}
+            icon={storyUsed ? <Sparkles className="size-4" aria-hidden /> : undefined}
+          >
+            {busy === 'ai' ? 'ИИ собирает промпт…' : storyUsed ? 'Собрать промпт и запустить бота' : 'Запустить бота'}
           </Button>
+          {aiError && storyUsed && (
+            <button type="button" onClick={() => setStory('')} className="text-[13px] text-ink-2 underline hover:text-ink">
+              Запустить без рассказа
+            </button>
+          )}
           <button type="button" onClick={() => onDone(false)} className="text-[13px] text-ink-2 underline hover:text-ink">
             Настрою позже
           </button>
         </div>
-      </div>
+      </form>
     </>
   )
 }

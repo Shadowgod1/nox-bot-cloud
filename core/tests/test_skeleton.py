@@ -44,7 +44,7 @@ async def test_settings_secret_encrypted_at_rest(pool):
 
 async def test_settings_default_when_missing(pool):
     loaded = await settings_store.get("llm", LlmSettings)
-    assert loaded.provider == "openai" and loaded.anthropic_model == "claude-sonnet-5-5"
+    assert loaded.provider == "anthropic" and loaded.anthropic_model == "claude-haiku-5-5"
 
 
 @pytest.mark.parametrize("method,path", ROUTES)

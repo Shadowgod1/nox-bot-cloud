@@ -56,7 +56,7 @@ async def test_settings_llm_providers_are_those_with_ilER_keys(owner, monkeypatc
 
 async def test_settings_llm_effort_validation(owner):
     body = (await owner.get("/api/settings/llm")).json()
-    assert body["anthropic_model"] == "claude-sonnet-5-5" and body["anthropic_effort"] == "low"
+    assert body["anthropic_model"] == "claude-haiku-5-5" and body["anthropic_effort"] == "low"
     r = await owner.put("/api/settings/llm", json={**body, "anthropic_effort": "high"}, headers=csrf(owner))
     assert r.status_code == 200, r.text
     assert (await settings_store.get("llm", LlmSettings)).anthropic_effort == "high"
@@ -240,7 +240,7 @@ async def test_template_render(owner):
     body = r.json()
     assert "«Борода»" in body["prompt"] and "Стрижка — 5000 ₸" in body["prompt"]
     assert "Телефон:" not in body["prompt"]
-    assert body["missing"] == ["hours"]
+    assert body["missing"] == []
     assert (await settings_store.get("bot", BotSettings)).prompt == ""  # nothing is saved
 
 
@@ -252,7 +252,7 @@ async def test_template_render_validation(owner):
     assert r.status_code == 422
     r = await owner.post(url, json={"values": {"business_name": "A\x07B"}}, headers=csrf(owner))
     assert r.status_code == 200 and "«AB»" in r.json()["prompt"]
-    assert sorted(r.json()["missing"]) == ["activity", "services"]
+    assert r.json()["missing"] == []
     assert (await owner.post("/api/templates/nope/render", json={"values": {}}, headers=csrf(owner))).status_code == 404
     r = await owner.post("/api/templates/..%2Fsecrets/render", json={"values": {}}, headers=csrf(owner))
     assert r.status_code == 404
@@ -269,7 +269,7 @@ async def test_template_apply_endpoint_removed(owner):
 async def test_settings_llm_models_lists_for_unsaved_settings(owner, app):
     from iler.api.settings import get_model_lister
 
-    await settings_store.put("llm", LlmSettings())
+    await settings_store.put("llm", LlmSettings(provider="openai"))
     seen: list[LlmSettings] = []
 
     async def fake_list(settings: LlmSettings) -> list[str]:
@@ -294,9 +294,9 @@ async def test_settings_llm_models_lists_for_unsaved_settings(owner, app):
 
 async def test_claude_model_limited_to_sonnet_and_haiku(owner):
     body = (await owner.get("/api/settings/llm")).json()
-    assert body["anthropic_model"] == "claude-sonnet-5-5"
-    r = await owner.put("/api/settings/llm", json=body | {"anthropic_model": "claude-haiku-5-5"}, headers=csrf(owner))
-    assert r.status_code == 200 and r.json()["anthropic_model"] == "claude-haiku-5-5"
+    assert body["anthropic_model"] == "claude-haiku-5-5"
+    r = await owner.put("/api/settings/llm", json=body | {"anthropic_model": "claude-sonnet-5-5"}, headers=csrf(owner))
+    assert r.status_code == 200 and r.json()["anthropic_model"] == "claude-sonnet-5-5"
     r = await owner.put("/api/settings/llm", json=body | {"anthropic_model": "gpt-5.4-mini"}, headers=csrf(owner))
     assert r.status_code == 422
     # legacy stored value (before the restriction) reads back as Sonnet

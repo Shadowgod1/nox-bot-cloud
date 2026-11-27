@@ -14,7 +14,7 @@ interface Props {
 
 export const FREE_FULL = 'Тестовые места закончились, выберите тариф или напишите менеджеру'
 
-/** Tariff cards (paid, then the muted Free test) and the payment method: online (when a provider is configured)
+/** Tariff cards (the Free test first and highlighted, then the paid ones) and the payment method: online (when a provider is configured)
  * or an invoice issued by a manager. Free is connected at once, without payment. */
 export function TariffPicker({ current, onChosen, upgrade = false }: Props) {
   const [tariffs, setTariffs] = useState<Tariff[] | null>(null)
@@ -72,7 +72,43 @@ export function TariffPicker({ current, onChosen, upgrade = false }: Props) {
 
   return (
     <div>
-      <div className="grid gap-3 md:grid-cols-3" role="radiogroup" aria-label="Тариф">
+      <div className={cx('grid gap-3 sm:grid-cols-2', free ? 'xl:grid-cols-4' : 'md:grid-cols-3')} role="radiogroup" aria-label="Тариф">
+        {free && (
+          <button
+            type="button"
+            role="radio"
+            aria-checked={isFree}
+            aria-label={`${free.name}: бесплатно`}
+            disabled={free.available === false}
+            onClick={() => setSelected(FREE_CODE)}
+            className="nx-choice relative flex flex-col border-accent p-3.5 text-left ring-1 ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 md:p-4"
+          >
+            <span className="absolute -top-2.5 left-3.5 rounded-full bg-accent px-2.5 py-0.5 text-[11.5px] font-extrabold tracking-wide text-on-accent uppercase">
+              Начните с этого
+            </span>
+            <span className="flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-[15px] font-extrabold text-ink">
+                <FlaskConical className="size-4 text-accent" aria-hidden />
+                Free
+              </span>
+              <span className="nx-dot" aria-hidden />
+            </span>
+            <span className="mt-1.5 flex items-baseline gap-1.5 md:mt-3">
+              <span className="text-[21px] leading-none font-extrabold tracking-[-0.02em] text-accent tabular-nums md:text-[24px]">0 ₸</span>
+              <span className="text-[13px] text-ink-3">{config?.free_days ? `${config.free_days} дней теста` : 'тест'}</span>
+            </span>
+            <span className="mt-2 inline-flex items-center gap-1.5 text-[13.5px] font-semibold text-ink-2 md:mt-3">
+              <Coins className="size-4 text-accent" aria-hidden />
+              <span className="tabular-nums">{free.coins.toLocaleString('ru-RU')}</span> коинов на тест
+            </span>
+            {!!free.dialogs && (
+              <span className="mt-1 text-[13.5px] font-bold text-ink">{dialogsText(free.dialogs)} на весь тест</span>
+            )}
+            <span className="mt-2 border-t border-line pt-2 text-[13px] leading-snug text-ink-3">
+              {free.available === false ? FREE_FULL : 'Бот подключается сразу, без оплаты и без карты'}
+            </span>
+          </button>
+        )}
         {paid.map((t) => {
           const active = selected === t.code
           return (
@@ -106,37 +142,6 @@ export function TariffPicker({ current, onChosen, upgrade = false }: Props) {
           )
         })}
       </div>
-      {free && (
-        <button
-          type="button"
-          role="radio"
-          aria-checked={isFree}
-          aria-label={`${free.name}: бесплатно`}
-          disabled={free.available === false}
-          onClick={() => setSelected(FREE_CODE)}
-          className="nx-choice mt-3 flex w-full items-center gap-3.5 border-dashed px-4 py-3.5 text-left disabled:cursor-not-allowed disabled:opacity-60 aria-checked:border-solid"
-        >
-          <span className="grid size-9 flex-none place-items-center rounded-nx bg-ok-soft text-ok">
-            <FlaskConical className="size-[18px]" aria-hidden />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="flex flex-wrap items-baseline gap-x-2">
-              <span className="text-[14.5px] font-bold text-ink">{free.name}</span>
-              <span className="text-[13px] font-semibold text-ok">
-                бесплатно{config?.free_days ? ` · ${config.free_days} дней` : ''}
-              </span>
-            </span>
-            <span className="mt-0.5 block text-[13px] text-ink-3">
-              {free.available === false
-                ? FREE_FULL
-                : `Бот подключается сразу, без оплаты. ${free.coins.toLocaleString('ru-RU')} коинов${
-                    free.dialogs ? ` — ${dialogsText(free.dialogs)} на весь тест` : ' на весь тест'
-                  }.`}
-            </span>
-          </span>
-          <span className="nx-dot" aria-hidden />
-        </button>
-      )}
 
       {selected && !isFree && (
         <fieldset className="mt-6">

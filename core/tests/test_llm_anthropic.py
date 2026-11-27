@@ -269,7 +269,7 @@ async def test_check_key_via_default_factory_applies_effort(monkeypatch):
     try:
         s = LlmSettings(provider="anthropic", anthropic_effort="high")
         await router.check_key(s)
-        assert api.bodies[0]["model"] == "claude-sonnet-5-5"
+        assert api.bodies[0]["model"] == "claude-haiku-5-5"
         assert api.bodies[0]["output_config"] == {"effort": "high"}
         with pytest.raises(LlmError) as ei:
             await router.check_key(s)
@@ -286,7 +286,7 @@ async def test_check_key_missing_anthropic_key():
 
 def test_settings_defaults():
     s = LlmSettings()
-    assert s.anthropic_model == "claude-sonnet-5-5" and s.anthropic_effort == "low"
+    assert s.provider == "anthropic" and s.anthropic_model == "claude-haiku-5-5" and s.anthropic_effort == "low"
     assert LlmSettings(provider="anthropic", emergency_provider="anthropic").provider == "anthropic"
 
 

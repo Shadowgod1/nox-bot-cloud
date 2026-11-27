@@ -145,24 +145,24 @@ async def test_tariff_rules(client, other, pool):
 async def test_mark_paid_records_payment_and_queues_bot(client, other, internal, pool):
     aid = await _awaiting(client, other, pool)
     r = await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client),
-                          json={"amount_kzt": 100000, "reference": "п/п 123", "anthropic_key": KEY})
+                          json={"amount_kzt": 89990, "reference": "п/п 123", "anthropic_key": KEY})
     assert r.status_code == 200, r.text
     pay = await pool.fetchrow("SELECT * FROM payments")
-    assert (pay["amount_kzt"], pay["tariff"], pay["reference"], pay["method"]) == (100000, "business", "п/п 123", "invoice")
+    assert (pay["amount_kzt"], pay["tariff"], pay["reference"], pay["method"]) == (89990, "business", "п/п 123", "invoice")
     assert pay["invoice_no"] == await pool.fetchval("SELECT invoice_no FROM accounts")
     assert await pool.fetchval("SELECT status FROM accounts") == "approved"
     assert await pool.fetchval("SELECT coins_limit FROM accounts") == tariffs.get("business").coins
     job = (await internal.post("/internal/jobs/claim")).json()
     assert job["coins"] == 60000 and unseal(job["llm_key_sealed"]) == KEY
     detail = (await client.get(f"/api/staff/applications/{aid}")).json()
-    assert detail["payments"][0]["amount_kzt"] == 100000 and detail["payments"][0]["staff_email"] == "ops@example.kz"
-    assert detail["tariff"] == "business" and detail["invoice_amount"] == 100000
+    assert detail["payments"][0]["amount_kzt"] == 89990 and detail["payments"][0]["staff_email"] == "ops@example.kz"
+    assert detail["tariff"] == "business" and detail["invoice_amount"] == 89990
     actions = [a["action"] for a in detail["audit"]]
     assert "staff.mark_paid" in actions and "staff.approve" in actions and "staff.invoice_issued" in actions
     assert (await other.get("/api/me/invoice")).json()["paid"] is True
     staff_inv = (await client.get(f"/api/staff/applications/{aid}/invoice")).json()
     assert staff_inv["paid"] is True
-    r = await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client), json={"amount_kzt": 100000})
+    r = await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client), json={"amount_kzt": 89990})
     assert r.status_code == 409
     assert await pool.fetchval("SELECT count(*) FROM payments") == 1
 
@@ -193,7 +193,7 @@ async def test_failed_slug_change_rolls_back_payment(client, other, pool, app):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="https://bot.example.kz") as third:
         await register_verified(third, email="c@example.kz", slug="taken", phone="+7 702 000 00 00")
     r = await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client),
-                          json={"amount_kzt": 100000, "slug": "taken"})
+                          json={"amount_kzt": 89990, "slug": "taken"})
     assert r.status_code == 409
     assert await pool.fetchval("SELECT count(*) FROM payments") == 0
     assert await pool.fetchval("SELECT status FROM accounts WHERE id = $1", aid) == "awaiting_payment"
@@ -201,7 +201,7 @@ async def test_failed_slug_change_rolls_back_payment(client, other, pool, app):
 
 async def test_payments_ledger_is_append_only(client, other, pool):
     aid = await _awaiting(client, other, pool)
-    await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client), json={"amount_kzt": 100000})
+    await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client), json={"amount_kzt": 89990})
     with pytest.raises(asyncpg.RaiseError, match="append-only"):
         await pool.execute("UPDATE payments SET amount_kzt = 1")
     with pytest.raises(asyncpg.RaiseError, match="append-only"):
@@ -250,14 +250,14 @@ async def test_old_style_awaiting_payment_account_still_works(client, other, poo
     await register_verified(other)
     await pool.execute(
         "UPDATE accounts SET status = 'awaiting_payment', tariff = 'start', invoice_no = 'NOX-2026-00042',"
-        " invoice_amount = 70000, invoice_issued_at = now() - interval '3 days'")
+        " invoice_amount = 59990, invoice_issued_at = now() - interval '3 days'")
     me = (await other.get("/api/me")).json()
     assert me["status"] == "awaiting_payment" and me["pay_method"] is None
     inv = (await other.get("/api/me/invoice")).json()
-    assert inv["number"] == "NOX-2026-00042" and inv["amount_kzt"] == 70000 and inv["comment"] == ""
+    assert inv["number"] == "NOX-2026-00042" and inv["amount_kzt"] == 59990 and inv["comment"] == ""
     await staff_login(client, pool)
     aid = await pool.fetchval("SELECT id FROM accounts")
-    r = await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client), json={"amount_kzt": 70000})
+    r = await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client), json={"amount_kzt": 59990})
     assert r.status_code == 200, r.text
     assert await pool.fetchval("SELECT invoice_no FROM payments") == "NOX-2026-00042"
     assert (await internal.post("/internal/jobs/claim")).json()["coins"] == tariffs.get("start").coins
@@ -372,7 +372,7 @@ async def test_upgrade_free_by_invoice_keeps_bot(client, other, pool, internal):
     inv = (await other.get(f"/api/me/invoices/{number}")).json()
     assert inv["kind"] == "upgrade" and inv["tariff"]["name"] == "Бизнес"
     inv_id = await pool.fetchval("SELECT id FROM invoices WHERE number = $1", number)
-    r = await client.post(f"/api/staff/invoices/{inv_id}/mark-paid", headers=csrf(client), json={"amount_kzt": 100000})
+    r = await client.post(f"/api/staff/invoices/{inv_id}/mark-paid", headers=csrf(client), json={"amount_kzt": 89990})
     assert r.status_code == 200, r.text
     acc = await pool.fetchrow("SELECT tariff, coins_limit, free_until, suspend_reason, upgrade_tariff, slug"
                               " FROM accounts")

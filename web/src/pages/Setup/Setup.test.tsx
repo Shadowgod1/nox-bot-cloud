@@ -4,20 +4,9 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { App } from '../../App'
 import { BotSetupStep } from './BotSetupStep'
-import { LlmStep } from './Setup'
 import { FakeEventSource, callsTo, jsonResponse, mockApi } from '../../test/utils'
 import { BOT } from '../../test/fixtures'
-import type { BotSettings, LlmSettings, TemplateMeta } from '../../api/types'
-
-const LLM: LlmSettings = {
-  provider: 'openai',
-  openai_model: 'gpt-4.1-mini',
-  openai_fallback_model: null,
-  gemini_model: 'gemini-2.5-flash',
-  anthropic_model: 'claude-sonnet-5-5',
-  anthropic_effort: 'low',
-  emergency_provider: null,
-}
+import type { BotSettings, TemplateMeta } from '../../api/types'
 
 const TEMPLATES: TemplateMeta[] = [
   {
@@ -61,7 +50,7 @@ describe('Setup wizard', () => {
       </MemoryRouter>,
     )
     const steps = await screen.findByRole('list', { name: 'Шаги первоначальной настройки' })
-    expect(steps.textContent).toBe('1Владелец2Языковая модель3Настройка бота4Проверьте бота5WhatsApp6Заявки7Готово')
+    expect(steps.textContent).toBe('1Владелец2Ваш бот3WhatsApp4Готово')
   })
 
   it('sends the setup token from the URL and explains a missing/invalid token', async () => {
@@ -108,8 +97,8 @@ describe('Owner from the Nox portal (one account for the cabinet and the panel)'
         loggedIn = true
         return OWNER
       },
-      'GET /api/settings/llm': LLM,
-      'GET /api/settings/llm/providers': { providers: [] },
+      'GET /api/templates': TEMPLATES,
+      'GET /api/settings/bot': BOT,
     })
     render(
       <MemoryRouter initialEntries={['/login']}>
@@ -126,9 +115,9 @@ describe('Owner from the Nox portal (one account for the cabinet and the panel)'
     expect(body).toEqual({ email: 'owner@salon.kz', password: 'cabinet-pass-123' })
     // straight into the wizard, without the owner step
     const steps = await screen.findByRole('list', { name: 'Шаги первоначальной настройки' })
-    expect(steps.textContent).toBe('1Языковая модель2Настройка бота3Проверьте бота4WhatsApp5Заявки6Готово')
+    expect(steps.textContent).toBe('1Ваш бот2WhatsApp3Готово')
     expect(screen.queryByText('Создайте учётную запись владельца')).toBeNull()
-    expect(await screen.findByText('Подключите языковую модель')).toBeInTheDocument()
+    expect(await screen.findByText('Ваш бот', { selector: 'h1, h2' })).toBeInTheDocument()
   })
 
   it('plain login page has no cabinet hint', async () => {
@@ -146,14 +135,12 @@ describe('Owner from the Nox portal (one account for the cabinet and the panel)'
     expect(screen.queryByTestId('cabinet-login-hint')).toBeNull()
   })
 
-  it('pending wizard: opened from any page, company already in "Название", finish closes it', async () => {
+  it('pending wizard: opened from any page, company already in "Название компании", finish closes it', async () => {
     const user = userEvent.setup()
     let pending = true
     const fetchMock = mockApi({
       'GET /api/setup/state': () => ({ needs_setup: false, wizard_pending: pending }),
       'GET /api/auth/me': OWNER,
-      'GET /api/settings/llm': LLM,
-      'GET /api/settings/llm/providers': { providers: [] },
       'GET /api/templates': TEMPLATES,
       // core put the company from the application into the template field business_name
       'GET /api/settings/bot': { ...BOT, template_values: { business_name: 'Салон Aru' } },
@@ -168,13 +155,11 @@ describe('Owner from the Nox portal (one account for the cabinet and the panel)'
       </MemoryRouter>,
     )
     const steps = await screen.findByRole('list', { name: 'Шаги первоначальной настройки' })
-    expect(steps.textContent).toBe('1Языковая модель2Настройка бота3Проверьте бота4WhatsApp5Заявки6Готово')
-    await user.click(await screen.findByRole('button', { name: 'Настроить позже' }))
-    expect(await screen.findByLabelText('Название')).toHaveValue('Салон Aru')
+    expect(steps.textContent).toBe('1Ваш бот2WhatsApp3Готово')
+    expect(await screen.findByLabelText('Название компании')).toHaveValue('Салон Aru')
+    expect(screen.queryByText('Подключите языковую модель')).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Настрою позже' }))
-    await user.click(await screen.findByRole('button', { name: 'Дальше' }))
     await user.click(await screen.findByRole('button', { name: 'Подключу позже' }))
-    await user.click(await screen.findByRole('button', { name: 'Дальше' }))
     expect(callsTo(fetchMock, 'POST', '/api/setup/finish')).toHaveLength(0)
     await user.click(await screen.findByRole('button', { name: 'Перейти в админку' }))
     await waitFor(() => expect(callsTo(fetchMock, 'POST', '/api/setup/finish')).toHaveLength(1))
@@ -182,206 +167,95 @@ describe('Owner from the Nox portal (one account for the cabinet and the panel)'
   })
 })
 
-describe('LlmStep', () => {
-  it('shows only the providers ILER has keys for, without a key field', async () => {
-    mockApi({
-      'GET /api/settings/llm': LLM,
-      'GET /api/settings/llm/providers': { providers: ['anthropic', 'gemini'] },
-      'POST /api/settings/llm/models': { ok: true, models: [] },
-    })
-    render(<LlmStep onDone={vi.fn()} />)
-    // the stored provider (openai) has no ILER key: the first available one is preselected
-    expect(await screen.findByRole('radio', { name: /Anthropic \(Claude\)/ })).toBeChecked()
-    expect(screen.getByRole('radio', { name: /Google Gemini/ })).not.toBeChecked()
-    expect(screen.queryByRole('radio', { name: /OpenAI/ })).not.toBeInTheDocument()
-    expect(screen.queryByLabelText(/Ключ/)).toBeNull()
-    expect(screen.getByText(/подключение ILER/)).toBeInTheDocument()
-  })
-
-  it('tells the user to contact ILER support when no keys are configured', async () => {
-    const user = userEvent.setup()
-    const onDone = vi.fn()
-    mockApi({ 'GET /api/settings/llm': LLM, 'GET /api/settings/llm/providers': { providers: [] } })
-    render(<LlmStep onDone={onDone} />)
-    expect(await screen.findByText(/Ключи ILER не настроены\. Обратитесь в поддержку ILER/)).toBeInTheDocument()
-    expect(screen.queryByRole('radio')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Проверить подключение' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Настроить позже' }))
-    expect(onDone).toHaveBeenCalled()
-  })
-
-  it('connects Claude with Haiku and effort, saving only after a successful check', async () => {
-    const user = userEvent.setup()
-    const fetchMock = mockApi({
-      'GET /api/settings/llm': LLM,
-      'GET /api/settings/llm/providers': { providers: ['anthropic', 'openai'] },
-      'POST /api/settings/llm/models': (init: RequestInit) =>
-        JSON.parse(String(init.body)).provider === 'anthropic'
-          ? { ok: true, models: ['claude-sonnet-5-5', 'claude-haiku-5-5'] }
-          : { ok: true, models: ['gpt-5.4-mini'] },
-      'POST /api/settings/llm/test': { ok: true },
-      'PUT /api/settings/llm': (init: RequestInit) => JSON.parse(String(init.body)),
-    })
-    render(<LlmStep onDone={vi.fn()} />)
-
-    // the stored provider (openai) is available: it is preselected
-    expect(await screen.findByRole('radio', { name: /OpenAI/ })).toBeChecked()
-    await user.click(screen.getByRole('radio', { name: /Anthropic \(Claude\)/ }))
-    const model = screen.getByLabelText('Модель')
-    expect(model).toHaveValue('claude-sonnet-5-5')
-    expect([...(model as HTMLSelectElement).options].map((o) => o.value)).toEqual(['claude-sonnet-5-5', 'claude-haiku-5-5'])
-    expect(screen.getByLabelText('Глубина размышлений')).toHaveValue('low')
-
-    await user.selectOptions(model, 'claude-haiku-5-5')
-    await user.selectOptions(screen.getByLabelText('Глубина размышлений'), 'Средняя')
-    await user.click(screen.getByRole('button', { name: 'Проверить подключение' }))
-
-    await waitFor(() => expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(1))
-    const tested = JSON.parse(String((callsTo(fetchMock, 'POST', '/api/settings/llm/test')[0][1] as RequestInit).body))
-    expect(tested).toMatchObject({ provider: 'anthropic', anthropic_model: 'claude-haiku-5-5', anthropic_effort: 'medium' })
-    expect(Object.keys(tested).filter((k) => k.endsWith('_key'))).toEqual([])
-  })
-
-  it('loads OpenAI models on selection, preselects a recommended one, checks without a key and saves the final choice', async () => {
-    const user = userEvent.setup()
-    const onDone = vi.fn()
-    const fetchMock = mockApi({
-      'GET /api/settings/llm': LLM,
-      'GET /api/settings/llm/providers': { providers: ['openai'] },
-      'POST /api/settings/llm/models': { ok: true, models: ['gpt-5.5', 'gpt-5.4-nano'] },
-      'POST /api/settings/llm/test': { ok: true },
-      'PUT /api/settings/llm': (init: RequestInit) => JSON.parse(String(init.body)),
-    })
-    render(<LlmStep onDone={onDone} />)
-    // gpt-5.4-mini is not available through ILER: the next recommended listed model is preselected, without pressing the button
-    await waitFor(() => expect(screen.getByLabelText('Модель')).toHaveValue('gpt-5.4-nano'))
-    expect(screen.getByRole('option', { name: 'gpt-5.5' })).toBeInTheDocument()
-    expect(screen.queryByLabelText('Глубина размышлений')).not.toBeInTheDocument()
-    expect(callsTo(fetchMock, 'POST', '/api/settings/llm/test')).toHaveLength(0)
-
-    await user.click(screen.getByRole('button', { name: 'Проверить подключение' }))
-    await waitFor(() => expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(1))
-    // models -> test -> put, in that order
-    const order = fetchMock.mock.calls
-      .map(([url, init]) => `${((init as RequestInit | undefined)?.method ?? 'GET').toUpperCase()} ${String(url)}`)
-      .filter((c) => !c.startsWith('GET'))
-    expect(order.slice(-3)).toEqual(['POST /api/settings/llm/models', 'POST /api/settings/llm/test', 'PUT /api/settings/llm'])
-    const tested = JSON.parse(String((callsTo(fetchMock, 'POST', '/api/settings/llm/test')[0][1] as RequestInit).body))
-    expect(tested).toMatchObject({ provider: 'openai', openai_model: 'gpt-5.4-nano' })
-    expect(Object.keys(tested).filter((k) => k.endsWith('_key'))).toEqual([])
-
-    await user.selectOptions(screen.getByLabelText('Модель'), 'gpt-5.5')
-    await user.click(screen.getByRole('button', { name: 'Продолжить' }))
-    await waitFor(() => expect(onDone).toHaveBeenCalled())
-    const puts = callsTo(fetchMock, 'PUT', '/api/settings/llm')
-    expect(JSON.parse(String((puts[puts.length - 1][1] as RequestInit).body))).toMatchObject({ openai_model: 'gpt-5.5' })
-  })
-
-  it('shows the provider error when the connection check fails', async () => {
-    const user = userEvent.setup()
-    const fetchMock = mockApi({
-      'GET /api/settings/llm': LLM,
-      'GET /api/settings/llm/providers': { providers: ['openai', 'gemini'] },
-      'POST /api/settings/llm/models': { ok: false, models: [], error: 'gemini HTTP 400: API key not valid' },
-    })
-    render(<LlmStep onDone={vi.fn()} />)
-    await user.click(await screen.findByRole('radio', { name: /Google Gemini/ }))
-    await user.click(screen.getByRole('button', { name: 'Проверить подключение' }))
-    expect(await screen.findByText(/API key not valid/)).toBeInTheDocument()
-    expect(callsTo(fetchMock, 'POST', '/api/settings/llm/test')).toHaveLength(0)
-    expect(callsTo(fetchMock, 'PUT', '/api/settings/llm')).toHaveLength(0)
-  })
-})
-
 describe('BotSetupStep', () => {
-  it('requires fields, renders the prompt, lets it be edited and saves with template defaults', async () => {
+  function saving(box: { saved: BotSettings | null }) {
+    return (init: RequestInit) => {
+      box.saved = JSON.parse(String(init.body)) as BotSettings
+      return box.saved
+    }
+  }
+
+  it('universal template first; name only: renders with template defaults and starts the bot', async () => {
     const user = userEvent.setup()
-    let saved: BotSettings | null = null
+    const box: { saved: BotSettings | null } = { saved: null }
     const fetchMock = mockApi({
       'GET /api/templates': TEMPLATES,
       'GET /api/settings/bot': BOT,
-      'POST /api/templates/beauty_salon/render': (init: RequestInit) => {
+      'POST /api/templates/generic/render': (init: RequestInit) => {
         const { values } = JSON.parse(String(init.body)) as { values: Record<string, string> }
-        return { prompt: `Ты — администратор «${values.business_name}».`, missing: [] }
+        return { prompt: `Ты — консультант «${values.business_name}».`, missing: [] }
       },
-      'PUT /api/settings/bot': (init: RequestInit) => {
-        saved = JSON.parse(String(init.body)) as BotSettings
-        return saved
-      },
+      'PUT /api/settings/bot': saving(box),
     })
     const onDone = vi.fn()
     render(<BotSetupStep onDone={onDone} />)
+    const launch = await screen.findByRole('button', { name: 'Запустить бота' })
+    expect(screen.getByRole('radio', { name: /Универсальный бизнес/ })).toBeChecked()
+    await user.click(launch)
+    expect(await screen.findByText('Укажите название компании')).toBeInTheDocument()
+    expect(callsTo(fetchMock, 'PUT', '/api/settings/bot')).toHaveLength(0)
 
-    const build = await screen.findByRole('button', { name: 'Собрать промпт' })
-    expect(screen.getByRole('button', { name: 'Сохранить и включить бота' })).toBeDisabled()
-    await user.click(build)
-    expect(await screen.findByText('Заполните это поле')).toBeInTheDocument()
-    expect(callsTo(fetchMock, 'POST', '/api/templates/beauty_salon/render')).toHaveLength(0)
-
-    await user.type(screen.getByLabelText('Название'), 'Борода')
-    await user.click(build)
-    const editor = await screen.findByLabelText('Промпт бота')
-    expect(editor).toHaveValue('Ты — администратор «Борода».')
-    const body = JSON.parse(String((callsTo(fetchMock, 'POST', '/api/templates/beauty_salon/render')[0][1] as RequestInit).body))
-    expect(body).toEqual({ values: { business_name: 'Борода', phone: '' } })
-
-    await user.type(editor, ' Пиши кратко.')
-    await user.click(screen.getByRole('button', { name: 'Сохранить и включить бота' }))
+    await user.type(screen.getByLabelText('Название компании'), 'Мастер')
+    await user.click(launch)
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(true))
-    expect(saved).toMatchObject({
+    expect(callsTo(fetchMock, 'POST', '/api/templates/generic/ai-fill')).toHaveLength(0)
+    expect(box.saved).toMatchObject({
       enabled: true,
-      name: 'Администратор',
-      template_id: 'beauty_salon',
-      template_values: { business_name: 'Борода', phone: '' },
-      prompt: 'Ты — администратор «Борода». Пиши кратко.',
-      prompt_edited: true,
+      template_id: 'generic',
+      template_values: { business_name: 'Мастер' },
+      prompt: 'Ты — консультант «Мастер».',
+      prompt_edited: false,
     })
   })
 
-  it('prefills typical FAQ and services from the template and saves the edited price list', async () => {
+  it('a story goes to the AI fill and its prompt is saved with the template defaults', async () => {
     const user = userEvent.setup()
-    let saved: BotSettings | null = null
-    const salon: TemplateMeta = {
-      id: 'beauty_salon',
-      name: 'Салон красоты / барбершоп',
-      description: '',
-      fields: [
-        { key: 'business_name', label: 'Название', type: 'text', required: true, placeholder: '', hint: '' },
-        { key: 'faq', label: 'Частые вопросы и ответы', type: 'textarea', required: false, placeholder: '', hint: '', default: 'Как записаться? — Напишите нам.' },
-      ],
-      defaults: {
-        name: 'Администратор',
-        services: [
-          { name: 'Маникюр классический', price: 'от … ₸', duration_min: 60 },
-          { name: 'Укладка', price: 'от … ₸', duration_min: 45 },
-        ],
-      },
-    }
-    mockApi({
-      'GET /api/templates': [salon],
+    const box: { saved: BotSettings | null } = { saved: null }
+    const fetchMock = mockApi({
+      'GET /api/templates': TEMPLATES,
       'GET /api/settings/bot': BOT,
-      'POST /api/templates/beauty_salon/render': { prompt: 'Ты — администратор.', missing: [] },
-      'PUT /api/settings/bot': (init: RequestInit) => {
-        saved = JSON.parse(String(init.body)) as BotSettings
-        return saved
+      'POST /api/templates/beauty_salon/ai-fill': {
+        values: { business_name: 'Борода', phone: '+7 701 000 00 00' },
+        prompt: 'Ты — администратор «Борода». Телефон: +7 701 000 00 00',
+        missing: [],
       },
+      'PUT /api/settings/bot': saving(box),
     })
     const onDone = vi.fn()
     render(<BotSetupStep onDone={onDone} />)
-    expect(await screen.findByLabelText('Частые вопросы и ответы')).toHaveValue('Как записаться? — Напишите нам.')
-    expect(screen.getByText(/Не заполнено цен: 2/)).toBeInTheDocument()
-    await user.clear(screen.getByLabelText('Маникюр классический: цена'))
-    await user.type(screen.getByLabelText('Маникюр классический: цена'), '5000')
-    await user.tab()
-    await user.click(screen.getByRole('button', { name: 'Удалить «Укладка»' }))
-    await user.type(screen.getByLabelText('Название'), 'Aru')
-    await user.click(screen.getByRole('button', { name: 'Собрать промпт' }))
-    await screen.findByLabelText('Промпт бота')
-    await user.click(screen.getByRole('button', { name: 'Сохранить и включить бота' }))
+    await user.click(await screen.findByRole('radio', { name: /Салон красоты/ }))
+    await user.type(screen.getByLabelText('Название компании'), 'Борода')
+    await user.type(screen.getByLabelText(/Расскажите о бизнесе/), 'Барбершоп, звоните +7 701 000 00 00')
+    await user.click(screen.getByRole('button', { name: 'Собрать промпт и запустить бота' }))
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(true))
-    expect(saved).toMatchObject({
-      services: [{ name: 'Маникюр классический', price: '5 000 ₸', duration_min: 60 }],
-      template_values: { business_name: 'Aru', faq: 'Как записаться? — Напишите нам.' },
+    const body = JSON.parse(String((callsTo(fetchMock, 'POST', '/api/templates/beauty_salon/ai-fill')[0][1] as RequestInit).body))
+    expect(body).toEqual({ business_name: 'Борода', description: 'Барбершоп, звоните +7 701 000 00 00' })
+    expect(box.saved).toMatchObject({
+      enabled: true,
+      name: 'Администратор',
+      template_id: 'beauty_salon',
+      template_values: { business_name: 'Борода', phone: '+7 701 000 00 00' },
+      prompt: 'Ты — администратор «Борода». Телефон: +7 701 000 00 00',
     })
+  })
+
+  it('an AI failure keeps the story and offers to start without it', async () => {
+    const user = userEvent.setup()
+    mockApi({
+      'GET /api/templates': TEMPLATES,
+      'GET /api/settings/bot': BOT,
+      'POST /api/templates/generic/ai-fill': () =>
+        jsonResponse({ error: { code: 'coins_exhausted', message: 'Коины ILER закончились' } }, 409),
+    })
+    const onDone = vi.fn()
+    render(<BotSetupStep onDone={onDone} />)
+    await user.type(await screen.findByLabelText('Название компании'), 'Мастер')
+    await user.type(screen.getByLabelText(/Расскажите о бизнесе/), 'Ремонт квартир под ключ')
+    await user.click(screen.getByRole('button', { name: 'Собрать промпт и запустить бота' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Коины ILER закончились. Можно запустить бота без рассказа')
+    expect(screen.getByLabelText(/Расскажите о бизнесе/)).toHaveValue('Ремонт квартир под ключ')
+    expect(onDone).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Запустить без рассказа' }))
+    expect(screen.getByRole('button', { name: 'Запустить бота' })).toBeInTheDocument()
   })
 })

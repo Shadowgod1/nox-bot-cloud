@@ -78,15 +78,15 @@ async def test_online_subscription_end_to_end(client, other, pool, internal, onl
     assert me["payment_url"].startswith("https://bot.example.kz/pay/mock/mock_")
     ppid = _ppid(me["payment_url"])
     page = (await other.get(f"/api/payments/mock/{ppid}")).json()
-    assert page["amount_kzt"] == 70000 and page["status"] == "pending" and page["purpose_ru"] == "Подключение"
+    assert page["amount_kzt"] == 59990 and page["status"] == "pending" and page["purpose_ru"] == "Подключение"
     mailer.OUTBOX.clear()
     r = await _sign_via_page(other, ppid)
     assert r.status_code == 200 and r.json()["outcome"] == "applied", r.text
     acc = await pool.fetchrow("SELECT status, tariff, coins_limit, invoice_no, invoice_amount FROM accounts")
     assert (acc["status"], acc["tariff"], acc["coins_limit"]) == ("approved", "start", tariffs.get("start").coins)
-    assert acc["invoice_no"].startswith("NOX-") and acc["invoice_amount"] == 70000
+    assert acc["invoice_no"].startswith("NOX-") and acc["invoice_amount"] == 59990
     pay = await pool.fetchrow("SELECT * FROM payments")
-    assert (pay["method"], pay["amount_kzt"], pay["reference"], pay["staff_id"]) == ("online:mock", 70000, ppid, None)
+    assert (pay["method"], pay["amount_kzt"], pay["reference"], pay["staff_id"]) == ("online:mock", 59990, ppid, None)
     assert pay["invoice_no"] == acc["invoice_no"]
     assert await pool.fetchval("SELECT status FROM online_payments") == "succeeded"
     job = (await internal.post("/internal/jobs/claim")).json()
@@ -98,7 +98,7 @@ async def test_online_subscription_end_to_end(client, other, pool, internal, onl
     assert ev["outcome"] == "applied" and len(ev["payload_sha256"]) == 64 and ev["status"] == "succeeded"
 
     # the provider retries: nothing happens twice
-    r = await _webhook(other, ppid, amount=70000)
+    r = await _webhook(other, ppid, amount=59990)
     assert r.status_code == 200 and r.json()["outcome"] == "duplicate"
     assert await pool.fetchval("SELECT count(*) FROM payments") == 1
     assert await pool.fetchval("SELECT count(*) FROM jobs WHERE kind = 'create'") == 1
@@ -110,7 +110,7 @@ async def test_online_subscription_end_to_end(client, other, pool, internal, onl
 async def test_bad_signature_401_changes_nothing(client, other, pool, online):
     await register_verified(other)
     ppid = _ppid((await _choose_online(other))["payment_url"])
-    raw = mock.payload(ppid, "succeeded", 70000)
+    raw = mock.payload(ppid, "succeeded", 59990)
     r = await _webhook(client, ppid, raw=raw, signature="0" * 64)
     assert r.status_code == 401
     r = await client.post(HOOK, content=raw, headers={"content-type": "application/json"})
@@ -146,7 +146,7 @@ async def test_amount_mismatch_and_unknown_payment(client, other, pool, online):
     assert await pool.fetchval("SELECT status FROM accounts") == "payment_pending"
     assert await pool.fetchval("SELECT count(*) FROM payments") == 0
     assert any("требует внимания" in m.subject for m in mailer.OUTBOX)
-    r = await _webhook(client, "mock_999_nothing", amount=70000)
+    r = await _webhook(client, "mock_999_nothing", amount=59990)
     assert r.status_code == 200 and r.json()["outcome"] == "unknown_payment"
 
 
@@ -245,18 +245,18 @@ async def test_refund_adds_negative_ledger_row(client, other, pool, internal, on
     await register_verified(other)
     ppid = _ppid((await _choose_online(other))["payment_url"])
     await _sign_via_page(other, ppid)
-    r = await _webhook(client, ppid, "refunded", 70000)
+    r = await _webhook(client, ppid, "refunded", 59990)
     assert r.json()["outcome"] == "applied"
-    assert sorted(await pool.fetch("SELECT amount_kzt FROM payments"), key=lambda r: r[0]) == [(-70000,), (70000,)]
+    assert sorted(await pool.fetch("SELECT amount_kzt FROM payments"), key=lambda r: r[0]) == [(-59990,), (59990,)]
     assert await pool.fetchval("SELECT status FROM online_payments") == "refunded"
-    assert (await _webhook(client, ppid, "refunded", 70000)).json()["outcome"] == "duplicate"
+    assert (await _webhook(client, ppid, "refunded", 59990)).json()["outcome"] == "duplicate"
 
 
 async def test_recurring_token_only_when_flagged(client, other, pool, online, monkeypatch):
     await register_verified(other)
     ppid = _ppid((await _choose_online(other))["payment_url"])
     # a token in the payload is ignored while the provider does not support recurring
-    raw = json.dumps({"event_id": "e1", "payment_id": ppid, "status": "succeeded", "amount_kzt": 70000,
+    raw = json.dumps({"event_id": "e1", "payment_id": ppid, "status": "succeeded", "amount_kzt": 59990,
                       "token": "tok_x"}).encode()
     assert (await _webhook(client, ppid, raw=raw)).json()["outcome"] == "applied"
     assert await pool.fetchval("SELECT pay_token FROM accounts") is None
@@ -288,14 +288,14 @@ async def test_migration_0004_keeps_old_accounts(tmp_path):
         aid = await pool.fetchval(
             "INSERT INTO accounts(email, password_hash, company, contact_name, phone, slug, status, consent_at,"
             " tariff, invoice_no, invoice_amount, invoice_issued_at) VALUES ('old@example.kz', 'x', 'Old', 'O',"
-            " '+7 700 000 00 01', 'old', 'awaiting_payment', now(), 'start', 'NOX-2026-00007', 70000, now())"
+            " '+7 700 000 00 01', 'old', 'awaiting_payment', now(), 'start', 'NOX-2026-00007', 59990, now())"
             " RETURNING id")
         await pool.execute("INSERT INTO invoices(account_id, number, kind, tariff, amount_kzt, coins, period_start)"
-                           " VALUES ($1, 'NOX-2026-00008', 'renewal', 'start', 70000, 30000, now())", aid)
+                           " VALUES ($1, 'NOX-2026-00008', 'renewal', 'start', 59990, 30000, now())", aid)
         assert (await migrate(pool, MIGRATIONS_DIR))[0] == "0004_payments.sql"
         acc = await pool.fetchrow("SELECT status, invoice_no, invoice_amount, pay_method, invoice_note, free_until"
                                   " FROM accounts")
-        assert tuple(acc) == ("awaiting_payment", "NOX-2026-00007", 70000, None, "", None)
+        assert tuple(acc) == ("awaiting_payment", "NOX-2026-00007", 59990, None, "", None)
         inv = await pool.fetchrow("SELECT note, staff_id FROM invoices")
         assert tuple(inv) == ("", None)
         await pool.execute("UPDATE accounts SET status = 'awaiting_invoice'")
@@ -303,7 +303,7 @@ async def test_migration_0004_keeps_old_accounts(tmp_path):
         with pytest.raises(asyncpg.CheckViolationError):
             await pool.execute("UPDATE accounts SET status = 'awaiting_approval'")
         await pool.execute("INSERT INTO invoices(account_id, number, kind, tariff, amount_kzt, coins)"
-                           " VALUES ($1, 'NOX-2026-00009', 'upgrade', 'pro', 160000, 120000)", aid)
+                           " VALUES ($1, 'NOX-2026-00009', 'upgrade', 'pro', 149990, 120000)", aid)
         assert await migrate(pool, MIGRATIONS_DIR) == [], "applied once"
     finally:
         await pool.close()

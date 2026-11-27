@@ -24,7 +24,7 @@ beforeEach(() => {
 })
 
 describe('TariffPicker', () => {
-  it('paid tariffs first, Free last and muted; invoice through a manager when online is off', async () => {
+  it('Free first and highlighted, then the paid tariffs; invoice through a manager when online is off', async () => {
     const fetch = mockFetch({
       'GET /api/tariffs': () => json([...TARIFFS, FREE]),
       'GET /api/public-config': () => json(CONFIG_OFF),
@@ -35,13 +35,14 @@ describe('TariffPicker', () => {
     render(<TariffPicker onChosen={onChosen} />)
     const radios = await screen.findAllByRole('radio')
     expect(radios).toHaveLength(3)
-    expect(radios[0]).toHaveTextContent('Старт')
-    expect(radios[1]).toHaveTextContent('Бизнес')
-    expect(radios[2]).toHaveTextContent('Free (тест)')
+    expect(radios[0]).toHaveTextContent('Free')
+    expect(radios[1]).toHaveTextContent('Старт')
+    expect(radios[2]).toHaveTextContent('Бизнес')
     const free = screen.getByRole('radio', { name: /Free \(тест\)/ })
-    expect(free.className).toContain('border-dashed')
-    expect(free).toHaveTextContent('бесплатно · 14 дней')
-    expect(free).toHaveTextContent('Бот подключается сразу, без оплаты')
+    expect(free.className).toContain('border-accent')
+    expect(free).toHaveTextContent('Начните с этого')
+    expect(free).toHaveTextContent('0 ₸14 дней теста')
+    expect(free).toHaveTextContent('Бот подключается сразу, без оплаты и без карты')
     const business = screen.getByRole('radio', { name: /Бизнес/ })
     expect(business).toHaveTextContent('39 000 ₸')
     await user.click(business)

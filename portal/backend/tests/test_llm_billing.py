@@ -26,7 +26,7 @@ async def _paid_cloud(client, other, pool, internal, *, body=None) -> tuple[int,
                           json={"kind": "subscription"})
     assert r.status_code == 200, r.text
     r = await client.post(f"/api/staff/applications/{aid}/mark-paid", headers=csrf(client),
-                          json={"amount_kzt": 70000, **(body or {})})
+                          json={"amount_kzt": 59990, **(body or {})})
     assert r.status_code == 200, r.text
     job = (await internal.post("/internal/jobs/claim")).json()
     key = unseal(job["gateway_key_sealed"]) if job["gateway_key_sealed"] else ""
@@ -150,7 +150,7 @@ async def _renewal_invoice(pool, aid):
     """What staff «Выставить счёт на продление» creates (for tests that have no staff session)."""
     async with pool.acquire() as conn, conn.transaction():
         end = await conn.fetchval("SELECT period_end FROM accounts WHERE id = $1", aid)
-        return await billing.insert_invoice(conn, aid, "renewal", "start", 70000, 1000, period_start=end)
+        return await billing.insert_invoice(conn, aid, "renewal", "start", 59990, 1000, period_start=end)
 
 
 async def test_rollover_on_time_expires_monthly_keeps_topups(client, pool):
@@ -183,10 +183,10 @@ async def test_rollover_on_time_expires_monthly_keeps_topups(client, pool):
     assert "за декабрь" in mailer.OUTBOX[0].text and mailer.OUTBOX[0].to == "owner@example.kz"
     assert (await client.get(f"/api/staff/applications/{aid}")).json()["renewal_due"] is False
     inv = await pool.fetchrow("SELECT * FROM invoices")
-    assert inv["kind"] == "renewal" and inv["period_start"] == old_end and inv["amount_kzt"] == 70000
+    assert inv["kind"] == "renewal" and inv["period_start"] == old_end and inv["amount_kzt"] == 59990
     assert inv["note"] == "за декабрь" and inv["staff_id"] is not None
     r = await client.post(f"/api/staff/invoices/{inv['id']}/mark-paid", headers=csrf(client),
-                          json={"amount_kzt": 70000, "reference": "п/п 5"})
+                          json={"amount_kzt": 59990, "reference": "п/п 5"})
     assert r.status_code == 200, r.text
     acc = await pool.fetchrow("SELECT period_start, period_end, topup_carry FROM accounts WHERE id = $1", aid)
     assert acc["period_start"] == old_end  # continues from the old end
@@ -229,7 +229,7 @@ async def test_grace_then_suspend_then_pay_resumes(client, pool, upstream):
     await pool.execute("UPDATE jobs SET status = 'done'")
     inv_id = await pool.fetchval("SELECT id FROM invoices")
     await staff_login(client, pool)
-    r = await client.post(f"/api/staff/invoices/{inv_id}/mark-paid", headers=csrf(client), json={"amount_kzt": 70000})
+    r = await client.post(f"/api/staff/invoices/{inv_id}/mark-paid", headers=csrf(client), json={"amount_kzt": 59990})
     assert r.status_code == 200, r.text
     acc = await pool.fetchrow("SELECT period_start, suspend_reason FROM accounts")
     assert acc["suspend_reason"] is None

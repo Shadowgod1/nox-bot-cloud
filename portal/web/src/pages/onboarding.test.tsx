@@ -109,7 +109,7 @@ describe('coins as dialogs', () => {
     render(<TariffPicker onChosen={() => undefined} />)
     const start = await screen.findByRole('radio', { name: /Старт/ })
     expect(start).toHaveTextContent('≈ 800 диалогов в месяц')
-    expect(screen.getByRole('radio', { name: /Free/ })).toHaveTextContent('2 000 коинов — ≈ 50 диалогов на весь тест')
+    expect(screen.getByRole('radio', { name: /Free/ })).toHaveTextContent('2 000 коинов на тест≈ 50 диалогов на весь тест')
   })
 
   it('the coin balance shows dialogs left', async () => {

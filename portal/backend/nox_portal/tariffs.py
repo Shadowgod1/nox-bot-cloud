@@ -1,6 +1,6 @@
 """Tariffs: the only place where names, monthly prices (KZT) and monthly coin limits live.
 
-Cloud prices and coin limits from the sales price list v5 (2026-11); changing them
+Cloud prices and coin limits from the sales price list v6 (27.11.2026: 59 990 / 89 990 / 149 990); changing them
 affects only invoices issued afterwards (an issued invoice keeps its amount in accounts.invoice_amount).
 """
 
@@ -17,9 +17,9 @@ class Tariff:
 
 
 TARIFFS: tuple[Tariff, ...] = (
-    Tariff("start", "Старт", 70000, 30000, "~50 диалогов в день: цены, график, адрес, запись"),
-    Tariff("business", "Бизнес", 100000, 60000, "~100 диалогов в день: салон, клиника, сервис с записью"),
-    Tariff("pro", "Про", 160000, 120000, "~200 диалогов в день: сеть филиалов, большой поток"),
+    Tariff("start", "Старт", 59990, 30000, "~50 диалогов в день: цены, график, адрес, запись"),
+    Tariff("business", "Бизнес", 89990, 60000, "~100 диалогов в день: салон, клиника, сервис с записью"),
+    Tariff("pro", "Про", 149990, 120000, "~200 диалогов в день: сеть филиалов, большой поток"),
 )
 
 # Free test tariff: no invoice, approved at once, one grant of coins for the trial (NOX_FREE_DAYS), no monthly

@@ -33,7 +33,8 @@ def preset_values() -> tuple[str, str, str, str] | None:
     """(email, name, company, hash) from the environment, or None when absent or unusable."""
     s = get_settings()
     raw_email, password_hash = s.owner_email.strip(), s.owner_password_hash.strip()
-    if not raw_email and not password_hash:
+    if not password_hash:
+        # absent, or already wiped from .env by the cloud provisioner once the owner was created: nothing to warn about
         return None
     try:
         email = _email(raw_email)

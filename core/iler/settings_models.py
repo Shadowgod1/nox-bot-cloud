@@ -197,12 +197,14 @@ ANTHROPIC_MODELS = ("claude-sonnet-5-5", "claude-haiku-5-5")
 
 class LlmSettings(BaseModel):
     # API keys are not settings: they are ILER's and come from the environment (config.Settings)
-    provider: Literal["openai", "gemini", "anthropic"] = "openai"
+    # new bots start on Claude Haiku (cheap, fast, low effort); without a Claude key the router takes the first
+    # provider ILER has a key for
+    provider: Literal["openai", "gemini", "anthropic"] = "anthropic"
     # defaults only; the admin UI offers the models listed by the provider for the owner's key
     openai_model: str = "gpt-5.4-mini"
     openai_fallback_model: str | None = None
     gemini_model: str = "gemini-3.8-flash"
-    anthropic_model: Literal["claude-sonnet-5-5", "claude-haiku-5-5"] = "claude-sonnet-5-5"
+    anthropic_model: Literal["claude-sonnet-5-5", "claude-haiku-5-5"] = "claude-haiku-5-5"
     # WhatsApp chat: low effort keeps replies fast; the owner can raise it
     anthropic_effort: Literal["low", "medium", "high"] = "low"
     emergency_provider: Literal["openai", "gemini", "anthropic"] | None = None

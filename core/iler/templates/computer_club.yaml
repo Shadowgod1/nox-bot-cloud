@@ -8,18 +8,18 @@ description: >-
 
 fields:
   - {key: business_name, label: Название клуба, type: text, required: true, placeholder: "CyberArena"}
-  - {key: address, label: Адрес, type: text, required: true, placeholder: "Алматы, ул. Абая 10, 2 этаж, вход со двора"}
+  - {key: address, label: Адрес, type: text, required: false, placeholder: "Алматы, ул. Абая 10, 2 этаж, вход со двора"}
   - {key: phone, label: Телефон для связи, type: phone, required: false, placeholder: "+7 701 000 00 00"}
-  - {key: hours, label: Часы работы, type: text, required: true, placeholder: "Круглосуточно"}
+  - {key: hours, label: Часы работы, type: text, required: false, placeholder: "Круглосуточно"}
   - key: zones
     label: Зоны и железо
     type: textarea
-    required: true
+    required: false
     placeholder: "Общий зал — 20 ПК, RTX 4060, мониторы 165 Гц\nVIP — 10 ПК, RTX 4080, 240 Гц, отдельная комната\nPS5 — 2 консоли, диваны"
   - key: prices
     label: Тарифы и пакеты
     type: textarea
-    required: true
+    required: false
     placeholder: "Общий зал — 800 ₸/час\nVIP — 1500 ₸/час\nПакет «Ночь» 22:00–08:00 — 3500 ₸"
   - key: rules
     label: Правила клуба
@@ -38,16 +38,19 @@ prompt: |
   живой администратор на ресепшене: без канцелярита; если клиент пишет на «ты» — можно на «ты». Разбираешься
   в играх и железе клуба, но не навязываешься.
 
-  О клубе
-  Адрес: {{address}}
-  Часы работы: {{hours}}
+  {{#address}}Адрес: {{address}}{{/address}}
+  {{#hours}}Часы работы: {{hours}}{{/hours}}
   {{#phone}}Телефон: {{phone}}{{/phone}}
+  {{#zones}}
 
   Зоны и железо:
   {{zones}}
+  {{/zones}}
+  {{#prices}}
 
   Тарифы и пакеты:
   {{prices}}
+  {{/prices}}
   {{#rules}}
 
   Правила клуба:
