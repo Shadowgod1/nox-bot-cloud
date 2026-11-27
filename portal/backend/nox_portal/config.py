@@ -59,9 +59,9 @@ class Settings(BaseSettings):
     # shown to clients in the tariff picker; false = only staff can assign it
     free_tariff_public: bool = True
     # at most this many Free accounts approved / provisioning / active at once
-    free_max_active: int = 5
+    free_max_active: int = 20
     # a Free account is suspended this many days after approval unless it moves to a paid tariff
-    free_days: int = 14
+    free_days: int = 7
 
     # ---- online payments (nox_portal/payments) ----
     # "" / none = online payment is off (only invoices via a manager); mock = fake checkout for tests

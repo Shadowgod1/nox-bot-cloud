@@ -281,7 +281,7 @@ async def test_free_is_approved_at_once(client, other, pool, internal):
     assert me["status"] == "approved" and me["tariff"] == "free" and me["pay_method"] == "free"
     assert me["invoice_no"] is None
     free_until = datetime.fromisoformat(me["free_until"])
-    assert timedelta(days=13, hours=23) < free_until - datetime.now(free_until.tzinfo) <= timedelta(days=14)
+    assert timedelta(days=6, hours=23) < free_until - datetime.now(free_until.tzinfo) <= timedelta(days=7)
     assert await pool.fetchval("SELECT count(*) FROM invoices") == 0
     assert await pool.fetchval("SELECT count(*) FROM payments") == 0
     audit = await pool.fetchrow("SELECT details FROM audit_log WHERE action = 'client.auto_free'")
