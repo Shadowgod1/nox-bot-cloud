@@ -6,6 +6,9 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
+BAD_JSON = "Неверный формат запроса"
+
+
 class ApiError(Exception):
     def __init__(self, status: int, code: str, message: str = "", headers: dict | None = None):
         super().__init__(message or code)
@@ -34,6 +37,8 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_: Request, exc: RequestValidationError):
         first = exc.errors()[0] if exc.errors() else {}
+        if first.get("type") == "json_invalid":  # broken JSON body: pydantic says "0: JSON decode error"
+            return JSONResponse(_body("validation_error", BAD_JSON), status_code=422)
         loc = ".".join(str(p) for p in first.get("loc", []) if p != "body")
         msg = str(first.get("msg", "invalid")).removeprefix("Value error, ")
         return JSONResponse(_body("validation_error", f"{loc}: {msg}" if loc else msg), status_code=422)

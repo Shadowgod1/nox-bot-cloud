@@ -3,7 +3,7 @@
   /llm/anthropic/... -> https://api.anthropic.com/...
   /llm/openai/...    -> https://api.openai.com/...
   /llm/gemini/...    -> https://generativelanguage.googleapis.com/...
-  GET /llm/v1/balance -> {"coins_left", "monthly_limit", "period_end", "status", "providers"}
+  GET /llm/v1/balance -> {"coins_left", "monthly_limit", "period_end", "status", "providers", "spent", "trial_end"}
     providers: the providers this gateway has a company key for (the bot offers only those)
 
 The client sends its virtual key (nox_vk_...) in x-api-key, Authorization: Bearer or x-goog-api-key (any
@@ -166,9 +166,12 @@ async def get_balance(request: Request):
         status = "active"
     s = get_settings()
     providers = [p for p in ("anthropic", "openai", "gemini") if getattr(s, f"upstream_{p}_key").strip()]
+    # spent: the exact ledger spend of the period (coins_left is whole coins, so limit - coins_left overstates it);
+    # trial_end: a Free account stops at this moment, before period_end
     return {"coins_left": bal.coins_left, "monthly_limit": bal.monthly_limit,
             "period_end": bal.period_end.isoformat() if bal.period_end else None, "status": status,
-            "providers": providers}
+            "providers": providers, "spent": round(float(bal.spent), 2),
+            "trial_end": bal.trial_end.isoformat() if bal.trial_end else None}
 
 
 async def _read_body(request: Request, cap: int) -> bytes | None:

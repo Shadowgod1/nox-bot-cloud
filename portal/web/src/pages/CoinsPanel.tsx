@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { Coins, CreditCard, FileText, PlusCircle } from 'lucide-react'
 import {
-  api, coins, dialogsText, formatDay, goToCheckout, INVOICE_KIND, loadPublicConfig, money,
+  api, coins, DEFAULT_COINS_PER_DIALOG, dialogsText, formatDay, goToCheckout, INVOICE_KIND, loadPublicConfig, money, spentCoins,
   type InvoiceListItem, type PublicConfig, type TopupOut, type UsageOut,
 } from '../api'
 import { Alert, Button, Card } from '../components/ui'
@@ -61,6 +61,9 @@ export function CoinsPanel() {
   const total = b ? b.monthly_coins + b.topup_coins : 0
   const percent = b && total > 0 ? Math.max(0, Math.min(100, (b.coins_left / total) * 100)) : 0
   const maxDay = usage ? Math.max(1, ...usage.by_day.map((d) => d.coins)) : 1
+  // Free (test): the package works until the test ends, not until the end of the month
+  const trial = !!b?.trial_end
+  const pack = config?.topup
 
   return (
     <Card className="p-6">
@@ -73,7 +76,11 @@ export function CoinsPanel() {
       </div>
       {choosing && (
         <div className="mt-3 flex flex-wrap items-center gap-2 rounded-nx border border-line bg-sunken p-3" role="group" aria-label="Способ пополнения">
-          <span className="w-full text-[13px] text-ink-2">Пакет 10 000 коинов, не сгорает в конце месяца.</span>
+          <span className="w-full text-[13px] text-ink-2" data-testid="topup-pack">
+            {pack
+              ? `Пакет ${coins(pack.coins)} коинов за ${money(pack.price_kzt)}, не сгорает в конце месяца.`
+              : 'Пакет коинов, не сгорает в конце месяца.'}
+          </span>
           {config?.online_payments && (
             <Button size="sm" variant="primary" icon={<CreditCard className="size-4" aria-hidden />} loading={busy === 'online'} onClick={() => void topup('online')}>
               Оплатить онлайн
@@ -114,21 +121,26 @@ export function CoinsPanel() {
           </div>
           <dl className="mt-4 grid gap-x-6 gap-y-2 text-[13.5px] sm:grid-cols-3">
             <div>
-              <dt className="text-[12px] font-semibold text-ink-3">Месячный пакет</dt>
-              <dd className="text-ink">{coins(b.monthly_coins)} (до {formatDay(b.period_end)})</dd>
+              <dt className="text-[12px] font-semibold text-ink-3">{trial ? 'Пакет на тест' : 'Месячный пакет'}</dt>
+              <dd className="text-ink" data-testid="coins-package">
+                {coins(b.monthly_coins)} (до {formatDay(trial ? b.trial_end : b.period_end)})
+              </dd>
             </div>
             <div>
               <dt className="text-[12px] font-semibold text-ink-3">Докуплено, не сгорает</dt>
               <dd className="text-ink">{coins(b.topup_coins)}</dd>
             </div>
             <div>
-              <dt className="text-[12px] font-semibold text-ink-3">Потрачено в этом месяце</dt>
-              <dd className="text-ink">{coins(b.spent)}</dd>
+              <dt className="text-[12px] font-semibold text-ink-3">{trial ? 'Потрачено за тест' : 'Потрачено в этом месяце'}</dt>
+              <dd className="text-ink" data-testid="coins-spent">{spentCoins(b.spent)}</dd>
             </div>
           </dl>
           <p className="mt-2 text-[12.5px] text-ink-3">
-            Один диалог с клиентом в среднем стоит около {config?.coins_per_dialog ?? 20} коинов, сложные — дороже. 1 коин = $0.001
-            расхода модели. Неиспользованный месячный пакет сгорает в конце месяца.
+            Один диалог с клиентом в среднем стоит около {config?.coins_per_dialog ?? DEFAULT_COINS_PER_DIALOG} коинов, сложные — дороже.
+            1 коин = $0.001 расхода модели.{' '}
+            {trial
+              ? `Тест закончится ${formatDay(b.trial_end)}. Чтобы бот отвечал и дальше, выберите тариф.`
+              : 'Неиспользованный месячный пакет сгорает в конце месяца.'}
           </p>
         </>
       )}
@@ -140,7 +152,7 @@ export function CoinsPanel() {
               <li key={d.day} className="grid grid-cols-[84px_1fr_64px] items-center gap-2">
                 <span className="text-ink-3 tabular-nums">{d.day.split('-').reverse().join('.')}</span>
                 <span className="h-2 rounded-full bg-accent/70" style={{ width: `${Math.max(2, (d.coins / maxDay) * 100)}%` }} />
-                <span className="text-right tabular-nums text-ink">{coins(d.coins)}</span>
+                <span className="text-right tabular-nums text-ink">{spentCoins(d.coins)}</span>
               </li>
             ))}
           </ul>
@@ -162,7 +174,7 @@ export function CoinsPanel() {
                 <tr key={`${m.provider}/${m.model}`} className="border-t border-line">
                   <td className="py-1.5 font-mono text-[12.5px] text-ink">{m.model}</td>
                   <td className="py-1.5 text-right tabular-nums text-ink-2">{m.requests}</td>
-                  <td className="py-1.5 text-right tabular-nums text-ink">{coins(m.coins)}</td>
+                  <td className="py-1.5 text-right tabular-nums text-ink">{spentCoins(m.coins)}</td>
                 </tr>
               ))}
             </tbody>

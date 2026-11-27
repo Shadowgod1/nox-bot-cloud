@@ -49,16 +49,16 @@ def clear_session_cookies(response: Response) -> None:
 async def current_user(request: Request, response: Response) -> User:
     token = request.cookies.get(tokens.SESSION_COOKIE)
     if not token:
-        raise ApiError(401, "unauthorized", "Not signed in")
+        raise ApiError(401, "unauthorized", "Войдите в панель, чтобы продолжить")
     try:
         claims = tokens.decode_session(token)
     except tokens.InvalidSession:
-        raise ApiError(401, "unauthorized", "Session expired") from None
+        raise ApiError(401, "unauthorized", "Сессия истекла, войдите снова") from None
     row = await get_pool().fetchrow(
         "SELECT id, email, name, role, password_hash FROM users WHERE id = $1", claims["uid"]
     )
     if row is None or not hmac.compare_digest(tokens.password_fingerprint(row["password_hash"]), claims["pwv"]):
-        raise ApiError(401, "unauthorized", "Session expired")
+        raise ApiError(401, "unauthorized", "Сессия истекла, войдите снова")
     if tokens.needs_refresh(claims):
         set_session_cookies(response, row["id"], row["password_hash"], new_csrf=False)
         if request.cookies.get(tokens.CSRF_COOKIE):  # extend the CSRF cookie alongside the session
@@ -71,7 +71,7 @@ async def current_user(request: Request, response: Response) -> User:
 
 async def require_owner(user: User = Depends(current_user)) -> User:
     if user.role != "owner":
-        raise ApiError(403, "forbidden", "Owner role required")
+        raise ApiError(403, "forbidden", "Это может сделать только владелец")
     return user
 
 
@@ -81,7 +81,7 @@ async def csrf_protect(request: Request) -> None:
     cookie = request.cookies.get(tokens.CSRF_COOKIE, "")
     header = request.headers.get(tokens.CSRF_HEADER, "")
     if not cookie or not header or not hmac.compare_digest(cookie.encode(), header.encode()):
-        raise ApiError(403, "csrf_failed", "CSRF token missing or invalid")
+        raise ApiError(403, "csrf_failed", "Сессия устарела, обновите страницу")
 
 
 async def audit(user_id: int | None, action: str, details: dict | None = None) -> None:

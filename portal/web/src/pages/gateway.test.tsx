@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { browser, resetPublicConfig, type ApplicationDetail } from '../api'
+import { browser, resetPublicConfig, spentCoins, type ApplicationDetail } from '../api'
 import { bodyOf, json, mockFetch, renderAt } from '../test/utils'
 import { CoinsPanel } from './CoinsPanel'
 import { GatewayPanel, InvoicesPanel } from './staff/GatewayPanel'
@@ -41,6 +41,55 @@ describe('CoinsPanel (cabinet)', () => {
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '69')
     expect(await screen.findByText('№ NOX-2026-00004')).toHaveAttribute('href', '/invoice/NOX-2026-00004')
     expect(screen.getByText('№ NOX-2026-00001')).toHaveAttribute('href', '/invoice')
+  })
+
+  it('a Free test: the package lasts until the test end, the spend is exact (2,32, not 2)', async () => {
+    resetPublicConfig()
+    const free = {
+      ...USAGE,
+      balance: {
+        ...USAGE.balance, coins_left: 1997, monthly_limit: 2000, monthly_coins: 2000, topup_coins: 0, spent: 2.318,
+        period_end: '2026-12-27T07:00:00Z', trial_end: '2026-12-11T07:00:00Z',
+      },
+      by_day: [{ day: '2026-11-27', coins: 2.318 }],
+    }
+    mockFetch({
+      'GET /api/me/usage': () => json(free),
+      'GET /api/me/invoices': () => json([]),
+      'GET /api/public-config': () => json({ instance_domain: 'example.kz', online_payments: false, online_methods: [], coins_per_dialog: 5 }),
+    })
+    renderAt('/', <CoinsPanel />)
+    expect(await screen.findByTestId('coins-left')).toHaveTextContent('1 997')
+    expect(screen.getByText('Пакет на тест')).toBeInTheDocument()
+    expect(screen.getByTestId('coins-package')).toHaveTextContent('2 000 (до 11.12.2026)')
+    expect(screen.queryByText(/27\.12\.2026/)).toBeNull()
+    expect(screen.getByText('Потрачено за тест')).toBeInTheDocument()
+    expect(screen.getByTestId('coins-spent')).toHaveTextContent('2,32')
+    expect(await screen.findByText(/около 5 коинов/)).toBeInTheDocument()
+    expect(screen.getByText(/Тест закончится 11\.12\.2026/)).toBeInTheDocument()
+  })
+
+  it('spent coins: two decimals under 100, whole coins from 100', () => {
+    expect(spentCoins(2.318)).toBe('2,32')
+    expect(spentCoins(0.4)).toBe('0,4')
+    expect(spentCoins(12549.4)).toBe('12 549')
+  })
+
+  it('"Пополнить" shows the pack price', async () => {
+    resetPublicConfig()
+    mockFetch({
+      'GET /api/me/usage': () => json(USAGE),
+      'GET /api/me/invoices': () => json([]),
+      'GET /api/public-config': () =>
+        json({ instance_domain: 'example.kz', online_payments: false, online_methods: [], topup: { coins: 10000, price_kzt: 9900 } }),
+    })
+    const user = userEvent.setup()
+    renderAt('/', <CoinsPanel />)
+    await screen.findByTestId('coins-left')
+    await user.click(screen.getByRole('button', { name: 'Пополнить' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('topup-pack')).toHaveTextContent('Пакет 10 000 коинов за 9 900 ₸, не сгорает в конце месяца.'),
+    )
   })
 
   it('"Пополнить" through a manager sends a request', async () => {

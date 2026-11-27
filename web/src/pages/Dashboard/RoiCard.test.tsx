@@ -46,7 +46,7 @@ describe('Что сделал бот', () => {
     expect(within(list).getByText('диалогов провёл сам')).toBeInTheDocument()
     expect(within(list).getByText('заявок собрал')).toBeInTheDocument()
     expect(within(list).getByText('с 21:00 до 09:00')).toBeInTheDocument()
-    expect(within(list).getByText('212,4')).toBeInTheDocument()
+    expect(within(list).getByText('212')).toBeInTheDocument()
 
     await user.click(screen.getByRole('radio', { name: '30 дней' }))
     expect(await within(screen.getByTestId('roi-stats')).findByText('156')).toBeInTheDocument()

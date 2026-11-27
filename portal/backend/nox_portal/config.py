@@ -122,8 +122,10 @@ class Settings(BaseSettings):
     alert_cooldown_seconds: int = 1800
 
     # ---- client-facing texts ----
-    # coins one typical client dialog costs: tariff cards and the cabinet show "≈ N диалогов" (tariffs.dialogs)
-    coins_per_dialog: int = 20
+    # coins one typical client dialog costs: the single source of every "≈ N диалогов" (tariff cards and their
+    # "~N диалогов в день", the cabinet balance, the FAQ). Measured on Haiku with prompt caching: ~0.2-0.6 coin per
+    # bot reply, a 13-message dialog ~2.3 coins; 5 leaves room for longer dialogs and price photos.
+    coins_per_dialog: int = 5
     # support contacts shown in the portal (header/footer, login panel, cabinet) and in the signature of letters;
     # empty = not shown. WhatsApp: the number in digits (wa.me link), e.g. 77001234567
     support_phone: str = ""

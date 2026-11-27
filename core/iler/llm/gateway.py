@@ -7,7 +7,9 @@ on coins:
 
 - zero balance: HTTP 402 ``{"error": {"type": "insufficient_coins"}}``;
 - revoked or suspended key: HTTP 401 ``{"error": {"type": "key_revoked"}}``;
-- balance: ``GET <gateway>/llm/v1/balance`` -> ``{"coins_left", "monthly_limit", "period_end", "status"}``.
+- balance: ``GET <gateway>/llm/v1/balance`` -> ``{"coins_left", "monthly_limit", "period_end", "status"}``,
+  newer gateways add ``"spent"`` (exact spend of the period, the authority over ``limit - coins_left``, which is
+  off by the fraction ``coins_left`` drops) and ``"trial_end"`` (a Free test stops then, before ``period_end``).
 
 After a 402 / 401 of that kind the bot stops calling the LLM (``blocked()``) until a balance read made
 after the block shows coins again. The balance is cached for BALANCE_TTL_S (errors too, so a gateway that
@@ -77,6 +79,8 @@ class Balance:
     status: str
     # providers the gateway has a company key for; None = an older gateway that does not say (all of them)
     providers: tuple[str, ...] | None = None
+    spent: float | None = None  # exact spend of the period; None = an older gateway (use limit - coins_left)
+    trial_end: str | None = None  # Free test: the account stops at this moment; None = not a test
 
     @property
     def revoked(self) -> bool:
@@ -149,13 +153,19 @@ async def _fetch() -> Balance:
             last = _state.balance
             return Balance(coins_left=last.coins_left if last else 0.0,
                            monthly_limit=last.monthly_limit if last else 0.0,
-                           period_end=last.period_end if last else None, status="revoked")
+                           period_end=last.period_end if last else None, status="revoked",
+                           spent=last.spent if last else None, trial_end=last.trial_end if last else None)
     if resp.status_code != 200:
         raise RuntimeError(f"balance HTTP {resp.status_code}")
     data = resp.json()
     if not isinstance(data, dict):
         raise ValueError("balance is not an object")
     period_end = data.get("period_end")
+    trial_end = data.get("trial_end")
+    try:
+        spent = _number(data["spent"]) if data.get("spent") is not None else None
+    except ValueError:
+        spent = None
     raw_providers = data.get("providers")
     providers = (tuple(p for p in raw_providers if isinstance(p, str))
                  if isinstance(raw_providers, list) else None)
@@ -165,6 +175,8 @@ async def _fetch() -> Balance:
         monthly_limit=_number(data.get("monthly_limit") or 0),
         period_end=str(period_end) if period_end else None,
         status=str(data.get("status") or "active"),
+        spent=spent,
+        trial_end=str(trial_end) if trial_end else None,
     )
 
 

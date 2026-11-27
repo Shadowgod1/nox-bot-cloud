@@ -42,6 +42,12 @@ async def test_register_validation(client, field, value):
     assert r.json()["error"]["code"] == "validation_error"
 
 
+async def test_broken_json_body_gets_a_russian_message(client):
+    r = await client.post("/api/auth/register", content=b"{not json", headers={"Content-Type": "application/json"})
+    assert r.status_code == 422
+    assert r.json()["error"] == {"code": "validation_error", "message": "Неверный формат запроса"}
+
+
 @pytest.mark.parametrize("slug", sorted(slugs.RESERVED))
 async def test_reserved_slugs_rejected(client, slug):
     r = await client.post("/api/auth/register", json={**REG, "slug": slug})

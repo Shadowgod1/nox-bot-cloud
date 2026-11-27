@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
 import { Link } from 'react-router'
 import { LogOut, MessageCircle, Moon, Sun } from 'lucide-react'
 import { useTheme } from '../theme'
@@ -6,18 +6,36 @@ import { SupportLinks, usePublicConfig } from './Support'
 import { cx } from './ui'
 import { Backdrop } from './Backdrop'
 
+/** The living bot mark of the admin panel (blinks, glances around, the antenna glows noxsw lime), in portal violet. */
+export function BotMark() {
+  const gradient = useId()
+  return (
+    <svg aria-hidden viewBox="0 0 32 32" className="size-8 shrink-0" data-testid="bot-mark">
+      <defs>
+        <linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" style={{ stopColor: 'color-mix(in oklab, var(--nx-violet) 78%, white)' }} />
+          <stop offset="1" style={{ stopColor: 'var(--nx-violet)' }} />
+        </linearGradient>
+      </defs>
+      <rect width="32" height="32" rx="9" fill={`url(#${gradient})`} />
+      <line x1="16" y1="10" x2="16" y2="6.6" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" />
+      <circle className="nox-antenna" cx="16" cy="5.6" r="2" fill="#c6ff3d" />
+      <rect x="6" y="10" width="20" height="15" rx="6" fill="#fff" />
+      <g className="nox-eyes fill-violet">
+        <rect className="nox-eye" x="11" y="14.5" width="3" height="5.5" rx="1.5" />
+        <rect className="nox-eye" x="18" y="14.5" width="3" height="5.5" rx="1.5" />
+      </g>
+    </svg>
+  )
+}
+
 export function Wordmark({ to = '/', subtitle }: { to?: string; subtitle?: string }) {
   return (
-    <Link to={to} aria-label="Nox Bot — на главную" className="flex items-center gap-2.5 text-ink no-underline">
-      {/* the noxsw.kz wordmark: NOX SW in Neue Machina + a mono BOT tag */}
-      <span className="font-display text-[21px] leading-none font-extrabold tracking-[-0.02em] text-ink">NOX SW</span>
-      <span className="border border-accent/45 bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] leading-none font-bold tracking-[0.1em] text-accent-ink">
-        BOT
-      </span>
+    <Link to={to} aria-label="Nox Bot — на главную" className="nox-wordmark flex items-center gap-2.5 text-ink no-underline select-none">
+      <BotMark />
+      <span className="font-display text-[20px] leading-none font-extrabold tracking-[-0.01em] whitespace-nowrap text-ink">NOX SW</span>
       {subtitle && (
-        <span className="ml-1 hidden border-l border-line-strong pl-3 font-mono text-[11px] tracking-[0.08em] text-ink-3 uppercase sm:inline">
-          {subtitle}
-        </span>
+        <span className="ml-0.5 hidden border-l border-line-strong pl-3 text-[13px] leading-none text-ink-3 sm:inline">{subtitle}</span>
       )}
     </Link>
   )

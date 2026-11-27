@@ -1,4 +1,5 @@
 import type { Conversation, ConversationRow, Message, ServerEvent } from '../../api/types'
+import { formatPhone } from '../../components/PhoneListInput'
 
 type DataOf<K extends ServerEvent['type']> = Extract<ServerEvent, { type: K }>['data']
 
@@ -26,4 +27,15 @@ export function byLastMessageDesc(a: Conversation, b: Conversation): number {
   const ta = a.last_message_at ? Date.parse(a.last_message_at) : 0
   const tb = b.last_message_at ? Date.parse(b.last_message_at) : 0
   return tb - ta || b.id - a.id
+}
+
+/** A WhatsApp name worth showing: "." or other punctuation / spaces only is no name. */
+export function realName(name: string | null | undefined): string | null {
+  const n = (name ?? '').trim()
+  return /[\p{L}\p{N}]/u.test(n) ? n : null
+}
+
+/** List row / chat header title: the WhatsApp name, else the formatted phone ("+7 701 123 45 67"). */
+export function conversationTitle(c: Pick<Conversation, 'name' | 'phone'>): string {
+  return realName(c.name) ?? (formatPhone(c.phone ?? '') || c.phone)
 }

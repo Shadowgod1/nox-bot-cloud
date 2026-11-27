@@ -46,6 +46,21 @@ describe('Conversations', () => {
     vi.stubGlobal('EventSource', FakeEventSource)
   })
 
+  it('a name of only punctuation shows the formatted phone in the list and the header', async () => {
+    mockApi({
+      'GET /api/conversations': { items: [conv(1, '.', 'Привет'), conv(2, ' -- ', 'Ок'), conv(3, 'Алина', 'Да')], next_cursor: null },
+      'GET /api/conversations/1/messages': { items: [msg(10, 1, 'Привет', '2026-11-11T10:00:00Z')], next_cursor: null },
+    })
+    renderAt('/conversations/1')
+    const list = await screen.findByRole('list')
+    expect(within(list).getByText('+7 701 000 00 01')).toBeInTheDocument()
+    expect(within(list).getByText('+7 701 000 00 02')).toBeInTheDocument()
+    expect(within(list).getByText('Алина')).toBeInTheDocument()
+    expect(within(list).queryByText('.')).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '+7 701 000 00 01' })).toBeInTheDocument()
+    expect(screen.queryByText('77010000001')).not.toBeInTheDocument() // no second, raw phone under the header
+  })
+
   it('appends message on SSE message.new', async () => {
     mockApi({
       'GET /api/conversations': { items: [conv(1, 'Данияр', 'Привет'), conv(2, 'Алина', 'Ок')], next_cursor: null },

@@ -37,5 +37,7 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_: Request, exc: RequestValidationError):
         first = exc.errors()[0] if exc.errors() else {}
+        if first.get("type") == "json_invalid":  # broken JSON body: pydantic says "body.0: JSON decode error"
+            return JSONResponse(_body("validation_error", "Неверный формат запроса"), status_code=422)
         loc = ".".join(str(p) for p in first.get("loc", []))
         return JSONResponse(_body("validation_error", f"{loc}: {first.get('msg', 'invalid')}"), status_code=422)

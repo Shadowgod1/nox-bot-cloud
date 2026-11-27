@@ -105,6 +105,8 @@ async def get_public_config():
             # qr: show a QR / deeplink of the invoice (Kaspi); redirect: go to the provider checkout page
             "online_mode": ("qr" if provider.invoice_based else "redirect") if provider else None,
             "coins_per_dialog": max(s.coins_per_dialog, 1),
+            # the coin pack of "Пополнить" (price shown before the client asks for it)
+            "topup": {"coins": tariffs.TOPUP.coins, "price_kzt": tariffs.TOPUP.price_kzt},
             # empty strings = not shown
             "support": {"phone": s.support_phone.strip(), "whatsapp": whatsapp_digits(),
                         "whatsapp_url": whatsapp_url(), "email": "info@noxsw.kz"},

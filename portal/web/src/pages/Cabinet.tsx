@@ -5,7 +5,8 @@ import {
   LayoutDashboard, PauseCircle, Receipt, XCircle,
 } from 'lucide-react'
 import {
-  api, ApiError, daysLeft, formatDate, formatDay, FREE_CODE, money, plural, type ClientMe, type InvoiceListItem, type Tariff,
+  api, ApiError, daysLeft, DEFAULT_COINS_PER_DIALOG, formatDate, formatDay, FREE_CODE, money, plural, type ClientMe, type InvoiceListItem,
+  type Tariff,
 } from '../api'
 import { BuildProgress, forgetBuildStart } from '../components/BuildProgress'
 import { Shell } from '../components/Shell'
@@ -356,7 +357,7 @@ function HelpCard() {
 
 function Faq() {
   const config = usePublicConfig()
-  const perDialog = config?.coins_per_dialog ?? 20
+  const perDialog = config?.coins_per_dialog ?? DEFAULT_COINS_PER_DIALOG
   const items: [string, ReactNode][] = [
     [
       'Что такое коины?',

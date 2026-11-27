@@ -9,7 +9,7 @@ import { Button, EmptyState, ErrorState, Input, Segmented, Spinner, cx } from '.
 import { formatShort } from '../../i18n/ru'
 import { ChatView } from './ChatView'
 import { StatusBadge } from './StatusBadge'
-import { byLastMessageDesc, normalizeConversationEvent, normalizeMessageEvent } from './normalize'
+import { byLastMessageDesc, conversationTitle, normalizeConversationEvent, normalizeMessageEvent, realName } from './normalize'
 
 type Filter = 'all' | ConversationStatus
 
@@ -180,7 +180,7 @@ export function Conversations() {
                   >
                     <div className="flex items-baseline justify-between gap-2">
                       <span className={cx('truncate text-sm', c.unread ? 'font-semibold text-ink' : 'font-medium text-ink')}>
-                        {c.name || c.phone}
+                        {conversationTitle(c)}
                       </span>
                       <span className="tabular shrink-0 text-[12px] text-ink-3">{formatShort(c.last_message_at)}</span>
                     </div>
@@ -239,7 +239,7 @@ const AUTHOR_PREFIX: Partial<Record<string, string>> = { bot: 'Бот: ', operat
 
 function preview(c: Conversation): string {
   const m = c.last_message
-  if (!m) return c.name ? c.phone : '—'
+  if (!m) return realName(c.name) ? conversationTitle({ name: '', phone: c.phone }) : '—'
   const text = m.text || 'вложение'
   return `${AUTHOR_PREFIX[m.author] ?? ''}${text}`
 }

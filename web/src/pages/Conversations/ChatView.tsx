@@ -9,7 +9,7 @@ import { Button, EmptyState, ErrorState, Spinner, cx } from '../../components/ui
 import { formatDateTime, formatTime, ru } from '../../i18n/ru'
 import { ClientPanel } from './ClientPanel'
 import { StatusBadge } from './StatusBadge'
-import { normalizeMessageEvent } from './normalize'
+import { conversationTitle, normalizeMessageEvent, realName } from './normalize'
 
 interface Props {
   conversationId: number
@@ -159,10 +159,10 @@ export function ChatView({ conversationId, conversation, onConversation }: Props
           </Link>
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-[15px] font-semibold text-ink">
-              {conversation ? conversation.name || conversation.phone : `Диалог #${conversationId}`}
+              {conversation ? conversationTitle(conversation) : `Диалог #${conversationId}`}
             </h2>
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[13px] text-ink-2">
-              {conversation?.name && <span className="tabular max-w-full truncate">{conversation.phone}</span>}
+              {realName(conversation?.name) && <span className="tabular max-w-full truncate">{conversation?.phone}</span>}
               {conversation && (
                 <span className="max-sm:hidden">
                   <StatusBadge conversation={conversation} />

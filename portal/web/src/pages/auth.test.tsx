@@ -2,6 +2,7 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { bodyOf, json, mockFetch, renderAt } from '../test/utils'
+import { Wordmark } from '../components/Shell'
 import { Login } from './Login'
 import { Register, slugProblem } from './Register'
 import { Verify } from './Verify'
@@ -26,6 +27,17 @@ async function fillRegister(user: ReturnType<typeof userEvent.setup>, over: Part
   await user.type(screen.getByLabelText('Пароль'), v.password)
   await user.type(screen.getByLabelText('Повторите пароль'), v.password2 ?? v.password)
 }
+
+describe('header wordmark', () => {
+  it('the living bot mark + NOX SW, a quiet section label, no BOT pill', () => {
+    renderAt('/', <Wordmark subtitle="Личный кабинет" />)
+    const link = screen.getByRole('link', { name: 'Nox Bot — на главную' })
+    expect(link.querySelector('[data-testid="bot-mark"] .nox-eye')).not.toBeNull()
+    expect(link).toHaveTextContent('NOX SW')
+    expect(link).toHaveTextContent('Личный кабинет')
+    expect(link).not.toHaveTextContent('BOT')
+  })
+})
 
 describe('Register', () => {
   it('slug rules match the backend', () => {

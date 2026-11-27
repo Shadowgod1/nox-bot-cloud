@@ -111,6 +111,8 @@ export interface DashboardCoins {
   source?: 'local' | 'gateway'
   /** Gateway: end of the paid period (ISO-8601). */
   period_end?: string | null
+  /** Gateway, Free test: the test ends then (ISO-8601); the forecast and runs_out_on stop there too. */
+  trial_end?: string | null
   /** Gateway: the balance could not be read just now; the last known value is shown. */
   stale?: boolean
   /** Gateway: when the shown balance was read (ISO-8601). */

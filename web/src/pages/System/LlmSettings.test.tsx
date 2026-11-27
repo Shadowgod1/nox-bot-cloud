@@ -38,9 +38,38 @@ describe('LLM settings with ILER keys', () => {
     expect(screen.getByLabelText('Модель Claude')).toBeInTheDocument()
     expect(screen.queryByLabelText('Модель Gemini')).not.toBeInTheDocument()
     expect(optionValues(screen.getByLabelText('Основной провайдер'))).toEqual(['anthropic', 'openai'])
-    expect(optionValues(screen.getByLabelText('Аварийный провайдер'))).toEqual(['', 'anthropic', 'openai'])
+    // the main provider (openai) is not offered as its own fallback
+    expect(optionValues(screen.getByLabelText('Аварийный провайдер'))).toEqual(['', 'anthropic'])
     expect(screen.queryByLabelText(/Ключ/)).toBeNull()
     expect(screen.getByText(/Ключи доступа к провайдерам предоставляет ILER/)).toBeInTheDocument()
+  })
+
+  it('never offers the main provider as the fallback; with one provider the fallback is off', async () => {
+    mockApi({
+      'GET /api/settings/llm': { ...llm, provider: 'anthropic', emergency_provider: 'openai' },
+      'GET /api/settings/llm/providers': { providers: ['anthropic', 'openai'] },
+      'POST /api/settings/llm/models': { ok: true, models: [] },
+    })
+    render(<LlmSettingsPanel />)
+    const fallback = await screen.findByLabelText('Аварийный провайдер')
+    expect(fallback).toHaveValue('openai')
+    // the main provider becomes the former fallback: the fallback resets and offers the other one
+    await userEvent.selectOptions(screen.getByLabelText('Основной провайдер'), 'OpenAI')
+    expect(fallback).toHaveValue('')
+    expect(optionValues(fallback)).toEqual(['', 'anthropic'])
+  })
+
+  it('disables the fallback with a note when there is no other provider', async () => {
+    mockApi({
+      'GET /api/settings/llm': { ...llm, provider: 'anthropic', emergency_provider: 'anthropic' },
+      'GET /api/settings/llm/providers': { providers: ['anthropic'] },
+    })
+    render(<LlmSettingsPanel />)
+    const fallback = await screen.findByLabelText('Аварийный провайдер')
+    expect(fallback).toBeDisabled()
+    expect(fallback).toHaveValue('')
+    expect(optionValues(fallback)).toEqual([''])
+    expect(screen.getByText('Других провайдеров сейчас нет, подменить основной некем.')).toBeInTheDocument()
   })
 
   it('shows the support message when no ILER keys are configured', async () => {

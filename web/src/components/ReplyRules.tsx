@@ -3,7 +3,7 @@ import { Check, UserPlus, Users } from 'lucide-react'
 import { api } from '../api/client'
 import { WEEKDAYS, type BotSettings, type DayHours, type WeeklyHours } from '../api/types'
 import { useLoad } from '../hooks/useLoad'
-import { ru } from '../i18n/ru'
+import { plural, ru } from '../i18n/ru'
 import { PhoneListInput } from './PhoneListInput'
 import { ErrorState, Field, Input, Spinner, Select, Textarea, cx } from './ui'
 
@@ -61,10 +61,11 @@ export const TIMEZONES: [string, string][] = [
 
 const PAUSE_HOURS = [1, 2, 4, 8, 12, 24, 48, 72]
 
-function pauseLabel(minutes: number) {
+/** 60 -> "1 час", 240 -> "4 часа", 1440 -> "сутки", 2880 -> "48 часов", 4320 -> "72 часа". */
+export function pauseLabel(minutes: number) {
   if (minutes % 60) return `${minutes} мин`
   const h = minutes / 60
-  return h === 1 ? '1 час' : h < 5 ? `${h} часа` : h === 24 ? 'сутки' : `${h} часов`
+  return h === 24 ? 'сутки' : `${h} ${plural(h, ['час', 'часа', 'часов'])}`
 }
 
 /** Controlled fields; used inside the bot settings form and by the self-saving card of the setup wizard. */

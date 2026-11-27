@@ -146,6 +146,8 @@ export interface PublicConfig {
   /** qr: the invoice is paid by a QR / deeplink (Kaspi); redirect: provider checkout page */
   online_mode?: 'qr' | 'redirect' | null
   coins_per_dialog?: number
+  /** the coin pack of "Пополнить" */
+  topup?: { coins: number; price_kzt: number }
   support?: SupportContacts
   /** edition date of /offer, /refund, /privacy; "" = draft */
   legal_date?: string
@@ -350,6 +352,8 @@ export interface LlmBalance {
   status: 'active' | 'suspended' | 'revoked'
   /** about how many client dialogs coins_left is enough for */
   dialogs_left?: number
+  /** Free (test): the coins work until the test ends (ISO-8601), not until period_end */
+  trial_end?: string | null
 }
 
 export interface UsageOut {
@@ -424,6 +428,18 @@ export function goToCheckout(url: string) {
 
 export function coins(n: number): string {
   return Math.floor(n).toLocaleString('ru-RU').replace(/ | /g, ' ')
+}
+
+/** Coins of one typical dialog when the public config has not loaded (the portal default, NOX_COINS_PER_DIALOG). */
+export const DEFAULT_COINS_PER_DIALOG = 5
+
+/**
+ * Spent coins by the same rule as the bot's admin panel: under 100 up to two decimals, from 100 whole coins
+ * (2.318 -> "2,32", 1234.6 -> "1 235"). The balance itself stays whole coins (coins()).
+ */
+export function spentCoins(n: number): string {
+  const v = Math.abs(n) < 100 ? Math.round(n * 100) / 100 : Math.round(n)
+  return v.toLocaleString('ru-RU').replace(/ | /g, ' ')
 }
 
 export function formatDay(iso: string | null | undefined): string {

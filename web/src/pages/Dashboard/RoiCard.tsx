@@ -7,7 +7,7 @@ import { useLoad } from '../../hooks/useLoad'
 import { Segmented, Spinner } from '../../components/ui'
 import { plural } from '../../i18n/ru'
 import { coinsWord } from '../../components/PriceImport'
-import { formatCoins } from '../TestChat/TestChat'
+import { formatCoins, roundCoins } from './health'
 
 type Period = '7' | '30'
 
@@ -43,7 +43,7 @@ export function RoiCard() {
         <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
           <p className="max-w-[60ch] text-sm text-ink-2">
             Пока клиентов не было — здесь появится, сколько диалогов бот провёл сам, сколько заявок собрал и сколько раз ответил ночью.
-            {data.coins > 0 && ` На проверку бота потрачено ${formatCoins(data.coins)} ${coinsWord(data.coins)}.`}
+            {data.coins > 0 && ` На проверку бота потрачено ${formatCoins(data.coins)} ${coinsWord(roundCoins(data.coins))}.`}
           </p>
           <Link to="/test-chat" className="inline-flex items-center gap-1.5 text-sm font-medium text-accent underline">
             <FlaskConical className="size-4" aria-hidden />
@@ -60,7 +60,7 @@ export function RoiCard() {
               hint={data.hours_source === 'default' ? 'с 21:00 до 09:00' : 'по часам из настроек'}
             />
             <Num value={data.handovers} label="передал администратору" />
-            <Num value={formatCoins(data.coins)} label={`${coinsWord(data.coins)} потрачено`} />
+            <Num value={formatCoins(data.coins)} label={`${coinsWord(roundCoins(data.coins))} потрачено`} />
           </dl>
       ) : null}
     </section>
