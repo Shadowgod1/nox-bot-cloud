@@ -25,7 +25,6 @@ def load_plugins() -> None:
 
     for mod in pkgutil.iter_modules(builtin.__path__):
         importlib.import_module(f"{builtin.__name__}.{mod.name}")
-    importlib.import_module("iler.tools.senet")
     _loaded = True
 
 

@@ -400,12 +400,6 @@ export interface NotifyTestResult {
   telegram: NotifyChannelResult | null
 }
 
-export interface SenetSettings {
-  enabled: boolean
-  orgname: string | null
-  app_key: SecretValue
-}
-
 /** GET /api/settings/llm/providers: providers that have an ILER (vendor) key, in order anthropic, openai, gemini. */
 export interface LlmProvidersResult {
   providers: LlmProvider[]
@@ -415,19 +409,6 @@ export interface LlmProvidersResult {
 export interface LlmTestResult {
   ok: boolean
   error?: string
-}
-
-/** POST /api/integrations/senet/test body: optional unsaved values; missing / masked fall back to stored. */
-export interface SenetTestRequest {
-  orgname?: string | null
-  app_key?: string | null
-}
-
-/** `error` is "not_configured" when orgname or key is missing. */
-export interface SenetTestResult {
-  ok: boolean
-  error?: string
-  count?: number
 }
 
 export type TemplateFieldType = 'text' | 'textarea' | 'phone'

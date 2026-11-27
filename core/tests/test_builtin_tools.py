@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from engine_fakes import ADMIN_JID, ADMIN_PHONE, CLIENT_JID, env  # noqa: F401
 
-from iler.settings_models import AllSettings, BotSettings, LlmSettings, NotifySettings, SenetSettings
+from iler.settings_models import AllSettings, BotSettings, LlmSettings, NotifySettings
 from iler.tools import registry
 from iler.tools.base import ToolContext
 
@@ -23,7 +23,7 @@ async def _conv(pool) -> int:
 
 def test_builtin_tools_registered_and_enabled():
     names = {t.name for t in registry.enabled_tools(
-        AllSettings(bot=BotSettings(), llm=LlmSettings(), notify=NotifySettings(), senet=SenetSettings())
+        AllSettings(bot=BotSettings(), llm=LlmSettings(), notify=NotifySettings())
     )}
     assert {"create_booking_request", "handover_to_operator"} <= names
     assert "get_club_info" not in names  # removed: the business prompt carries all business info

@@ -105,7 +105,7 @@ sudo bash deploy/install.sh --restore /path/iler-backup-YYYYMMDD-HHMMSS.tar.gz -
 - Restores both databases. It also restores the Redis snapshot (the WhatsApp session) into the redis
   volume while redis is stopped. A restore started from the admin UI restores only the databases and
   reports `"redis": "skipped"`.
-- Secrets stored in the database (SMTP password, Senet key) are encrypted with `ILER_SECRET_KEY` from
+- Secrets stored in the database (SMTP password, Telegram bot token) are encrypted with `ILER_SECRET_KEY` from
   the **original** server's `.env`. `--env` imports that key, and only that key. Without it, the
   secrets cannot be decrypted. Core logs `secret key mismatch`, treats the secrets as unset, and
   they must be entered again in the admin UI.

@@ -493,7 +493,7 @@ async def test_bot_not_configured_does_not_reply(env, pool, monkeypatch):
         fields = {k: getattr(s.bot, k) for k in type(s.bot).model_fields}
         fields["prompt"] = "   "  # works before and after BotSettings gains a `prompt` field
         bot = SimpleNamespace(**fields)
-        return SimpleNamespace(bot=bot, llm=s.llm, notify=s.notify, senet=s.senet)
+        return SimpleNamespace(bot=bot, llm=s.llm, notify=s.notify)
 
     monkeypatch.setattr(settings_store, "load_all", patched)
     await handler.handle_incoming(make_msg("Привет"))

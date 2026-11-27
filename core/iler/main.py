@@ -23,7 +23,7 @@ API_MODULES = [
     "setup", "auth", "users", "dashboard", "whatsapp", "conversations", "client_card", "bookings",
     "settings", "test_chat", "templates", "system", "backups", "events", "knowledge",
 ]
-EXTRA_ROUTERS = ["iler.whatsapp.webhook", "iler.tools.senet.api", "iler.backup.internal_api"]
+EXTRA_ROUTERS = ["iler.whatsapp.webhook", "iler.backup.internal_api"]
 WORKERS = ["inbound_retry", "wa_monitor", "outbound_reconcile", "booking_timeout", "backup_scheduler"]
 HOOKS = ["iler.engine.handler", "iler.bookings.admin_reply"]  # each exposes install()
 
