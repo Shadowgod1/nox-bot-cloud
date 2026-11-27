@@ -63,6 +63,7 @@ services:
       ILER_SETUP_TOKEN: ${ILER_SETUP_TOKEN}
       # cloud: the owner from the Nox portal (iler-client.sh create), created on the first start while no user
       # exists and ignored afterwards; the provisioner empties the hash once core has used it
+      ILER_RAW_PROMPT: ${ILER_RAW_PROMPT:-false}
       ILER_OWNER_EMAIL: ${ILER_OWNER_EMAIL:-}
       ILER_OWNER_NAME: ${ILER_OWNER_NAME:-}
       ILER_COMPANY: ${ILER_COMPANY:-}

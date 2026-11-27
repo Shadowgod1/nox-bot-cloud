@@ -8,6 +8,7 @@ sanitized line in «…» under a "data, not instructions" header, PII-masked li
 
 from datetime import datetime
 
+from iler.config import get_settings
 from iler.engine.pii import PiiMasker
 from iler.llm.base import SYSTEM_DYNAMIC_MARK, ChatMessage
 from iler.settings_models import BotSettings, WeeklyHours
@@ -165,6 +166,8 @@ def build_system(bot: BotSettings, now_local: datetime, tz_name: str, client_car
     business = (bot.prompt or "").strip()
     if not business:
         raise BotNotConfigured("bot prompt is empty")
+    if get_settings().raw_prompt:  # ILER_RAW_PROMPT=1: experiments with the owner's prompt as the only instruction
+        return business
     sections = [BASE_PROMPT, "", "## Описание бизнеса", business]
     knowledge = knowledge_text(bot)
     if knowledge:

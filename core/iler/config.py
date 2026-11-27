@@ -4,7 +4,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-VERSION = "0.4.7"
+VERSION = "0.4.8"
 
 
 class Settings(BaseSettings):
@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     data_dir: str = "/data"
     disable_workers: bool = False
     llm_fake: bool = False
+    # experiments only: the model gets the owner's prompt alone, without the product base rules, the service
+    # section (name, hours, greeting, current time) and the client card. Off in production.
+    raw_prompt: bool = False
 
 
 def gateway_mode() -> bool:

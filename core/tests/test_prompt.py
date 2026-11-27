@@ -64,3 +64,14 @@ def test_no_name_no_context_and_alternation_kept():
                ChatMessage(role="user", content="d")]
     msgs = prompt.build_messages(_bot(), history, NOW, "Asia/Almaty", "  \n ")
     assert [(m.role, m.content) for m in msgs[1:]] == [("user", "a\nb"), ("assistant", "c"), ("user", "d")]
+
+
+def test_raw_prompt_switch_sends_only_the_owner_prompt(monkeypatch):
+    from iler.config import get_settings
+
+    bot = _bot(name="Айгерим", greeting="Привет!")
+    assert prompt.BASE_PROMPT in prompt.build_system(bot, NOW, "Asia/Almaty", "## Клиент\nИмя: Айдар")
+    monkeypatch.setattr(get_settings(), "raw_prompt", True)
+    assert prompt.build_system(bot, NOW, "Asia/Almaty", "## Клиент\nИмя: Айдар") == bot.prompt
+    with pytest.raises(prompt.BotNotConfigured):  # an empty prompt still keeps the bot silent
+        prompt.build_system(BotSettings(prompt=""), NOW, "Asia/Almaty")
