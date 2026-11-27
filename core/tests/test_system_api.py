@@ -48,9 +48,10 @@ def data_dir(tmp_path, monkeypatch):
 
 
 class FakeUpdater:
-    def __init__(self, fail: bool = False):
+    def __init__(self, fail: bool = False, available: str = "1.1.0"):
         self.requests: list[httpx.Request] = []
         self.fail = fail
+        self.available = available
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -59,7 +60,7 @@ class FakeUpdater:
         if request.headers.get("authorization") != "Bearer test-updater-token":
             return httpx.Response(401, json={"error": "bad token"})
         if request.method == "GET" and request.url.path == "/version":
-            return httpx.Response(200, json={"current": "1.0.0", "available": "1.1.0"})
+            return httpx.Response(200, json={"current": "1.0.0", "available": self.available})
         if request.method == "POST" and request.url.path == "/update":
             return httpx.Response(202, json={"job_id": "job-42"})
         if request.method == "GET" and request.url.path == "/update/job-42":
@@ -193,6 +194,23 @@ async def test_update_proxies_to_updater(app, client, as_owner, pool):
     assert all(q.headers["authorization"] == "Bearer test-updater-token" for q in fake.requests)
     actions = [row["action"] for row in await pool.fetch("SELECT action FROM audit_log ORDER BY id")]
     assert "system.update" in actions
+
+
+async def test_same_version_is_not_offered_as_an_update(app, client, as_owner):
+    FakeUpdater(available="1.0.0").install(app)
+    body = (await client.get("/api/system/version")).json()
+    assert body["current"] == "1.0.0" and body["available"] is None and body["managed"] is False
+
+
+async def test_managed_cloud_install_has_no_update(app, client, as_owner, monkeypatch):
+    fake = FakeUpdater()
+    fake.install(app)
+    monkeypatch.setattr(get_settings(), "managed_updates", True)
+    body = (await client.get("/api/system/version")).json()
+    assert body["managed"] is True and body["available"] is None and body["updater_available"] is False
+    r = await client.post("/api/system/update")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "managed_updates"
+    assert fake.requests == []  # the updater is never asked
 
 
 async def test_update_status_without_job(app, client, as_owner):

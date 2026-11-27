@@ -176,6 +176,13 @@ def test_admin_text_uses_service_and_omits_missing_link():
     assert "Диалог:" not in text
 
 
+def test_details_describe_a_service_booking_and_a_seat_booking():
+    salon = {"date": "2026-11-28", "time": "15:00", "service": "Маникюр", "specialist": "Айгерим"}
+    club = {"date": "2026-11-12", "time": "18:00", "duration_hours": 3, "seats": 2, "zone": "VIP"}
+    assert service.details(salon) == "2026-11-28 в 15:00, Маникюр, специалист Айгерим"
+    assert service.details(club) == "2026-11-12 в 18:00, 3 ч, мест: 2, зона VIP"
+
+
 async def test_non_admin_plus_message_goes_to_llm(env, pool):
     await env.set_notify(admin_phones=[ADMIN_PHONE])
     cid = await _conv(pool)

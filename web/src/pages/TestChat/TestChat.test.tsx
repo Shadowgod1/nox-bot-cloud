@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
-import { TestChat } from './TestChat'
-import { callsTo, mockApi } from '../../test/utils'
+import { MAX_MESSAGE, TestChat } from './TestChat'
+import { callsTo, jsonResponse, mockApi } from '../../test/utils'
 import { BOT } from '../../test/fixtures'
 import type { BotSettings } from '../../api/types'
 
@@ -85,6 +85,30 @@ describe('Тестовый чат', () => {
     await screen.findByText('Спасибо! Передам фото мастеру.')
     const body = JSON.parse(String((callsTo(fetchMock, 'POST', '/api/test-chat')[0][1] as RequestInit).body))
     expect(body.messages[0]).toEqual({ role: 'user', content: 'хочу такой дизайн', media: 'image' })
+  })
+
+  it('a failed message stays on screen but not in the history, so the chat keeps working', async () => {
+    const user = userEvent.setup()
+    let n = 0
+    const fetchMock = renderChat(() => (n++ === 0
+      ? jsonResponse({ error: { code: 'llm_error', message: 'Модель не ответила' } }, 503)
+      : { reply: 'Мы на Ауэзова, 12.', tool_calls: [], usage: null }))
+    const box = await screen.findByLabelText('Сообщение боту')
+    await user.type(box, 'первый{Enter}')
+    expect(await screen.findByText(/Это сообщение не попадёт в историю/)).toBeInTheDocument()
+    await user.type(box, 'где вы?{Enter}')
+    await screen.findByText('Мы на Ауэзова, 12.')
+    const body = JSON.parse(String((callsTo(fetchMock, 'POST', '/api/test-chat')[1][1] as RequestInit).body))
+    expect(body.messages).toEqual([{ role: 'user', content: 'где вы?' }])
+    expect(screen.getByText('первый')).toBeInTheDocument()
+  })
+
+  it('the box is capped at 4000 characters and shows a counter near the limit', async () => {
+    renderChat(() => ({ reply: 'ok', tool_calls: [], usage: null }))
+    const box = await screen.findByLabelText('Сообщение боту')
+    expect(box).toHaveAttribute('maxLength', String(MAX_MESSAGE))
+    fireEvent.change(box, { target: { value: 'а'.repeat(3500) } })
+    expect(document.getElementById('test-input-count')?.textContent?.replace(/\s/g, ' ')).toBe('3 500 / 4 000')
   })
 
   it('asks to set the bot up first when the prompt is empty', async () => {

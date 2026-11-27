@@ -39,7 +39,7 @@ export function Bookings() {
   return (
     <PageBody>
       <PageHeader
-        title="Заявки на бронь"
+        title="Заявки"
         description="Бот собирает заявки в переписке. Подтвердите или отклоните — клиент получит ответ по шаблону из настроек бота."
       />
       <div className="mb-4">
@@ -62,7 +62,7 @@ export function Bookings() {
           <ErrorState message={list.error.message} onRetry={list.reload} />
         ) : !list.data?.length ? (
           <EmptyState title={filter === 'pending' ? 'Новых заявок нет' : 'Заявок нет'} icon={<CalendarCheck className="size-5" />}>
-            {filter === 'pending' ? 'Когда клиент попросит забронировать место, заявка появится здесь.' : 'Попробуйте другой фильтр.'}
+            {filter === 'pending' ? 'Когда клиент захочет записаться или забронировать, заявка появится здесь.' : 'Попробуйте другой фильтр.'}
           </EmptyState>
         ) : (
           <>
@@ -84,7 +84,7 @@ export function Bookings() {
   )
 }
 
-/** "чт, 12 ноября · 19:00 · 3 ч · 5 мест · VIP": the request fields core knows how to describe. */
+/** "чт, 28 ноября · 15:00 · Маникюр · Айгерим" or "чт, 12 ноября · 19:00 · 3 ч · 5 мест · VIP". */
 export function bookingDetails(b: Booking) {
   const p = b.payload ?? {}
   const parts: string[] = []
@@ -93,6 +93,8 @@ export function bookingDetails(b: Booking) {
     parts.push(Number.isNaN(d.getTime()) ? String(p.date) : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' }))
   }
   if (p.time) parts.push(String(p.time))
+  if (p.service) parts.push(String(p.service))
+  if (p.specialist) parts.push(String(p.specialist))
   if (p.duration_hours !== undefined && p.duration_hours !== '') parts.push(`${p.duration_hours} ч`)
   if (p.seats !== undefined && p.seats !== '') {
     const n = Number(p.seats)
@@ -197,7 +199,7 @@ function BookingRow({ booking: b, onChange, onStale }: { booking: Booking; onCha
         >
           <Field
             label={mode === 'confirm' ? 'Комментарий для клиента (необязательно)' : 'Причина отказа'}
-            hint={mode === 'confirm' ? 'Подставится в шаблон подтверждения, например «места 14–15».' : 'Клиент увидит её в сообщении об отказе.'}
+            hint={mode === 'confirm' ? 'Подставится в шаблон подтверждения, например «к мастеру Айгерим, 15:30» или «места 14–15».' : 'Клиент увидит её в сообщении об отказе.'}
           >
             <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} autoFocus className="min-h-14 bg-surface" />
           </Field>

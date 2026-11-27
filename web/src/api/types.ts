@@ -170,6 +170,9 @@ export type BookingStatus = 'pending' | 'confirmed' | 'rejected' | 'expired'
 export interface BookingPayload {
   date?: string
   time?: string
+  /** service or reason (salon, clinic, any business); seats / hours / zone are for seat bookings (club) */
+  service?: string | null
+  specialist?: string | null
   duration_hours?: number | string
   seats?: number | string
   zone?: string | null
@@ -488,6 +491,8 @@ export interface VersionInfo {
   available: string | null
   core_version: string
   updater_available: boolean
+  /** cloud: Nox service rolls out versions itself, the panel offers no update */
+  managed?: boolean
 }
 
 export type UpdateState =

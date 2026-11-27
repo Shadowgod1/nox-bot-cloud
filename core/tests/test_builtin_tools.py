@@ -28,7 +28,9 @@ def test_builtin_tools_registered_and_enabled():
     assert {"create_booking_request", "handover_to_operator"} <= names
     assert "get_club_info" not in names  # removed: the business prompt carries all business info
     tool = registry.get("create_booking_request")
-    assert set(tool.parameters["required"]) == {"date", "time", "duration_hours", "seats"}
+    # a salon or a clinic books a service: seats and hours are optional (club only)
+    assert set(tool.parameters["required"]) == {"date", "time"}
+    assert {"service", "specialist", "seats", "duration_hours"} <= set(tool.parameters["properties"])
 
 
 async def test_handover_sets_status_and_pauses(env, pool):
@@ -74,6 +76,21 @@ async def test_booking_tool_creates_pending_request(env, pool):
 
 
 ARGS = {"date": "2026-11-12", "time": "18:00", "duration_hours": 3, "seats": 2}
+
+
+async def test_booking_tool_salon_request_needs_no_seats_or_hours(env, pool):
+    await env.set_notify(admin_phones=[ADMIN_PHONE])
+    cid = await _conv(pool)
+    res = await registry.get("create_booking_request").run(
+        _ctx(cid), {"date": "2026-11-28", "time": "15:00", "service": "Маникюр\nс покрытием", "specialist": "Айгерим",
+                    "seats": None, "duration_hours": None}
+    )
+    assert res.content["status"] == "pending"
+    payload = await pool.fetchval("SELECT payload FROM booking_requests")
+    assert payload == {"date": "2026-11-28", "time": "15:00", "service": "Маникюр с покрытием", "specialist": "Айгерим"}
+    text = env.gw.texts(ADMIN_JID)[0]
+    assert "Услуга: «Маникюр с покрытием»" in text and "Специалист: «Айгерим»" in text
+    assert "Когда: 2026-11-28 в 15:00\n" in text and "мест" not in text
 
 
 async def test_booking_tool_same_request_returns_existing(env, pool):

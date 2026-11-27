@@ -19,13 +19,17 @@ const SUGGESTIONS: Record<string, string[]> = {
   clinic: ['Сколько стоит чистка зубов?', 'Можно к стоматологу в субботу утром?', 'Где вы находитесь?', 'Тіс емдеу қанша тұрады?'],
   computer_club: ['Сколько стоит час?', 'Есть свободные места?', 'Хочу забронировать на завтра в 19:00 на троих', 'Где вы находитесь?'],
 }
-const DEFAULT_SUGGESTIONS = SUGGESTIONS.beauty_salon
+const DEFAULT_SUGGESTIONS = ['Сколько стоят ваши услуги?', 'Можно подъехать завтра в 15:00?', 'Где вы находитесь?', 'Қандай қызметтер бар?']
+/** core/iler/api/test_chat.py: one message up to 4000 characters, a dialogue up to 50 messages. */
+export const MAX_MESSAGE = 4000
+const MAX_TURNS = 50
 const MEDIA_LABEL: Record<TestMedia, string> = { audio: 'Голосовое сообщение', image: 'Фото' }
 
 /** A test-chat entry as core expects it. Bot replies echo their tool calls (without results), so the client
  * card of the test dialogue knows about a booking or a fact from an earlier reply; a failed call is marked. */
 export function toTurn({ role, content, media, tool_calls }: Entry): ChatTurn {
-  const turn: ChatTurn = media ? { role, content, media } : { role, content }
+  const text = content.length > MAX_MESSAGE ? content.slice(0, MAX_MESSAGE) : content  // a very long bot reply
+  const turn: ChatTurn = media ? { role, content: text, media } : { role, content: text }
   if (role === 'assistant' && tool_calls?.length) {
     turn.tool_calls = tool_calls.slice(0, 8).map((c) => ({
       name: c.name,
@@ -63,16 +67,17 @@ export function TestChat({ embedded = false }: { embedded?: boolean }) {
 
   async function send(raw: string, media?: TestMedia) {
     const t = raw.trim()
-    if ((!t && !media) || busy) return
+    if ((!t && !media) || busy || t.length > MAX_MESSAGE) return
     const turn: Entry = media ? { role: 'user', content: t, media } : { role: 'user', content: t }
+    // failed exchanges stay on screen but never go back to core: one bad message must not break the chat
     const history: Entry[] = [...entries.filter((e) => !e.failed), turn]
-    setEntries(history)
+    setEntries((e) => [...e, turn])
     setText('')
     setBusy(true)
     try {
       const res = await api.post<TestChatResponse>(
         '/api/test-chat',
-        { messages: history.map(toTurn) },
+        { messages: history.slice(-MAX_TURNS).map(toTurn) },
         { silent: true },
       )
       setEntries((e) => [
@@ -80,7 +85,11 @@ export function TestChat({ embedded = false }: { embedded?: boolean }) {
         { role: 'assistant', content: res.reply, tool_calls: res.tool_calls ?? [], handed_over: res.handed_over, coins: res.usage?.coins ?? null },
       ])
     } catch (err) {
-      setEntries((e) => [...e, { role: 'assistant', content: (err as Error).message || 'Бот не ответил', failed: true }])
+      const reason = (err as Error).message || 'Бот не ответил'
+      setEntries((e) => [
+        ...e.map((x) => (x === turn ? { ...x, failed: true } : x)),
+        { role: 'assistant', content: `${reason}. Это сообщение не попадёт в историю — можно писать дальше.`, failed: true },
+      ])
     } finally {
       setBusy(false)
     }
@@ -231,6 +240,8 @@ export function TestChat({ embedded = false }: { embedded?: boolean }) {
                 }
               }}
               placeholder="Сообщение от имени клиента"
+              maxLength={MAX_MESSAGE}
+              aria-describedby={text.length > MAX_MESSAGE * 0.8 ? 'test-input-count' : undefined}
               className="field-control max-h-32 min-h-[38px] min-w-0 flex-1 resize-none"
             />
             <Button type="submit" variant="primary" loading={busy} disabled={!text.trim()} icon={<Send className="size-4" aria-hidden />} aria-label="Отправить">
@@ -238,6 +249,11 @@ export function TestChat({ embedded = false }: { embedded?: boolean }) {
             </Button>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-ink-3">
+            {text.length > MAX_MESSAGE * 0.8 && (
+              <span id="test-input-count" className={cx('tabular mr-2', text.length >= MAX_MESSAGE && 'text-warn')}>
+                {text.length.toLocaleString('ru-RU')} / {MAX_MESSAGE.toLocaleString('ru-RU')}
+              </span>
+            )}
             <span>Проверить вложения:</span>
             <button
               type="button"

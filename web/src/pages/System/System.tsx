@@ -186,7 +186,7 @@ export const UPDATE_POLL_MS = 2000
 
 const isActive = (s: UpdateState | string | null | undefined) => !!s && (ACTIVE as string[]).includes(s)
 
-function UpdatePanel() {
+export function UpdatePanel() {
   const brand = useBrand()
   const version = useLoad(() => api.get<VersionInfo>('/api/system/version', { silent: true }))
   const [status, setStatus] = useState<UpdateStatus | null>(null)
@@ -243,7 +243,14 @@ function UpdatePanel() {
   const tone = status?.state === 'healthy' ? 'ok' : status?.state === 'failed' || status?.state === 'rolled_back' ? 'danger' : 'warn'
 
   return (
-    <Panel title="Версия и обновление" description="Обновления устанавливаются только по кнопке. Если новая версия не запустится, система вернётся к предыдущей.">
+    <Panel
+      title="Версия и обновление"
+      description={
+        v?.managed
+          ? 'Обновления устанавливает Nox service: новые версии приходят сами, бот прерывается не больше чем на пару минут.'
+          : 'Обновления устанавливаются только по кнопке. Если новая версия не запустится, система вернётся к предыдущей.'
+      }
+    >
       {version.loading && !v ? (
         <Spinner />
       ) : version.error && !v ? (
@@ -256,24 +263,28 @@ function UpdatePanel() {
                 <dt className="text-[13px] text-ink-2">Установлена</dt>
                 <dd className="tabular font-medium text-ink">{v?.current ?? v?.core_version ?? '—'}</dd>
               </div>
-              <div>
-                <dt className="text-[13px] text-ink-2">Доступна</dt>
-                <dd className="tabular font-medium text-ink">
-                  {v && !v.updater_available ? 'Неизвестно' : (v?.available ?? 'Последняя версия')}
-                </dd>
-              </div>
+              {!v?.managed && (
+                <div>
+                  <dt className="text-[13px] text-ink-2">Доступна</dt>
+                  <dd className="tabular font-medium text-ink">
+                    {v && !v.updater_available ? 'Неизвестно' : (v?.available ?? 'Последняя версия')}
+                  </dd>
+                </div>
+              )}
             </dl>
-            <Button
-              variant={v?.available ? 'primary' : 'secondary'}
-              onClick={start}
-              loading={starting}
-              disabled={active || !v?.available || !v.updater_available}
-              icon={<RefreshCw className="size-4" aria-hidden />}
-            >
-              {active ? 'Обновляется…' : 'Обновить'}
-            </Button>
+            {!v?.managed && (
+              <Button
+                variant={v?.available ? 'primary' : 'secondary'}
+                onClick={start}
+                loading={starting}
+                disabled={active || !v?.available || !v.updater_available}
+                icon={<RefreshCw className="size-4" aria-hidden />}
+              >
+                {active ? 'Обновляется…' : 'Обновить'}
+              </Button>
+            )}
           </div>
-          {v && !v.updater_available && (
+          {v && !v.updater_available && !v.managed && (
             <p className="text-[13px] text-ink-2">Сервис обновлений недоступен: проверка и установка обновлений сейчас невозможны.</p>
           )}
           {status?.state && (jobId || active || status.state === 'failed' || status.state === 'rolled_back') && (

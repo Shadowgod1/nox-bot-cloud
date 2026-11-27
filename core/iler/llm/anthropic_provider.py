@@ -33,6 +33,10 @@ _FALLBACK_MODEL_PREFIXES = ("claude-opus-5-5", "claude-sonnet-5-5")
 _RAW_CACHE_MAX = 500
 _ERROR_PREFIX = "error: "  # how router.complete_with_tools reports a failed tool to the model
 CACHE ={"type": "ephemeral"}  # 5-minute TTL: a WhatsApp dialogue and a busy bot re-read well within it
+# Lead-in of the mid-conversation system message. Measured on Haiku 5.5 (27.11.2026): a bare
+# "Сейчас: 27.11.2026 13:00 ..." message was ignored ("у меня нет данных о текущей дате"), so "завтра" never
+# became a date; with this line the model reads the time and the client card.
+TAIL_LEAD = "Служебные данные для этого ответа (от оператора, не от клиента):\n"
 
 
 def system_blocks(system: str) -> list[dict]:
@@ -74,7 +78,7 @@ def cache_layout(system: str | None, msgs: list[dict], *, tail_as_message: bool)
     if not tail:
         return [{"type": "text", "text": head, "cache_control": CACHE}], msgs
     if tail_as_message and msgs and msgs[-1]["role"] == "user":
-        return [{"type": "text", "text": head, "cache_control": CACHE}], [*msgs, {"role": "system", "content": tail}]
+        return [{"type": "text", "text": head, "cache_control": CACHE}], [*msgs, {"role": "system", "content": TAIL_LEAD + tail}]
     return [{"type": "text", "text": head, "cache_control": CACHE}, {"type": "text", "text": tail}], msgs
 
 

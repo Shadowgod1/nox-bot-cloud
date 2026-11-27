@@ -183,6 +183,7 @@ cmd_create() {
       echo "ILER_HTTP_PORT=$port"
       echo "ILER_PUBLIC_URL=$public_url"
       echo "ILER_BRAND=$brand"
+      echo "ILER_MANAGED_UPDATES=true"  # Nox rolls out versions (upgrade.sh); the panel has no update button
       echo "ILER_MONTHLY_COINS=${coins:-0}"
       echo "ILER_MODEL_PRICES='$prices'"
       if [[ -n "$owner_email" ]]; then

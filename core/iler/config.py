@@ -4,7 +4,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-VERSION = "0.4.8"
+VERSION = "0.4.10"
 
 
 class Settings(BaseSettings):
@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     # experiments only: the model gets the owner's prompt alone, without the product base rules, the service
     # section (name, hours, greeting, current time) and the client card. Off in production.
     raw_prompt: bool = False
+    # Cloud instances (deploy/cloud/iler-client.sh): Nox service rolls out new versions itself, so the panel shows
+    # no "Обновить" button and POST /api/system/update is refused.
+    managed_updates: bool = False
 
 
 def gateway_mode() -> bool:

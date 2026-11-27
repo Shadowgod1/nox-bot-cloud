@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from iler import settings_store
 from iler.api.backups import audit
 from iler.auth.deps import csrf_protect, require_owner
-from iler.config import VERSION
+from iler.config import VERSION, get_settings
 from iler.errors import ApiError
 from iler.updater_client import UpdaterClient, get_updater_client
 
@@ -28,15 +28,22 @@ class UpdateJob(BaseModel):
 async def get_system_version(
     user=Depends(require_owner), updater: UpdaterClient = Depends(get_updater_client)
 ) -> dict:
+    if get_settings().managed_updates:  # cloud: Nox rolls out versions, the owner has nothing to install
+        return {"current": VERSION, "available": None, "core_version": VERSION, "updater_available": False,
+                "managed": True}
     try:
         v = await updater.get_version()
     except ApiError:
-        return {"current": None, "available": None, "core_version": VERSION, "updater_available": False}
+        return {"current": None, "available": None, "core_version": VERSION, "updater_available": False,
+                "managed": False}
+    current, available = v.get("current"), v.get("available")
     return {
-        "current": v.get("current"),
-        "available": v.get("available"),
+        "current": current,
+        # the updater always names the channel version; the same one as installed is not an update
+        "available": available if available and available != current else None,
         "core_version": VERSION,
         "updater_available": True,
+        "managed": False,
     }
 
 
@@ -44,6 +51,8 @@ async def get_system_version(
 async def post_system_update(
     user=Depends(require_owner), updater: UpdaterClient = Depends(get_updater_client)
 ) -> dict:
+    if get_settings().managed_updates:
+        raise ApiError(409, "managed_updates", "Обновления устанавливает Nox service")
     # The updater takes the pre-update backup itself (job state "backup").
     resp = await updater.start_update()
     job_id = resp.get("job_id")

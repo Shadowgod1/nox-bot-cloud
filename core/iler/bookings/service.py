@@ -19,6 +19,7 @@ Status = Literal["pending", "confirmed", "rejected", "expired"]
 
 NAME_MAX = 60
 ZONE_MAX = 60
+SERVICE_MAX = 120
 COMMENT_MAX = 300
 DUPLICATE_WINDOW_MIN = 30   # the same slot asked again within this window returns the existing request
 CONV_WINDOW_MIN = 10        # at most one new pending request per conversation per this window
@@ -60,11 +61,15 @@ class BookingConflict(Exception):
 
 
 def details(payload: dict) -> str:
-    """Human summary: '2026-11-12 в 18:00, 3 ч, мест: 2, зона VIP, имя Айдар, комментарий: ...'."""
+    """Human summary: '2026-11-12 в 18:00, маникюр, специалист Айгерим' or '2026-11-12 в 18:00, 3 ч, мест: 2, зона VIP'."""
     parts = []
     date, time_ = payload.get("date"), payload.get("time")
     if date or time_:
         parts.append(" в ".join(str(x) for x in (date, time_) if x))
+    if payload.get("service"):
+        parts.append(str(payload["service"]))
+    if payload.get("specialist"):
+        parts.append(f"специалист {payload['specialist']}")
     if payload.get("duration_hours") not in (None, ""):
         parts.append(f"{payload['duration_hours']} ч")
     if payload.get("seats") not in (None, ""):
@@ -125,9 +130,15 @@ def admin_text(b: BookingRequest, link: str = "") -> str:
     lines.append(f"Имя: «{name}»" if name else "Имя: не указано")
     if b.phone:
         lines.append(f"Телефон: {_format_phone(b.phone)}")
-    service = one_line(p.get("service"), ZONE_MAX) or one_line(p.get("zone"), ZONE_MAX)
+    service = one_line(p.get("service"), SERVICE_MAX) or one_line(p.get("zone"), ZONE_MAX)
     if service:
         lines.append(f"Услуга: «{service}»")
+    specialist = one_line(p.get("specialist"), NAME_MAX)
+    if specialist:
+        lines.append(f"Специалист: «{specialist}»")
+    zone = one_line(p.get("zone"), ZONE_MAX)
+    if zone and p.get("service"):  # without a service the zone was already shown as «Услуга»
+        lines.append(f"Зона: «{zone}»")
     when = []
     date = one_line(p.get("date"), 20)
     time_ = one_line(p.get("time"), 10)
@@ -151,7 +162,8 @@ def admin_text(b: BookingRequest, link: str = "") -> str:
 def clean_payload(payload: dict) -> dict:
     """Free-text fields from the model/client: one line, length-limited."""
     out = dict(payload)
-    for key, limit in (("name", NAME_MAX), ("zone", ZONE_MAX), ("comment", COMMENT_MAX)):
+    for key, limit in (("name", NAME_MAX), ("zone", ZONE_MAX), ("service", SERVICE_MAX), ("specialist", NAME_MAX),
+                       ("comment", COMMENT_MAX)):
         if key in out and out[key] is not None:
             value = one_line(out[key], limit)
             if value:
@@ -180,8 +192,8 @@ async def create(conversation_id: int, payload: dict) -> BookingRequest:
 
 
 def _same_slot(a: dict, b: dict) -> bool:
-    return all(str(a.get(k) or "").strip() == str(b.get(k) or "").strip() for k in ("date", "time")) and \
-        _num(a.get("seats")) == _num(b.get("seats"))
+    return all(str(a.get(k) or "").strip().lower() == str(b.get(k) or "").strip().lower()
+               for k in ("date", "time", "service")) and _num(a.get("seats")) == _num(b.get("seats"))
 
 
 def _num(v):
@@ -193,7 +205,7 @@ def _num(v):
 
 async def create_checked(conversation_id: int, payload: dict) -> tuple[BookingRequest, bool]:
     """`create` for the LLM tool, with anti-duplicate and anti-spam rules. Returns (request, created):
-    the same slot (date+time+seats) still pending from the last DUPLICATE_WINDOW_MIN minutes is returned
+    the same slot (date+time+service+seats) still pending from the last DUPLICATE_WINDOW_MIN minutes is returned
     as is. Raises BookingLimit when the conversation already has a pending request from the last
     CONV_WINDOW_MIN minutes, or the client's phone made PHONE_DAILY_MAX requests in the last 24 h."""
     payload = clean_payload(payload)

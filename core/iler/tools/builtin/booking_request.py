@@ -6,27 +6,35 @@ from iler.settings_models import AllSettings
 from iler.tools import registry
 from iler.tools.base import ToolContext, ToolResult
 
-REQUIRED = ("date", "time", "duration_hours", "seats")
+# Only the moment is required: a salon or a clinic books a service, a club books seats for some hours.
+REQUIRED = ("date", "time")
 log = logging.getLogger("iler.tools.booking")
 
 
 class CreateBookingRequest:
     name = "create_booking_request"
     description = (
-        "Создаёт заявку на бронь и отправляет её администратору на подтверждение. Вызывай, когда клиент "
-        "назвал дату, время, длительность и число мест. После вызова скажи клиенту, что заявка передана "
-        "администратору; бронь ещё не подтверждена."
+        "Создаёт заявку на запись или бронь и отправляет её администратору на подтверждение. Вызывай, когда "
+        "клиент назвал дату, время и что ему нужно (услугу, повод или что бронирует). Число мест и длительность "
+        "спрашивай, только если бизнес бронирует места или время по часам (клуб, зал, столики); для записи на "
+        "услугу их не спрашивай. После вызова скажи клиенту, что заявка передана администратору; запись ещё не "
+        "подтверждена."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "date": {"type": "string", "description": "Дата брони, YYYY-MM-DD"},
-            "time": {"type": "string", "description": "Время начала, HH:MM"},
-            "duration_hours": {"type": "number", "description": "Длительность в часах"},
-            "seats": {"type": "integer", "description": "Количество мест (ПК)"},
-            "zone": {"type": ["string", "null"], "description": "Зона/зал, если клиент указал"},
+            "date": {"type": "string", "description": "Желаемая дата, YYYY-MM-DD"},
+            "time": {"type": "string", "description": "Желаемое время начала, HH:MM"},
+            "service": {"type": ["string", "null"], "description": "Услуга, повод обращения или что бронирует клиент"},
+            "specialist": {"type": ["string", "null"],
+                           "description": "Мастер, врач или сотрудник, если клиент выбрал; «любой» — если всё равно"},
             "name": {"type": ["string", "null"], "description": "Имя клиента"},
             "comment": {"type": ["string", "null"], "description": "Пожелания клиента"},
+            "duration_hours": {"type": ["number", "null"],
+                               "description": "Длительность в часах — только для брони по часам (клуб, зал)"},
+            "seats": {"type": ["integer", "null"],
+                      "description": "Количество мест (ПК, столиков) — только для брони мест"},
+            "zone": {"type": ["string", "null"], "description": "Зона или зал, если клиент указал"},
         },
         "required": list(REQUIRED),
         "additionalProperties": False,

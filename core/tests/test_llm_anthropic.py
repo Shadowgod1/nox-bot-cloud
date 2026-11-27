@@ -11,7 +11,7 @@ import pytest
 from pydantic import SecretStr
 
 from iler.llm import router
-from iler.llm.anthropic_provider import FALLBACK_BETA, AnthropicProvider, cache_layout, system_blocks
+from iler.llm.anthropic_provider import FALLBACK_BETA, TAIL_LEAD, AnthropicProvider, cache_layout, system_blocks
 from iler.llm.base import SYSTEM_DYNAMIC_MARK, ChatMessage, LlmError, LlmResponse
 from iler.llm.fake import FakeLLM
 from iler.settings_models import BotSettings, LlmSettings
@@ -326,7 +326,9 @@ def test_cache_layout_puts_the_time_and_card_after_the_dialogue():
     assert out[:2] == msgs[:2]  # earlier turns untouched: byte-identical to the previous request
     assert out[2] == {"role": "user", "content": [
         {"type": "text", "text": "сколько стоит маникюр?", "cache_control": {"type": "ephemeral"}}]}
-    assert out[3] == {"role": "system", "content": tail}
+    # a bare "Сейчас: ..." was ignored by Haiku 5.5: the message says what it is
+    assert out[3] == {"role": "system", "content": TAIL_LEAD + tail}
+    assert TAIL_LEAD.startswith("Служебные данные") and TAIL_LEAD.endswith("\n")
     assert msgs[2] == {"role": "user", "content": "сколько стоит маникюр?"}  # the input is not mutated
     # fallback for a model without mid-conversation system messages: back into the system prompt
     sys_blocks, out = cache_layout(system, msgs, tail_as_message=False)
@@ -343,7 +345,7 @@ async def test_falls_back_when_the_model_rejects_system_messages():
             ChatMessage(role="user", content="hi")]
     resp = await p.complete(msgs, [], "claude-haiku-5-5")
     assert resp.text == "ok"
-    assert api.bodies[0]["messages"][-1] == {"role": "system", "content": "Сейчас: 21:00"}
+    assert api.bodies[0]["messages"][-1] == {"role": "system", "content": TAIL_LEAD + "Сейчас: 21:00"}
     assert api.bodies[1]["messages"][-1]["role"] == "user"
     assert api.bodies[1]["system"][1] == {"type": "text", "text": "Сейчас: 21:00"}
     await p.complete(msgs, [], "claude-haiku-5-5")  # remembered: no more rejected attempts
