@@ -13,3 +13,6 @@ backups/
 .env.e2e
 build/
 _bmad-output/
+
+# TypeScript incremental build state
+*.tsbuildinfo
