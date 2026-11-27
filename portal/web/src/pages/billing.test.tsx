@@ -299,3 +299,37 @@ describe('ApproveForm in payment mode', () => {
     expect(screen.getByRole('button', { name: 'Отметить оплату и создать бота' })).toBeEnabled()
   })
 })
+
+describe('Invoice: static Kaspi QR', () => {
+  const SELLER = { name: 'ИП «Пример»', bin: '123456789012', address: 'г. Усть-Каменогорск', bank: 'АО «Банк»', iik: 'KZ00000TEST00000000', bik: 'TESTKZKA', kbe: '19', phone: '+7 700 000 00 00' }
+  const INVOICE = {
+    number: 'NOX-2026-00021', issued_at: '2026-11-27T09:00:00Z', paid: false, kind: 'subscription', amount_kzt: 59990, due_days: 5,
+    tariff: { code: 'start', name: 'Старт', coins: 30000 }, buyer_company: 'Салон', buyer_contact: 'Аружан', buyer_phone: '+77010000000',
+    buyer_email: 'a@example.kz', bot_host: 'salon.example.kz', comment: null, period_start: null, period_end: null, seller: SELLER,
+  }
+
+  it('an unpaid invoice shows the QR with the exact amount and the invoice number; a paid one does not', async () => {
+    const { InvoicePage } = await import('./InvoicePage')
+    mockFetch({
+      'GET /api/public-config': () => json({ ...CONFIG_OFF, kaspi_static_qr: 'https://pay.kaspi.kz/pay/abc123' }),
+      'GET /api/me/invoice': () => json(INVOICE),
+    })
+    renderAt('/invoice', <InvoicePage />)
+    const qr = await screen.findByTestId('static-kaspi-qr')
+    expect(qr).toHaveTextContent('Введите сумму ровно 59 990 ₸')
+    expect(qr).toHaveTextContent('счёт № NOX-2026-00021')
+    expect(screen.getByRole('link', { name: /Открыть в Kaspi/ })).toHaveAttribute('href', 'https://pay.kaspi.kz/pay/abc123')
+    expect(screen.getByText('БИН/ИИН')).toBeInTheDocument()
+  })
+
+  it('no QR when it is not configured or the invoice is paid', async () => {
+    const { InvoicePage } = await import('./InvoicePage')
+    mockFetch({
+      'GET /api/public-config': () => json({ ...CONFIG_OFF, kaspi_static_qr: 'https://pay.kaspi.kz/pay/abc123' }),
+      'GET /api/me/invoice': () => json({ ...INVOICE, paid: true }),
+    })
+    renderAt('/invoice', <InvoicePage />)
+    expect(await screen.findByText('ОПЛАЧЕН')).toBeInTheDocument()
+    expect(screen.queryByTestId('static-kaspi-qr')).toBeNull()
+  })
+})

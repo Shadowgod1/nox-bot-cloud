@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     # kaspi ("Платежи на Kaspi.kz" service provider): QR / deeplink template with {account} and {amount}; the
     # exact URL comes from Kaspi with the contract. Empty = the kaspi provider is off.
     kaspi_pay_url_template: str = ""
+    # Static Kaspi Pay QR of the seller (the link encoded in the QR from the Kaspi Pay app, https://...).
+    # Shown on unpaid invoices: the client scans it, types the amount and the invoice number, and staff
+    # confirms the payment by hand ("Оплачено" in the staff panel). Empty = not shown.
+    kaspi_static_qr: str = ""
     # Kaspi check/pay callbacks are accepted only from these IPs / CIDRs (comma separated; the visitor IP comes
     # from the portal nginx, i.e. CF-Connecting-IP behind the tunnel) ...
     kaspi_allowed_ips: str = ""

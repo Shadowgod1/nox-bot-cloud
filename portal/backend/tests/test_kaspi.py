@@ -158,3 +158,12 @@ async def test_pay_online_invoice_returns_qr(client, other, pool, kaspi):
     r = await other.post(f"/api/me/invoices/{number}/pay-online", headers=csrf(other))
     assert r.status_code == 200
     assert r.json()["qr_payload"] == r.json()["redirect_url"] and f"account={_code(number)}" in r.json()["qr_payload"]
+
+
+async def test_static_kaspi_qr_is_public_only_as_an_https_link(client, monkeypatch):
+    s = get_settings()
+    assert (await client.get("/api/public-config")).json()["kaspi_static_qr"] == ""
+    monkeypatch.setattr(s, "kaspi_static_qr", "  https://pay.kaspi.kz/pay/abc123  ")
+    assert (await client.get("/api/public-config")).json()["kaspi_static_qr"] == "https://pay.kaspi.kz/pay/abc123"
+    monkeypatch.setattr(s, "kaspi_static_qr", "javascript:alert(1)")
+    assert (await client.get("/api/public-config")).json()["kaspi_static_qr"] == ""

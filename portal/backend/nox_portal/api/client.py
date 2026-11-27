@@ -109,7 +109,9 @@ async def get_public_config():
             "support": {"phone": s.support_phone.strip(), "whatsapp": whatsapp_digits(),
                         "whatsapp_url": whatsapp_url(), "email": "info@noxsw.kz"},
             # "" = the documents are drafts
-            "legal_date": s.legal_date.strip(), "seller": public_seller()}
+            "legal_date": s.legal_date.strip(), "seller": public_seller(),
+            # static Kaspi Pay QR (manual confirmation); only an https link is ever shown
+            "kaspi_static_qr": qr if (qr := s.kaspi_static_qr.strip()).startswith("https://") else ""}
 
 
 @router.get("/api/slug-check", response_model=SlugCheck)

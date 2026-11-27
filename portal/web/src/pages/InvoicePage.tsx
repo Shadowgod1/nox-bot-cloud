@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { ArrowLeft, Printer } from 'lucide-react'
 import { api, ApiError, money, type Invoice } from '../api'
 import { Alert, Button } from '../components/ui'
+import { StaticKaspiQr } from '../components/PaymentQr'
+import { usePublicConfig } from '../components/Support'
 import { PayOnlineButton } from './PayOnline'
 
 /**
@@ -14,6 +16,7 @@ export function InvoicePage() {
   const navigate = useNavigate()
   const [inv, setInv] = useState<Invoice | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const config = usePublicConfig()
   const back = id ? `/staff/applications/${id}` : '/'
 
   useEffect(() => {
@@ -78,7 +81,7 @@ export function InvoicePage() {
             <tbody>
               {[
                 ['Бенефициар', s.name],
-                ['БИН', s.bin],
+                ['БИН/ИИН', s.bin],
                 ['Банк бенефициара', s.bank],
                 ['ИИК', s.iik],
                 ['БИК', s.bik],
@@ -164,6 +167,7 @@ export function InvoicePage() {
                   ? 'После поступления оплаты бот продолжит работу на новом тарифе, настройки сохранятся.'
                 : 'После поступления оплаты бот будет создан, а на e-mail придёт ссылка на панель управления.'}
           </p>
+          {!inv.paid && config?.kaspi_static_qr && <StaticKaspiQr url={config.kaspi_static_qr} amount={inv.amount_kzt} number={inv.number} />}
           <footer className="mt-10 flex justify-between border-t border-[#d9dde2] pt-4 text-[#667079]">
             <span>{s.name}</span>
             <span>Подпись ______________________</span>

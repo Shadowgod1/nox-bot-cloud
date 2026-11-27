@@ -151,6 +151,8 @@ export interface PublicConfig {
   legal_date?: string
   /** filled-in seller requisites (empty strings for the missing ones) */
   seller?: Seller
+  /** static Kaspi Pay QR link ("" = none): unpaid invoices show it, staff confirms the payment by hand */
+  kaspi_static_qr?: string
 }
 
 export interface CheckoutOut {
