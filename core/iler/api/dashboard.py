@@ -86,6 +86,8 @@ class Coins(BaseModel):
     # come from the LLM gateway balance (days / by_model stay the local per-model stats)
     source: Literal["local", "gateway"] = "local"
     period_end: str | None = None  # gateway: end of the paid period
+    # gateway, Free test: the test (and the bot's answers) stops then; the forecast and runs_out_on stop there too
+    trial_end: str | None = None
     stale: bool = False  # gateway: the balance could not be read just now; the last known value is shown
     balance_at: str | None = None  # gateway: ISO-8601 time the shown balance was read
     # gateway: "insufficient_coins" / "key_revoked" while the bot hands every conversation to the operator
@@ -226,13 +228,15 @@ async def _gateway_coins(now: datetime, u: usage.MonthUsage) -> dict:
     b = view.balance
     if b is None:  # never read: no limit to show, only the local spend
         out.update({"limit": 0, "remaining": None, "percent": None, "exhausted": view.blocked is not None,
-                    "period_end": None})
+                    "period_end": None, "trial_end": None})
         return out
     limit = max(b.monthly_limit, 0.0)
     left = max(b.coins_left, 0.0)
     if view.blocked == gateway.INSUFFICIENT_COINS:
         left = 0.0  # the gateway said 402 after this balance was read
-    spent = max(limit - left, 0.0)
+    # the gateway ledger is the authority on spend (also what the client cabinet shows); limit - left is only the
+    # fallback for an older gateway: coins_left is whole coins, so it overstates the spend (2.32 -> 3)
+    spent = max(b.spent if b.spent is not None else limit - left, 0.0)
     out.update({
         "limit": int(round(limit)),
         "spent": round(spent, 2),
@@ -240,9 +244,12 @@ async def _gateway_coins(now: datetime, u: usage.MonthUsage) -> dict:
         "percent": round(spent / limit * 100, 1) if limit else None,
         "exhausted": left <= 0 or view.blocked is not None,
         "period_end": b.period_end,
+        "trial_end": b.trial_end,
     })
-    # forecast from the local pace of this month (the gateway has no history API)
-    end = _parse_time(b.period_end)
+    # forecast from the local pace of this month (the gateway has no history API), up to the period end or,
+    # for a Free test, the test end: whatever comes first
+    ends = [t for t in (_parse_time(b.period_end), _parse_time(b.trial_end)) if t is not None]
+    end = min(ends) if ends else None
     if end is not None and end > now:
         days_left = (end - now).total_seconds() / 86400
         out["projected_month"] = round(spent + u.avg_per_day * days_left, 2)

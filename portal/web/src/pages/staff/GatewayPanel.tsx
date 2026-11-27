@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { Copy, KeyRound } from 'lucide-react'
-import { api, coins, formatDate, formatDay, INVOICE_KIND, money, type ApplicationDetail, type KeyIssued } from '../../api'
+import { api, coins, formatDate, formatDay, INVOICE_KIND, money, spentCoins, type ApplicationDetail, type KeyIssued } from '../../api'
 import { Alert, Button, Field, Input } from '../../components/ui'
 
 /** A full virtual key, shown exactly once (local installs). */
@@ -81,7 +81,7 @@ export function GatewayPanel({ app, gatewayUrl, onChanged }: { app: ApplicationD
           </div>
           <div>
             <dt className="text-[12px] font-semibold text-ink-3">Потрачено</dt>
-            <dd className="tabular-nums text-ink">{coins(app.llm.spent)}</dd>
+            <dd className="tabular-nums text-ink">{spentCoins(app.llm.spent)}</dd>
           </div>
           <div>
             <dt className="text-[12px] font-semibold text-ink-3">Месячный / докуплено</dt>
@@ -90,8 +90,8 @@ export function GatewayPanel({ app, gatewayUrl, onChanged }: { app: ApplicationD
             </dd>
           </div>
           <div>
-            <dt className="text-[12px] font-semibold text-ink-3">Период до</dt>
-            <dd className="text-ink">{formatDay(app.llm.period_end)}</dd>
+            <dt className="text-[12px] font-semibold text-ink-3">{app.llm.trial_end ? 'Тест до' : 'Период до'}</dt>
+            <dd className="text-ink">{formatDay(app.llm.trial_end ?? app.llm.period_end)}</dd>
           </div>
         </dl>
       ) : (

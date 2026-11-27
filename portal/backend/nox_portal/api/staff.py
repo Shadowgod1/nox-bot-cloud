@@ -192,7 +192,8 @@ async def llm_balance(conn, account_id: int) -> LlmBalance:
     status = ("suspended" if bal.status not in wallet.LIVE_STATUSES else "active") if has_key else "revoked"
     return LlmBalance(coins_left=bal.coins_left, monthly_limit=bal.monthly_limit, monthly_coins=float(bal.monthly),
                       topup_coins=float(bal.carry + bal.topups), spent=float(bal.spent), period_start=bal.period_start,
-                      period_end=bal.period_end, status=status, dialogs_left=tariffs.dialogs(bal.coins_left))
+                      period_end=bal.period_end, status=status, dialogs_left=tariffs.dialogs(bal.coins_left),
+                      trial_end=bal.trial_end)
 
 
 @router.post("/api/staff/applications/{account_id}/approve", response_model=Ok, dependencies=staff_mutation)

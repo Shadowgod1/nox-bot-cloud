@@ -323,11 +323,27 @@ async def test_balance_endpoint(client, pool, upstream):
         assert body["period_end"].startswith("20")
         assert body["providers"] == [p for p in ("anthropic", "openai", "gemini")
                                      if getattr(get_settings(), f"upstream_{p}_key").strip()]
+        assert body["spent"] == 0 and body["trial_end"] is None
     await pool.execute("UPDATE accounts SET status = 'suspended'")
     assert (await client.get("/llm/v1/balance", headers={"x-api-key": key})).json()["status"] == "suspended"
     await pool.execute("UPDATE virtual_keys SET status = 'revoked'")
     assert (await client.get("/llm/v1/balance", headers={"x-api-key": key})).json()["status"] == "revoked"
     assert (await client.get("/llm/v1/balance")).status_code == 401
+
+
+async def test_balance_exact_spent_and_trial_end(client, pool, upstream):
+    """coins_left is whole coins (1 997), so the bot takes the exact spend (2.32) from "spent", not 2 000 - 1 997."""
+    aid, key = await make_account(pool, coins=2000, tariff="free")
+    await pool.execute("UPDATE accounts SET free_until = now() + interval '7 days' WHERE id = $1", aid)
+    await pool.execute("INSERT INTO llm_usage(account_id, provider, model, coins, request_id)"
+                       " VALUES ($1, 'anthropic', 'x', 2.318, 'r1')", aid)
+    body = (await client.get("/llm/v1/balance", headers={"x-api-key": key})).json()
+    assert body["coins_left"] == 1997 and body["spent"] == 2.32
+    free_until = await pool.fetchval("SELECT free_until FROM accounts WHERE id = $1", aid)
+    assert body["trial_end"] == free_until.isoformat() and body["trial_end"] < body["period_end"]
+    # a paid tariff has no test end even if free_until was left over
+    await pool.execute("UPDATE accounts SET tariff = 'start' WHERE id = $1", aid)
+    assert (await client.get("/llm/v1/balance", headers={"x-api-key": key})).json()["trial_end"] is None
 
 
 async def test_alerts_on_company_key_rejected(client, pool, upstream, monkeypatch, caplog):

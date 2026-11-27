@@ -70,12 +70,19 @@ export function coinsForecast(c: DashboardCoins): Forecast | null {
       ? { level: 'danger', text: 'Коины закончились. Бот отвечает клиентам сообщением-заглушкой и передаёт диалоги оператору, пока баланс не пополнят.' }
       : { level: 'danger', text: 'Лимит на этот месяц исчерпан. Бот передаёт новые сообщения оператору до начала следующего месяца.' }
   }
-  const pace = `При текущем расходе (~${formatNumber(c.avg_per_day)} в день)`
+  const pace = `При текущем расходе (~${formatCoins(c.avg_per_day)} в день)`
   if (c.runs_out_on) {
     const level: Level = daysUntil(c.runs_out_on) <= 3 ? 'danger' : 'warn'
     return { level, text: `${pace} коинов хватит до ${formatDayMonth(c.runs_out_on)}` }
   }
   const leftover = Math.max(0, c.limit - c.projected_month)
+  if (gateway && c.trial_end) {
+    // a Free test: the bot stops at the test end, so the forecast does not run to the period end
+    return {
+      level: 'ok',
+      text: `Тест закончится ${formatDayMonth(c.trial_end)}. ${pace} коинов хватит до конца теста, останется ~${formatNumber(leftover)}`,
+    }
+  }
   const until = gateway ? (c.period_end ? `до ${formatDayMonth(c.period_end)}` : 'до конца периода') : 'до конца месяца'
   return { level: 'ok', text: `${pace} коинов хватит ${until}, останется ~${formatNumber(leftover)}` }
 }
@@ -84,6 +91,19 @@ export function coinsForecast(c: DashboardCoins): Forecast | null {
 
 export function formatNumber(n: number): string {
   return Math.round(n).toLocaleString('ru-RU')
+}
+
+/**
+ * The one rounding rule for spent coins (overview card, "Что сделал бот", test chat; the client cabinet uses the
+ * same): under 100 up to two decimals, from 100 whole coins. 2.318 -> 2.32, 0.4 -> 0.4, 1234.6 -> 1235.
+ */
+export function roundCoins(n: number): number {
+  return Math.abs(n) < 100 ? Math.round(n * 100) / 100 : Math.round(n)
+}
+
+/** roundCoins as ru-RU text: 2.318 -> "2,32", 12401 -> "12 401". */
+export function formatCoins(n: number): string {
+  return roundCoins(n).toLocaleString('ru-RU')
 }
 
 /** 41.3 -> "41%", 0.5 -> "0,5%", 99.7 -> "99%" (never "100%" before the limit is actually used up). */

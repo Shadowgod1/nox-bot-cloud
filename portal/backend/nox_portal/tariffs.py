@@ -13,13 +13,14 @@ class Tariff:
     name: str
     price_kzt: int
     coins: int
+    # paid tariffs: who the tariff is for; the client-facing text gets "~N диалогов в день: " in front (describe())
     description: str
 
 
 TARIFFS: tuple[Tariff, ...] = (
-    Tariff("start", "Старт", 59990, 30000, "~50 диалогов в день: цены, график, адрес, запись"),
-    Tariff("business", "Бизнес", 89990, 60000, "~100 диалогов в день: салон, клиника, сервис с записью"),
-    Tariff("pro", "Про", 149990, 120000, "~200 диалогов в день: сеть филиалов, большой поток"),
+    Tariff("start", "Старт", 59990, 30000, "цены, график, адрес, запись"),
+    Tariff("business", "Бизнес", 89990, 60000, "салон, клиника, сервис с записью"),
+    Tariff("pro", "Про", 149990, 120000, "сеть филиалов, большой поток"),
 )
 
 # Free test tariff: no invoice, approved at once, one grant of coins for the trial (NOX_FREE_DAYS), no monthly
@@ -54,8 +55,19 @@ def dialogs(coins: float) -> int:
     return int(round(n / step) * step)
 
 
+DAYS_PER_MONTH = 30
+
+
+def describe(t: Tariff) -> str:
+    """Client-facing description: paid tariffs start with the dialogs per day the monthly coins pay for, from the
+    same NOX_COINS_PER_DIALOG as every other "≈ N диалогов" (30 000 coins at 5 per dialog: "~200 диалогов в день")."""
+    if t.code not in {x.code for x in TARIFFS}:
+        return t.description
+    return f"~{dialogs(t.coins / DAYS_PER_MONTH)} диалогов в день: {t.description}"
+
+
 def _out(t: Tariff) -> dict:
-    return {**asdict(t), "dialogs": dialogs(t.coins)}
+    return {**asdict(t), "description": describe(t), "dialogs": dialogs(t.coins)}
 
 
 def as_dicts(*, include_free: bool = False) -> list[dict]:

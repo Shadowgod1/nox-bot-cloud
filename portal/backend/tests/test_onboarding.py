@@ -46,15 +46,39 @@ async def test_tariffs_and_public_config_carry_dialogs(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "coins_per_dialog", 40)
     out = (await client.get("/api/tariffs")).json()
     assert [t["dialogs"] for t in out] == [750, 1500, 3000, 50]
+    # the "per day" in the description comes from the same setting: 30 000 / 30 days / 40 = 25, rounded as dialogs()
+    assert out[0]["description"] == "~20 диалогов в день: цены, график, адрес, запись"
+    assert out[-1]["description"] == "Пробный тариф для теста бота"
     cfg = (await client.get("/api/public-config")).json()
     assert cfg["coins_per_dialog"] == 40
 
 
+async def test_default_dialog_estimate_is_5_coins(client):
+    """Measured on Haiku with prompt caching: ~0.2-0.6 coin per reply. Prices and coin amounts stay as they are."""
+    assert get_settings().coins_per_dialog == 5
+    out = (await client.get("/api/tariffs")).json()
+    assert [(t["price_kzt"], t["coins"]) for t in out[:3]] == [(59990, 30000), (89990, 60000), (149990, 120000)]
+    assert [t["dialogs"] for t in out] == [6000, 12000, 24000, 400]
+    assert [t["description"] for t in out[:3]] == [
+        "~200 диалогов в день: цены, график, адрес, запись",
+        "~400 диалогов в день: салон, клиника, сервис с записью",
+        "~800 диалогов в день: сеть филиалов, большой поток",
+    ]
+    cfg = (await client.get("/api/public-config")).json()
+    assert cfg["coins_per_dialog"] == 5
+    assert cfg["topup"] == {"coins": 10000, "price_kzt": 9900}
+
+
 async def test_balance_shows_dialogs_left(client, other, pool, internal):
-    await _free_active(other, pool, internal)
+    aid = await _free_active(other, pool, internal)
     usage = (await other.get("/api/me/usage")).json()
     assert usage["balance"]["coins_left"] == 2000
-    assert usage["balance"]["dialogs_left"] == 100  # 2 000 coins at the default 20 per dialog
+    assert usage["balance"]["dialogs_left"] == 400  # 2 000 coins at the default 5 per dialog
+    # Free: the package lasts until the test ends, not until the period end
+    free_until = await pool.fetchval("SELECT free_until FROM accounts WHERE id = $1", aid)
+    assert free_until is not None
+    assert usage["balance"]["trial_end"].startswith(free_until.date().isoformat())
+    assert usage["balance"]["trial_end"] < usage["balance"]["period_end"]
 
 
 # ---- support contacts -----------------------------------------------------------------------

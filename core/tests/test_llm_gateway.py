@@ -3,7 +3,7 @@ providers talk to httpx / httpx2 MockTransports and the balance endpoint to an h
 
 import json
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import httpx2
@@ -406,6 +406,40 @@ async def test_dashboard_shows_gateway_balance_and_tolerates_errors(client, gw_m
     gateway.mark_blocked(gateway.INSUFFICIENT_COINS)
     coins = (await client.get("/api/dashboard")).json()["coins"]
     assert coins["exhausted"] is True and coins["remaining"] == 0 and coins["blocked"] == "insufficient_coins"
+
+
+async def test_dashboard_spent_comes_from_the_gateway_ledger(client, gw_mode):
+    """Balance 1 997 of 2 000 with 2.32 coins spent: the card says 2.32 (as the cabinet), not 2 000 - 1 997 = 3."""
+    r = await client.post("/api/setup/owner", json=OWNER, headers={"X-ILER-Setup-Token": "test-setup-token"})
+    assert r.status_code == 200
+    gw_mode.set(coins_left=1997, monthly_limit=2000, spent=2.32)
+    coins = (await client.get("/api/dashboard")).json()["coins"]
+    assert coins["spent"] == 2.32 and coins["remaining"] == 1997 and coins["percent"] == 0.1
+    # an older gateway without "spent": limit - coins_left as before
+    gw_mode.body.pop("spent")
+    expire_balance_cache()
+    assert (await client.get("/api/dashboard")).json()["coins"]["spent"] == 3
+
+
+async def test_dashboard_forecast_stops_at_the_trial_end(client, pool, gw_mode):
+    r = await client.post("/api/setup/owner", json=OWNER, headers={"X-ILER-Setup-Token": "test-setup-token"})
+    assert r.status_code == 200
+    await pool.execute("INSERT INTO ai_requests(provider, model, input_tokens, output_tokens)"
+                       " VALUES ('anthropic', 'claude-sonnet-5-5', 48000, 0)")  # 96 coins today: 96 a day
+    usage.invalidate()
+    now = datetime.now(UTC)
+    period_end = (now + timedelta(days=30)).isoformat()
+    trial_end = (now + timedelta(days=5)).isoformat()
+    # 1 000 left at 96 a day lasts ~10 days: before the period end, but after the test ends
+    gw_mode.set(coins_left=1000, monthly_limit=2000, spent=1000, period_end=period_end)
+    coins = (await client.get("/api/dashboard")).json()["coins"]
+    assert coins["trial_end"] is None and coins["runs_out_on"] is not None
+    gw_mode.set(trial_end=trial_end)
+    expire_balance_cache()
+    coins = (await client.get("/api/dashboard")).json()["coins"]
+    assert coins["trial_end"] == trial_end and coins["period_end"] == period_end
+    assert coins["runs_out_on"] is None, "the coins outlast the test: no 'runs out on' date after the test end"
+    assert abs(coins["projected_month"] - (1000 + 96 * 5)) < 1, "the forecast counts only the days of the test"
 
 
 async def test_dashboard_local_mode_has_no_gateway_fields(client, monkeypatch):

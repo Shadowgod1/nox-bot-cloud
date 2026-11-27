@@ -2,8 +2,10 @@ import { CircleAlert, CircleCheck, CloudOff, ExternalLink, TrendingUp } from 'lu
 import type { DashboardCoins } from '../../api/types'
 import { useBrand } from '../../brand'
 import { Badge, Panel, cx } from '../../components/ui'
-import { plural } from '../../i18n/ru'
-import { coinsForecast, coinsLevel, formatDayMonth, formatNumber, formatPercent, formatTime, modelLabel, type Level } from './health'
+import { coinsWord } from '../../components/PriceImport'
+import {
+  coinsForecast, coinsLevel, formatCoins, formatDayMonth, formatNumber, formatPercent, formatTime, modelLabel, roundCoins, type Level,
+} from './health'
 
 const barTone: Record<Level, string> = { ok: 'bg-accent', warn: 'bg-warn', danger: 'bg-danger' }
 const forecastTone: Record<Level, string> = {
@@ -13,7 +15,7 @@ const forecastTone: Record<Level, string> = {
 }
 const badgeTone = { ok: 'neutral', warn: 'warn', danger: 'danger' } as const
 
-const coinWord = (n: number) => plural(Math.round(n), ['коин', 'коина', 'коинов'])
+const coinWord = (n: number) => coinsWord(roundCoins(n))
 
 export function CoinsCard({ coins }: { coins: DashboardCoins }) {
   const hasLimit = coins.limit > 0
@@ -24,9 +26,11 @@ export function CoinsCard({ coins }: { coins: DashboardCoins }) {
   const brand = useBrand()
   const gateway = coins.source === 'gateway'
   const description = gateway
-    ? coins.period_end
-      ? `Баланс на период до ${formatDayMonth(coins.period_end)}.`
-      : 'Баланс коинов на текущий период.'
+    ? coins.trial_end
+      ? `Тестовый баланс, тест до ${formatDayMonth(coins.trial_end)}.`
+      : coins.period_end
+        ? `Баланс на период до ${formatDayMonth(coins.period_end)}.`
+        : 'Баланс коинов на текущий период.'
     : 'Расход на работу модели в этом месяце.'
 
   return (
@@ -88,14 +92,14 @@ export function CoinsCard({ coins }: { coins: DashboardCoins }) {
               />
             </div>
             <p className="tabular mt-1.5 text-[13px] text-ink-2">
-              израсходовано {formatNumber(coins.spent)} {coinWord(coins.spent)}
+              израсходовано {formatCoins(coins.spent)} {coinWord(coins.spent)}
             </p>
           </>
         ) : (
           <>
             <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5" data-testid="coins-spent">
               <span className="text-[13px] text-ink-2">израсходовано</span>
-              <span className="tabular text-[30px] font-semibold leading-none text-ink">{formatNumber(coins.spent)}</span>
+              <span className="tabular text-[30px] font-semibold leading-none text-ink">{formatCoins(coins.spent)}</span>
               <span className="text-sm text-ink-2">{coinWord(coins.spent)}</span>
             </p>
             {!gateway && <p className="mt-2 text-[13px] text-ink-3">Лимит не задан</p>}
@@ -155,12 +159,12 @@ function DailyChart({ coins }: { coins: DashboardCoins }) {
         <h3 className="text-[13px] font-medium text-ink">Расход по дням</h3>
         <span className="flex items-center gap-1.5 text-[12px] text-ink-2">
           <span aria-hidden className="inline-block w-3.5 border-t border-dashed border-ink-3" />
-          в среднем ~{formatNumber(coins.avg_per_day)} в день
+          в среднем ~{formatCoins(coins.avg_per_day)} в день
         </span>
       </div>
       <div
         role="img"
-        aria-label={`Расход коинов по дням: в среднем ${formatNumber(coins.avg_per_day)} в день, ${byDate.length} из ${slots} дней месяца`}
+        aria-label={`Расход коинов по дням: в среднем ${formatCoins(coins.avg_per_day)} в день, ${byDate.length} из ${slots} дней месяца`}
         className="relative h-24"
       >
         <div className="absolute inset-0 flex items-end gap-[2px]">
@@ -173,7 +177,7 @@ function DailyChart({ coins }: { coins: DashboardCoins }) {
             return (
               <div
                 key={day.date}
-                title={`${formatDayMonth(day.date)}: ${formatNumber(day.coins)} ${coinWord(day.coins)}`}
+                title={`${formatDayMonth(day.date)}: ${formatCoins(day.coins)} ${coinWord(day.coins)}`}
                 className={cx(
                   'min-w-0 flex-1 rounded-t-[2px]',
                   day.coins === 0 ? 'bg-line' : i === todayIdx ? 'bg-accent' : 'bg-accent/45',
@@ -221,7 +225,7 @@ function ByModel({ coins }: { coins: DashboardCoins }) {
                 <div className="flex items-baseline justify-between gap-3 text-[13px]">
                   <span className="min-w-0 truncate text-ink">{modelLabel(m.model)}</span>
                   <span className="tabular shrink-0 text-ink-2">
-                    {formatNumber(m.coins)} · {formatPercent(share)}
+                    {formatCoins(m.coins)} · {formatPercent(share)}
                   </span>
                 </div>
                 <div className="mt-1 h-1 overflow-hidden rounded-full bg-sunken">

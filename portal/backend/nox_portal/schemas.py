@@ -401,6 +401,8 @@ class LlmBalance(BaseModel):
     status: Literal["active", "suspended", "revoked"]
     # about how many client dialogs coins_left is enough for (tariffs.dialogs)
     dialogs_left: int = 0
+    # Free (test): the coins work until the trial ends, not until period_end
+    trial_end: datetime | None = None
 
 
 class UsageDay(BaseModel):

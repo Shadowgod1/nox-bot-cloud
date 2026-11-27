@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { Dashboard } from './Dashboard'
-import { formatAgo, formatDayMonth, formatPercent, formatSeconds } from './health'
+import { formatAgo, formatCoins, formatDayMonth, formatPercent, formatSeconds } from './health'
 import { FakeEventSource, mockApi } from '../../test/utils'
 import { __resetEventsForTests } from '../../hooks/useEvents'
 import type { Dashboard as DashboardData, DashboardCoins } from '../../api/types'
@@ -172,6 +172,31 @@ describe('Dashboard', () => {
     expect(screen.queryByTestId('coins-remaining')).not.toBeInTheDocument()
   })
 
+  it('a Free test: the exact spend, and the forecast stops at the test end, not the period end', async () => {
+    await renderWith(
+      dashboard({
+        coins: coins({
+          source: 'gateway',
+          limit: 2000,
+          spent: 2.32,
+          remaining: 1997,
+          percent: 0.1,
+          avg_per_day: 2.32,
+          projected_month: 34.8,
+          period_end: '2026-12-27T00:00:00+05:00',
+          trial_end: '2026-12-11T00:00:00+05:00',
+          stale: false,
+        }),
+      }),
+    )
+    expect(screen.getByText('Тестовый баланс, тест до 11 декабря.')).toBeInTheDocument()
+    expect(screen.queryByText(/27 декабря/)).not.toBeInTheDocument()
+    expect(screen.getByText(/израсходовано 2,32 коина/)).toBeInTheDocument()
+    expect(forecast()).toHaveTextContent(
+      /^Тест закончится 11 декабря\. При текущем расходе \(~2,32 в день\) коинов хватит до конца теста, останется ~1\s965$/,
+    )
+  })
+
   it('shows the gateway balance with the period end and a top-up link', async () => {
     await renderWith(
       dashboard({
@@ -266,6 +291,14 @@ describe('dashboard formatting', () => {
     expect(formatPercent(98.6)).toBe('99%')
     expect(formatPercent(41.3)).toBe('41%')
     expect(formatPercent(0.5)).toBe('0,5%')
+  })
+
+  it('rounds spent coins by one rule: two decimals under 100, whole coins from 100', () => {
+    expect(formatCoins(2.318)).toBe('2,32')
+    expect(formatCoins(0.4)).toBe('0,4')
+    expect(formatCoins(56.789)).toBe('56,79')
+    expect(formatCoins(1234.6)).toMatch(/^1\s235$/)
+    expect(formatCoins(3)).toBe('3')
   })
 
   it('formats dates and seconds', () => {

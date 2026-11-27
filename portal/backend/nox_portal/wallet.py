@@ -137,6 +137,8 @@ class Balance:
     topups: Decimal
     spent: Decimal
     reserved: Decimal
+    # Free (test) tariff: when the trial ends and the account is suspended (accounts.free_until); None otherwise
+    trial_end: datetime | None = None
 
     @property
     def total(self) -> Decimal:
@@ -157,6 +159,7 @@ class Balance:
 
 _BALANCE_SQL = f"""
 SELECT a.status, a.coins_limit, a.period_start, a.period_end, a.topup_carry,
+  CASE WHEN a.tariff = 'free' THEN a.free_until END AS trial_end,
   coalesce((SELECT sum(coins) FROM coin_grants g WHERE g.account_id = a.id AND g.kind = 'monthly'
             AND g.period_start = a.period_start), 0) AS monthly,
   coalesce((SELECT sum(coins) FROM coin_grants g WHERE g.account_id = a.id AND g.kind <> 'monthly'
@@ -172,7 +175,7 @@ FROM accounts a WHERE a.id = $1
 def _balance(row: asyncpg.Record) -> Balance:
     return Balance(status=row["status"], monthly_limit=row["coins_limit"] or 0, period_start=row["period_start"],
                    period_end=row["period_end"], monthly=row["monthly"], carry=row["topup_carry"],
-                   topups=row["topups"], spent=row["spent"], reserved=row["reserved"])
+                   topups=row["topups"], spent=row["spent"], reserved=row["reserved"], trial_end=row["trial_end"])
 
 
 async def balance(conn: asyncpg.Pool | asyncpg.Connection, account_id: int, *, lock: bool = False) -> Balance:

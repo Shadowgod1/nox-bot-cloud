@@ -6,6 +6,7 @@ import type { BotSettings, ChatTurn, TestChatResponse, TestMedia, ToolCallInfo }
 import { useLoad } from '../../hooks/useLoad'
 import { Button, EmptyState, cx } from '../../components/ui'
 import { coinsWord } from '../../components/PriceImport'
+import { formatCoins, roundCoins } from '../Dashboard/health'
 
 interface Entry extends ChatTurn {
   tool_calls?: ToolCallInfo[]
@@ -38,11 +39,6 @@ export function toTurn({ role, content, media, tool_calls }: Entry): ChatTurn {
     }))
   }
   return turn
-}
-
-export function formatCoins(n: number): string {
-  const v = n < 10 ? Math.round(n * 100) / 100 : Math.round(n * 10) / 10
-  return v.toLocaleString('ru-RU')
 }
 
 /**
@@ -103,7 +99,7 @@ export function TestChat({ embedded = false }: { embedded?: boolean }) {
   const spentLine =
     spent > 0 ? (
       <span className="tabular text-[12px] text-ink-3" data-testid="test-chat-spent">
-        Потрачено в тесте: {formatCoins(spent)} {coinsWord(spent)}
+        Потрачено в тесте: {formatCoins(spent)} {coinsWord(roundCoins(spent))}
       </span>
     ) : null
 
@@ -182,7 +178,7 @@ export function TestChat({ embedded = false }: { embedded?: boolean }) {
                     )}
                     {(e.coins ?? 0) > 0 && (
                       <span className="tabular">
-                        {formatCoins(e.coins!)} {coinsWord(e.coins!)}
+                        {formatCoins(e.coins!)} {coinsWord(roundCoins(e.coins!))}
                       </span>
                     )}
                   </p>
