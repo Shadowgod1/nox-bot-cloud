@@ -34,6 +34,9 @@
   /* Fills under white text (buttons, badges) and the operator chat bubble. In ILER they equal
      accent / danger / the original bubble colour; the Nox dark theme needs them separate. */
   --color-accent-solid: oklch(44% 0.075 190);
+  /* chart series (dataviz validator: CVD dE 28, contrast >= 3:1) */
+  --chart-1: #3f6ad8;
+  --chart-2: #c96f12;
   --color-danger-solid: oklch(52% 0.17 27);
   --color-operator: oklch(93% 0.03 250);
 
@@ -214,6 +217,8 @@ html[data-brand='nox'] {
 }
 
 html[data-brand='nox'][data-theme='dark'] {
+  --chart-1: #5a80e6;
+  --chart-2: #d17a1f;
   --color-canvas: #161618;
   --color-surface: #1e1e21;
   --color-sunken: #242428;

@@ -291,6 +291,34 @@ export interface PriceImportSupport {
 }
 
 /** GET /api/dashboard/roi?days=7|30. */
+/** GET /api/dashboard/activity: overview charts. */
+export interface ActivityDay {
+  date: string
+  conversations: number
+  client_messages: number
+  bot_replies: number
+  bookings: number
+  handovers: number
+}
+
+export interface ActivityTotals {
+  conversations: number
+  client_messages: number
+  bot_replies: number
+  bookings: number
+  handovers: number
+}
+
+export interface Activity {
+  days: number
+  since: string
+  series: ActivityDay[]
+  hours: number[]
+  totals: ActivityTotals
+  previous: ActivityTotals
+  median_reply_seconds: number | null
+}
+
 export interface RoiStats {
   days: 7 | 30
   since: string

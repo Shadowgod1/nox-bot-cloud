@@ -141,6 +141,10 @@
 ],
 [
 "get",
+"/api/dashboard/activity"
+],
+[
+"get",
 "/api/knowledge/import-prices"
 ],
 [

@@ -14,7 +14,7 @@
   html.setAttribute('data-brand', brand)
   if (brand === 'nox') {
     html.setAttribute('data-theme', theme)
-    document.title = 'Nox — админка'
+    document.title = 'Nox Bot'
     var icon = document.querySelector('link[rel="icon"]')
     if (icon) icon.setAttribute('href', '/favicon-nox.svg')
   }

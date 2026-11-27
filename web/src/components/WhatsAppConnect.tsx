@@ -131,7 +131,7 @@ export function WhatsAppConnect({ onConnected, intro = true }: { onConnected?: (
         </p>
       </div>
 
-      {status.last_error && <p className="text-[13px] text-danger">Последняя ошибка: {status.last_error}</p>}
+      {/* status.last_error is technical (Evolution / connection internals): support sees it in «Система», not the client */}
 
       {method === 'qr' ? (
         <div className="grid gap-5 @md:grid-cols-[220px_1fr] @md:items-start">

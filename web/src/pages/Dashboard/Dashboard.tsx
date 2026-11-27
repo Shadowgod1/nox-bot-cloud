@@ -8,12 +8,13 @@ import { useLoad } from '../../hooks/useLoad'
 import { useEvent } from '../../hooks/useEvents'
 import { PageBody } from '../../components/Layout'
 import { WhatsAppConnect } from '../../components/WhatsAppConnect'
-import { Badge, Button, ErrorState, PageHeader, Panel, Spinner, Switch } from '../../components/ui'
+import { Badge, Button, ErrorState, PageHeader, Panel, Spinner } from '../../components/ui'
 import { toast } from '../../components/toast'
 import { plural, ru } from '../../i18n/ru'
 import { StatusHero } from './StatusHero'
 import { CoinsCard } from './CoinsCard'
 import { RoiCard } from './RoiCard'
+import { ActivityCard } from './ActivityCard'
 import { coinsZeroText, deriveStatus } from './health'
 
 const waTone = { open: 'ok', connecting: 'warn', close: 'danger', degraded: 'danger' } as const
@@ -29,11 +30,7 @@ export function Dashboard() {
   const [toggling, setToggling] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
 
-  // The dashboard payload has no last_error; it comes with the live `whatsapp.status` event.
-  const [waError, setWaError] = useState<string | null>(null)
-
   useEvent('whatsapp.status', (wa) => {
-    setWaError(wa.last_error)
     setData((d) => (d ? { ...d, whatsapp: { status: wa.status, phone: wa.phone } } : d))
   })
 
@@ -69,7 +66,6 @@ export function Dashboard() {
     setLoggingOut(true)
     try {
       await api.post('/api/whatsapp/logout')
-      setWaError(null)
       setData((d) => (d ? { ...d, whatsapp: { status: 'close', phone: null } } : d))
     } catch {
       /* toast */
@@ -93,7 +89,7 @@ export function Dashboard() {
     <PageBody>
       <PageHeader
         title="Обзор"
-        description="Работает ли бот, сколько осталось коинов и что было сегодня."
+        description="Работает ли бот, как идут диалоги и сколько осталось коинов."
         actions={
           <Link
             to="/test-chat"
@@ -138,6 +134,7 @@ export function Dashboard() {
             ) : undefined
           }
         />
+        <ActivityCard />
         {/* wide screens: the two activity strips side by side */}
         <div className="grid gap-5 2xl:grid-cols-2">
           <RoiCard />
@@ -165,7 +162,7 @@ export function Dashboard() {
           <CoinsCard coins={data.coins} />
           <div className="space-y-5">
             <h2 className="mt-3 text-[13px] font-semibold uppercase tracking-[0.04em] text-ink-3 xl:sr-only">Система</h2>
-            <div className="grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] xl:grid-cols-1">
+            <div className="grid gap-5">
               <Panel
                 id="wa-panel"
                 title="WhatsApp"
@@ -187,7 +184,6 @@ export function Dashboard() {
                 ) : connecting ? (
                   <WhatsAppConnect
                     onConnected={(s: WhatsAppStatus) => {
-                      setWaError(null)
                       setData((d) => (d ? { ...d, whatsapp: { status: s.status, phone: s.phone } } : d))
                       setConnecting(false)
                       if (params.has('connect')) setParams({}, { replace: true })
@@ -199,7 +195,6 @@ export function Dashboard() {
                       {wa.status === 'degraded'
                         ? 'Сессия открыта, но отправка сообщений не проходит. Переподключите номер.'
                         : 'Номер не подключён. Клиенты пишут, но бот их не видит.'}
-                      {waError && <span className="mt-1 block text-[13px] text-danger">{waError}</span>}
                     </p>
                     <Button variant="primary" onClick={startConnect}>
                       Подключить WhatsApp
@@ -208,19 +203,6 @@ export function Dashboard() {
                 )}
               </Panel>
 
-              <Panel title="Бот">
-                <Switch
-                  checked={data.bot_enabled}
-                  disabled={toggling}
-                  onChange={toggleBot}
-                  label={data.bot_enabled ? 'Бот отвечает клиентам' : 'Бот выключен'}
-                  description={
-                    data.bot_enabled
-                      ? 'Выключите, если хотите отвечать только вручную.'
-                      : 'Входящие сохраняются в «Диалогах», отвечают только операторы.'
-                  }
-                />
-              </Panel>
             </div>
 
             <Panel

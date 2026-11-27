@@ -362,3 +362,129 @@ async def get_dashboard_roi(days: int = 7, _user: User = Depends(current_user)):
         "hours_source": "default" if bot.hours.always_open else "settings",
         "has_activity": row["has_activity"],
     }
+
+
+# --- activity charts ------------------------------------------------------------------------------
+
+
+class ActivityDay(BaseModel):
+    date: str  # YYYY-MM-DD in the install's time zone
+    conversations: int  # distinct conversations with a client message that day
+    client_messages: int
+    bot_replies: int
+    bookings: int
+    handovers: int
+
+
+class ActivityTotals(BaseModel):
+    conversations: int
+    client_messages: int
+    bot_replies: int
+    bookings: int
+    handovers: int
+
+
+class Activity(BaseModel):
+    days: int
+    since: str
+    series: list[ActivityDay]
+    hours: list[int]  # client messages by local hour 0..23 over the period
+    totals: ActivityTotals
+    previous: ActivityTotals  # the same number of days right before the period (for the trend)
+    median_reply_seconds: int | None  # client message -> next bot reply in the same conversation
+
+
+_TOTALS_SQL = """
+SELECT
+  (SELECT count(DISTINCT conversation_id) FROM messages
+     WHERE author = 'client' AND created_at >= $1 AND created_at < $2) AS conversations,
+  (SELECT count(*) FROM messages WHERE author = 'client' AND created_at >= $1 AND created_at < $2) AS client_messages,
+  (SELECT count(*) FROM messages WHERE author = 'bot' AND created_at >= $1 AND created_at < $2) AS bot_replies,
+  (SELECT count(*) FROM booking_requests WHERE created_at >= $1 AND created_at < $2) AS bookings,
+  (SELECT count(*) FROM conversations WHERE needs_operator_at >= $1 AND needs_operator_at < $2) AS handovers
+"""
+
+
+@router.get("/api/dashboard/activity", response_model=Activity)
+async def get_dashboard_activity(days: int = 14, _user: User = Depends(current_user)):
+    if days not in (7, 14, 30):
+        raise ApiError(422, "validation_error", "days: 7, 14 or 30")
+    tz_name = get_settings().tz
+    tz = ZoneInfo(tz_name)
+    today_start, _ = today_bounds(_now(), tz_name)
+    local_today = today_start.astimezone(tz).date()
+    first = local_today - timedelta(days=days - 1)
+    since = datetime(first.year, first.month, first.day, tzinfo=tz).astimezone(UTC)
+    until = since + timedelta(days=days)  # day boundaries in local time; DST-free zones (Asia/Almaty)
+    before = since - timedelta(days=days)
+    pool = get_pool()
+
+    rows = await pool.fetch(
+        """
+        WITH ev AS (
+          SELECT (created_at AT TIME ZONE $3)::date AS d, author, conversation_id, NULL::text AS kind
+            FROM messages WHERE created_at >= $1 AND created_at < $2 AND author IN ('client', 'bot')
+          UNION ALL
+          SELECT (created_at AT TIME ZONE $3)::date, NULL, NULL, 'booking'
+            FROM booking_requests WHERE created_at >= $1 AND created_at < $2
+          UNION ALL
+          SELECT (needs_operator_at AT TIME ZONE $3)::date, NULL, NULL, 'handover'
+            FROM conversations WHERE needs_operator_at >= $1 AND needs_operator_at < $2
+        )
+        SELECT d,
+          count(DISTINCT conversation_id) FILTER (WHERE author = 'client') AS conversations,
+          count(*) FILTER (WHERE author = 'client') AS client_messages,
+          count(*) FILTER (WHERE author = 'bot') AS bot_replies,
+          count(*) FILTER (WHERE kind = 'booking') AS bookings,
+          count(*) FILTER (WHERE kind = 'handover') AS handovers
+        FROM ev GROUP BY d
+        """,
+        since, until, tz_name,
+    )
+    by_day = {r["d"]: r for r in rows}
+    series = []
+    for i in range(days):
+        d = first + timedelta(days=i)
+        r = by_day.get(d)
+        series.append(ActivityDay(
+            date=d.isoformat(),
+            conversations=r["conversations"] if r else 0,
+            client_messages=r["client_messages"] if r else 0,
+            bot_replies=r["bot_replies"] if r else 0,
+            bookings=r["bookings"] if r else 0,
+            handovers=r["handovers"] if r else 0,
+        ))
+
+    hour_rows = await pool.fetch(
+        "SELECT extract(hour FROM created_at AT TIME ZONE $3)::int AS h, count(*) AS n FROM messages"
+        " WHERE author = 'client' AND created_at >= $1 AND created_at < $2 GROUP BY h",
+        since, until, tz_name,
+    )
+    hours = [0] * 24
+    for r in hour_rows:
+        hours[r["h"]] = r["n"]
+
+    median = await pool.fetchval(
+        """
+        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY gap) FROM (
+          SELECT extract(epoch FROM created_at - prev_at) AS gap FROM (
+            SELECT author, created_at,
+                   lag(author) OVER w AS prev_author, lag(created_at) OVER w AS prev_at
+            FROM messages WHERE created_at >= $1 AND created_at < $2 AND author IN ('client', 'bot')
+            WINDOW w AS (PARTITION BY conversation_id ORDER BY created_at, id)
+          ) x WHERE author = 'bot' AND prev_author = 'client'
+        ) g WHERE gap >= 0 AND gap < 3600
+        """,
+        since, until,
+    )
+    cur = await pool.fetchrow(_TOTALS_SQL, since, until)
+    prev = await pool.fetchrow(_TOTALS_SQL, before, since)
+    return Activity(
+        days=days,
+        since=first.isoformat(),
+        series=series,
+        hours=hours,
+        totals=ActivityTotals(**dict(cur)),
+        previous=ActivityTotals(**dict(prev)),
+        median_reply_seconds=round(median) if median is not None else None,
+    )

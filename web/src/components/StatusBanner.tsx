@@ -37,7 +37,6 @@ export function StatusBanner() {
       <span className="font-medium">
         {degraded ? 'WhatsApp подключён, но сообщения не отправляются.' : 'WhatsApp не подключён — бот не получает и не отправляет сообщения.'}
       </span>
-      {wa.last_error && <span className="text-ink-2">{wa.last_error}</span>}
       <Link to="/?connect=1" className="font-medium text-danger underline">
         Подключить заново
       </Link>

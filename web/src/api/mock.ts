@@ -715,6 +715,37 @@ function mockParse(text: string, source: string) {
   return { source, rows, warnings, coins: null }
 }
 
+/* ---------- overview charts ---------- */
+
+on('GET', '/api/dashboard/activity', (_m, _b, url) => {
+  const days = Number(url.searchParams.get('days')) || 14
+  const day = (i: number) => {
+    const d = new Date(now - (days - 1 - i) * 86_400_000)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  const wave = (i: number) => (s.fresh ? 0 : Math.round(18 + 9 * Math.sin(i / 1.6) + (i % 7 === 5 ? 12 : 0) + i * 0.6))
+  const series = Array.from({ length: days }, (_, i) => {
+    const client = wave(i)
+    return {
+      date: day(i),
+      conversations: Math.round(client / 3.2),
+      client_messages: client,
+      bot_replies: Math.round(client * 0.93),
+      bookings: Math.round(client / 9),
+      handovers: client ? Math.round(client / 30) : 0,
+    }
+  })
+  const sum = (k: 'conversations' | 'client_messages' | 'bot_replies' | 'bookings' | 'handovers') =>
+    series.reduce((a, d) => a + d[k], 0)
+  const totals = { conversations: sum('conversations'), client_messages: sum('client_messages'), bot_replies: sum('bot_replies'),
+    bookings: sum('bookings'), handovers: sum('handovers') }
+  const shape = [1, 0, 0, 0, 0, 0, 0, 1, 3, 6, 9, 11, 12, 10, 9, 10, 11, 13, 15, 16, 14, 9, 5, 2]
+  const total = totals.client_messages
+  const hours = shape.map((v) => Math.round((v / 158) * total))
+  const prev = Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, Math.round(v * 0.82)]))
+  return json({ days, since: day(0), series, hours, totals, previous: prev, median_reply_seconds: s.fresh ? null : 24 })
+})
+
 /* ---------- payback ---------- */
 
 on('GET', '/api/dashboard/roi', (_m, _b, url) => {

@@ -25,8 +25,8 @@ export interface BrandCopy {
 }
 
 export const BRANDS: Record<Brand, BrandCopy> = {
-  iler: { id: 'iler', name: 'ILER', company: 'ILER', title: 'ILER — админка', favicon: '/favicon.svg', themes: false },
-  nox: { id: 'nox', name: 'Nox', company: 'Nox service', title: 'Nox — админка', favicon: '/favicon-nox.svg', themes: true },
+  iler: { id: 'iler', name: 'ILER', company: 'ILER', title: 'ILER', favicon: '/favicon.svg', themes: false },
+  nox: { id: 'nox', name: 'Nox', company: 'Nox service', title: 'Nox Bot', favicon: '/favicon-nox.svg', themes: true },
 }
 
 // localStorage keys, shared with public/brand-init.js

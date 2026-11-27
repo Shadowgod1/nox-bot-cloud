@@ -46,13 +46,27 @@ export function Wordmark({ className }: { className?: string }) {
   const brand = useBrand()
   if (brand.id === 'nox') {
     return (
-      // the noxsw.kz / client portal wordmark: NOX SW in Neue Machina + a mono BOT tag
-      <span className={cx('inline-flex items-center gap-2 text-ink select-none', className)} aria-label={brand.name}>
-        <span aria-hidden className="font-['Neue_Machina',var(--font-sans)] leading-none font-extrabold tracking-[-0.02em] whitespace-nowrap">
-          NOX SW
-        </span>
-        <span aria-hidden className="border border-accent/45 bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] leading-none font-bold tracking-[0.1em] text-accent md:max-lg:hidden">
-          BOT
+      // a chat-bubble mark + NOX SW in Neue Machina (the noxsw.kz wordmark) + a solid BOT pill
+      <span className={cx('inline-flex items-center gap-2.5 text-ink select-none', className)} aria-label={`${brand.name} Bot`}>
+        <svg aria-hidden viewBox="0 0 32 32" className="size-8 shrink-0 drop-shadow-[0_1px_2px_rgba(41,85,200,0.35)]">
+          <defs>
+            <linearGradient id="nox-mark" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stopColor="#5b86f0" />
+              <stop offset="1" stopColor="#2955c8" />
+            </linearGradient>
+          </defs>
+          <rect width="32" height="32" rx="9" fill="url(#nox-mark)" />
+          <path d="M9 10.5h14a2.5 2.5 0 0 1 2.5 2.5v6a2.5 2.5 0 0 1-2.5 2.5h-7.2l-4.3 3.2v-3.2H9A2.5 2.5 0 0 1 6.5 19v-6A2.5 2.5 0 0 1 9 10.5Z" fill="#fff" />
+          <circle cx="12.5" cy="16" r="1.6" fill="#2955c8" />
+          <circle cx="19.5" cy="16" r="1.6" fill="#2955c8" />
+        </svg>
+        <span className="inline-flex items-center gap-1.5 md:max-lg:hidden">
+          <span aria-hidden className="font-['Neue_Machina',var(--font-sans)] text-[1em] leading-none font-extrabold tracking-[-0.01em] whitespace-nowrap">
+            NOX SW
+          </span>
+          <span aria-hidden className="rounded-full bg-accent px-2 py-[3px] text-[10px] leading-none font-extrabold tracking-[0.12em] text-white">
+            BOT
+          </span>
         </span>
       </span>
     )
@@ -122,7 +136,6 @@ export function Layout() {
       >
         <div className="flex h-14 shrink-0 items-center px-5 md:max-lg:justify-center md:max-lg:px-0">
           <Wordmark className="text-[17px] md:max-lg:text-[13px] md:max-lg:tracking-[0.08em]" />
-          <span className="ml-2 text-[12px] text-ink-3 md:max-lg:hidden">админка</span>
           <button
             type="button"
             onClick={() => setNavOpen(false)}

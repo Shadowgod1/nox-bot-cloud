@@ -49,7 +49,7 @@ describe('brand copy', () => {
     renderLogin()
     expect(screen.getByRole('heading', { name: 'Вход в ILER' })).toBeInTheDocument()
     expect(screen.getByLabelText('ILER')).toBeInTheDocument()
-    expect(document.title).toBe('ILER — админка')
+    expect(document.title).toBe('ILER')
     expect(html.getAttribute('data-brand')).toBe('iler')
     expect(html.hasAttribute('data-theme')).toBe(false)
   })
@@ -58,9 +58,9 @@ describe('brand copy', () => {
     setBrand('nox')
     renderLogin()
     expect(screen.getByRole('heading', { name: 'Вход в Nox' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Nox')).toBeInTheDocument()
+    expect(screen.getByLabelText('Nox Bot')).toBeInTheDocument()
     expect(screen.queryByText(/ILER/)).not.toBeInTheDocument()
-    expect(document.title).toBe('Nox — админка')
+    expect(document.title).toBe('Nox Bot')
     expect(html.getAttribute('data-brand')).toBe('nox')
     expect(html.getAttribute('data-theme')).toBe('light')
     expect(window.localStorage.getItem(BRAND_KEY)).toBe('nox')
@@ -88,7 +88,7 @@ describe('brand copy', () => {
       </MemoryRouter>,
     )
     expect(await screen.findByRole('heading', { name: 'Вход в Nox' })).toBeInTheDocument()
-    expect(document.title).toBe('Nox — админка')
+    expect(document.title).toBe('Nox Bot')
   })
 
   it('keeps the cached brand when the server has no /api/brand (older core)', async () => {
@@ -119,7 +119,7 @@ describe('brand copy', () => {
     setBrand('nox')
     renderLayout()
     expect(await screen.findByText('Owner')).toBeInTheDocument()
-    expect(screen.getByLabelText('Nox')).toBeInTheDocument()
+    expect(screen.getByLabelText('Nox Bot')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Тёмная тема' })).toBeInTheDocument()
   })
 })
