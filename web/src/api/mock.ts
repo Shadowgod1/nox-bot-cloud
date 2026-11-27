@@ -928,10 +928,10 @@ export async function mockFetch(input: string, init: RequestInit = {}): Promise<
   const method = (init.method ?? 'GET').toUpperCase()
   await sleep(150 + Math.random() * 200)
   // Like core: before setup there are no users, hence no session — everything else is 401.
-  if ((s.needsSetup || !s.loggedIn) && !PUBLIC.includes(url.pathname)) return fail(401, 'unauthorized', 'Not signed in')
+  if ((s.needsSetup || !s.loggedIn) && !PUBLIC.includes(url.pathname)) return fail(401, 'unauthorized', 'Войдите в панель, чтобы продолжить')
   const csrfExempt = ['/api/setup/owner', '/api/auth/login', '/api/auth/logout']
   if (method !== 'GET' && !new Headers(init.headers).get('X-ILER-CSRF') && !csrfExempt.includes(url.pathname)) {
-    return fail(403, 'csrf_failed', 'CSRF token missing or invalid')
+    return fail(403, 'csrf_failed', 'Сессия устарела, обновите страницу')
   }
   for (const [m, re, h] of routes) {
     if (m !== method) continue

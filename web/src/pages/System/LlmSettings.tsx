@@ -17,10 +17,13 @@ const TITLE = 'Языковая модель'
 
 /** Keep the selected providers within those the vendor (ILER / Nox) has keys for. */
 function toForm(s: LlmSettings, available: LlmProvider[]): LlmSettings {
+  const provider = available.includes(s.provider) ? s.provider : (available[0] ?? s.provider)
   return {
     ...s,
-    provider: available.includes(s.provider) ? s.provider : (available[0] ?? s.provider),
-    emergency_provider: s.emergency_provider && available.includes(s.emergency_provider) ? s.emergency_provider : null,
+    provider,
+    // the fallback is another available provider: the main one as its own fallback does nothing
+    emergency_provider:
+      s.emergency_provider && s.emergency_provider !== provider && available.includes(s.emergency_provider) ? s.emergency_provider : null,
     anthropic_model: s.anthropic_model ?? ANTHROPIC_DEFAULT_MODEL,
     anthropic_effort: s.anthropic_effort ?? 'low',
   }
@@ -140,11 +143,13 @@ export function LlmSettingsPanel() {
     </button>
   )
 
-  const options = available.map((p) => (
+  const option = (p: LlmProvider) => (
     <option key={p} value={p}>
       {PROVIDER_LABEL[p]}
     </option>
-  ))
+  )
+  const options = available.map(option)
+  const fallbacks = available.filter((p) => p !== form.provider)
 
   return (
     <Panel title={TITLE} description={DESCRIPTION}>
@@ -160,20 +165,25 @@ export function LlmSettingsPanel() {
             <Select
               value={form.provider}
               onChange={(e) => {
-                set('provider', e.target.value as LlmProvider)
+                const provider = e.target.value as LlmProvider
+                setForm((f) => (f ? { ...f, provider, emergency_provider: f.emergency_provider === provider ? null : f.emergency_provider } : f))
                 setCheck(null) // the last check was for the previous provider
               }}
             >
               {options}
             </Select>
           </Field>
-          <Field label="Аварийный провайдер" hint="Используется, если основной недоступен.">
+          <Field
+            label="Аварийный провайдер"
+            hint={fallbacks.length ? 'Используется, если основной недоступен.' : 'Других провайдеров сейчас нет, подменить основной некем.'}
+          >
             <Select
               value={form.emergency_provider ?? ''}
+              disabled={fallbacks.length === 0}
               onChange={(e) => set('emergency_provider', (e.target.value || null) as LlmProvider | null)}
             >
               <option value="">Не использовать</option>
-              {options}
+              {fallbacks.map(option)}
             </Select>
           </Field>
         </div>

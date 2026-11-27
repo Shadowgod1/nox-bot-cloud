@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { BOT } from '../test/fixtures'
 import { callsTo, jsonResponse, mockApi } from '../test/utils'
 import type { BotSettings, NotifySettings, WhatsAppStatus } from '../api/types'
-import { ReplyRulesFields, applySchedule, scheduleOf } from './ReplyRules'
+import { ReplyRulesFields, applySchedule, pauseLabel, scheduleOf } from './ReplyRules'
 import { PhoneListInput, maskPhoneInput, parsePhoneList, phoneDigits } from './PhoneListInput'
 import { BotPausedBanner, BotPauseSwitch, useBotPause } from './BotPause'
 import { WhatsAppConnect } from './WhatsAppConnect'
@@ -83,6 +83,16 @@ describe('reply rules', () => {
     expect(screen.getByLabelText('Часовой пояс')).toHaveValue('Asia/Almaty')
     await user.selectOptions(screen.getByLabelText('Бот молчит после ответа человека'), '720')
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ handover_pause_minutes: 720, work_hours_mode: 'silent' }))
+  })
+})
+
+describe('handover pause labels', () => {
+  it('uses the right Russian plural', () => {
+    expect([60, 120, 240, 480, 720, 1440, 2880, 4320].map(pauseLabel)).toEqual([
+      '1 час', '2 часа', '4 часа', '8 часов', '12 часов', 'сутки', '48 часов', '72 часа',
+    ])
+    expect(pauseLabel(90)).toBe('90 мин')
+    expect(pauseLabel(21 * 60)).toBe('21 час')
   })
 })
 

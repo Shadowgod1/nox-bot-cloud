@@ -96,6 +96,15 @@ async def test_login_wrong_password_401_and_me_requires_auth(client):
     assert (await client.get("/api/auth/me")).status_code == 401
 
 
+async def test_auth_and_bad_json_errors_are_in_russian(client):
+    r = await client.get("/api/auth/me")
+    assert r.status_code == 401 and r.json()["error"] == {"code": "unauthorized",
+                                                          "message": "Войдите в панель, чтобы продолжить"}
+    r = await client.post("/api/auth/login", content=b"{not json", headers={"Content-Type": "application/json"})
+    assert r.status_code == 422 and r.json()["error"] == {"code": "validation_error",
+                                                          "message": "Неверный формат запроса"}
+
+
 async def test_lockout_after_10_failures(client, pool):
     await setup_owner(client)
     client.cookies.clear()
