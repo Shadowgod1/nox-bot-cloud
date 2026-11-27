@@ -16,7 +16,6 @@ import type {
   Message,
   NotifySettings,
   RestoreResult,
-  SenetSettings,
   TemplateField,
   TemplateMeta,
   UpdateStatus,
@@ -51,7 +50,6 @@ interface State {
   /** Providers with an ILER (vendor) key: configured by a technician on the server, never in the UI. */
   vendorProviders: LlmProvider[]
   notify: NotifySettings & { _smtpPass: string | null }
-  senet: SenetSettings & { _key: string | null }
   backups: BackupInfo[]
   update: UpdateStatus
   updateTicks: number
@@ -137,7 +135,6 @@ const s: State = {
   llm: { provider: 'openai', openai_model: 'gpt-5.4-mini', openai_fallback_model: null, gemini_model: 'gemini-3.8-flash', anthropic_model: 'claude-sonnet-5-5', anthropic_effort: 'low', emergency_provider: null },
   vendorProviders: ['anthropic', 'openai'],
   notify: { admin_phones: ['77015550000'], admin_group_jid: null, smtp: null, _smtpPass: null, telegram_bot_token: null, telegram_chat_ids: [], admin_url: '' },
-  senet: { enabled: false, orgname: null, app_key: null, _key: null },
   backups: [
     { name: 'iler-backup-20261111-040000.tar.gz', size: 18_734_112, created_at: ago(60 * 8), sha256: 'a1b2c3d4' },
     { name: 'iler-backup-20261110-040000.tar.gz', size: 18_102_877, created_at: ago(60 * 32), sha256: 'c3d4e5f6' },
@@ -194,7 +191,6 @@ const notifyOut = (): NotifySettings => ({
   smtp: s.notify.smtp ? { ...s.notify.smtp, password: mask(s.notify._smtpPass) } : null,
   telegram_bot_token: s.notify.telegram_bot_token ? MASK : null, // write-only, like core
 })
-const senetOut = (): SenetSettings => ({ ...strip(s.senet), app_key: mask(s.senet._key) })
 
 function strip<T extends object>(o: T): T {
   const c = { ...o } as Record<string, unknown>
@@ -588,22 +584,6 @@ on('POST', '/api/settings/notify/test', async () => {
     telegram: tg ? { ok: true, sent: s.notify.telegram_chat_ids.length, error: null } : null,
   })
 })
-on('GET', '/api/integrations/senet', () => json(senetOut()))
-on('PUT', '/api/integrations/senet', (_m, b) => {
-  const key = b.app_key
-  if (typeof key === 'string' && !key.startsWith(MASK)) s.senet._key = key.trim() || null
-  s.senet.enabled = Boolean(b.enabled)
-  s.senet.orgname = typeof b.orgname === 'string' && b.orgname.trim() ? b.orgname.trim().toLowerCase() : null
-  return json(senetOut())
-})
-on('POST', '/api/integrations/senet/test', async (_m, b) => {
-  await sleep(600)
-  const org = (typeof b.orgname === 'string' && b.orgname) || s.senet.orgname
-  const key = typeof b.app_key === 'string' && b.app_key && !b.app_key.startsWith(MASK) ? b.app_key : s.senet._key
-  if (!org || !key) return json({ ok: false, error: 'not_configured' })
-  return json({ ok: true, count: 42 })
-})
-
 /* ---------- test chat ---------- */
 
 const usage = (coins: number) => {
@@ -754,7 +734,7 @@ const TEMPLATES: (TemplateMeta & { prompt: string })[] = [
   {
     id: 'computer_club',
     name: 'Компьютерный клуб',
-    description: 'Зоны, железо и цены, заявки на бронь, свободные места (если подключён SENET).',
+    description: 'Зоны, железо и цены, заявки на бронь; свободные места подтверждает администратор.',
     fields: [...COMMON_HEAD, f('zones', 'Зоны и железо', 'textarea', true, 'Общий зал — 20 ПК, RTX 4060'), f('prices', 'Тарифы и пакеты', 'textarea', true, 'Общий зал — 800 ₸/час'), f('rules', 'Правила клуба', 'textarea', false), f('payment', 'Способы оплаты', 'text', false), EXTRA],
     defaults: { name: 'Администратор клуба', greeting: 'Привет! Я администратор клуба 🎮' },
     prompt: 'Ты — администратор компьютерного клуба «{{business_name}}» в WhatsApp.\n\nАдрес: {{address}}\nЧасы работы: {{hours}}\n{{#phone}}Телефон: {{phone}}{{/phone}}\n\nЗоны и железо:\n{{zones}}\n\nТарифы:\n{{prices}}\n{{#rules}}\nПравила:\n{{rules}}\n{{/rules}}{{#payment}}\nОплата: {{payment}}\n{{/payment}}{{#extra}}\nДополнительно:\n{{extra}}{{/extra}}\n\nБронь — только через create_booking_request; сложные вопросы — handover_to_operator.',

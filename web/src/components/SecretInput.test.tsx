@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { SecretInput, secretPayload, secretState } from './SecretInput'
 import type { SecretValue } from '../api/types'
 
-// The settings forms that hold secrets (SENET, SMTP) share SecretInput.
+// The settings forms that hold secrets (e.g. the SMTP password) share SecretInput.
 function Harness({ original }: { original: SecretValue }) {
   const [value, setValue] = useState(() => secretState(original))
   return (

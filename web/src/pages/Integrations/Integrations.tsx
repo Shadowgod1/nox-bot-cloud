@@ -1,12 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Zap } from 'lucide-react'
 import { api } from '../../api/client'
-import type { NotifySettings, SenetSettings, SenetTestRequest, SenetTestResult, SmtpSettings } from '../../api/types'
-import { useAuth } from '../../hooks/useAuth'
+import type { NotifySettings, SmtpSettings } from '../../api/types'
 import { useLoad } from '../../hooks/useLoad'
 import { PageBody } from '../../components/Layout'
 import { SecretInput, secretPayload, secretState, type SecretState } from '../../components/SecretInput'
-import { Button, CheckLine, type CheckView, ErrorState, Field, Input, PageHeader, Panel, Spinner, Switch } from '../../components/ui'
+import { Button, ErrorState, Field, Input, PageHeader, Panel, Spinner, Switch } from '../../components/ui'
 import { toast } from '../../components/toast'
 import { LeadNotifications } from '../../components/LeadNotifications'
 import { ru } from '../../i18n/ru'
@@ -14,128 +12,22 @@ import { ru } from '../../i18n/ru'
 export function Integrations() {
   return (
     <PageBody>
-      <PageHeader title="Интеграции" description="Подключение клубной системы и куда присылать уведомления администратору." />
-      {/* 2xl+: two columns: SENET and extra channels on the left, lead notifications on the right */}
+      <PageHeader title="Интеграции" description="Куда присылать уведомления администратору." />
+      {/* 2xl+: two columns: extra channels on the left, lead notifications on the right */}
       <div className="grid items-start gap-5 2xl:grid-cols-2">
-        <div className="min-w-0 2xl:col-start-1 2xl:row-start-1">
-          <SenetPanel />
-        </div>
         <Panel
           id="leads"
           title="Уведомления о заявках"
           description="Куда бот присылает новые заявки и просьбы позвать человека."
-          className="min-w-0 2xl:col-start-2 2xl:row-span-2 2xl:row-start-1"
+          className="min-w-0 2xl:col-start-2 2xl:row-start-1"
         >
           <LeadNotifications />
         </Panel>
-        <div className="min-w-0 2xl:col-start-1 2xl:row-start-2">
+        <div className="min-w-0 2xl:col-start-1 2xl:row-start-1">
           <NotifyPanel />
         </div>
       </div>
     </PageBody>
-  )
-}
-
-/* ---------- SENET ---------- */
-
-interface SenetForm {
-  enabled: boolean
-  orgname: string
-  app_key: SecretState
-}
-
-const NOT_CONFIGURED = 'укажите имя организации и ключ приложения'
-
-const toSenetForm =(s: SenetSettings): SenetForm => ({ enabled: s.enabled, orgname: s.orgname ?? '', app_key: secretState(s.app_key) })
-
-function SenetPanel() {
-  const { data, error, loading, reload } = useLoad(() => api.get<SenetSettings>('/api/integrations/senet', { silent: true }))
-  const [form, setForm] = useState<SenetForm | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [testing, setTesting] = useState(false)
-  const [check, setCheck] = useState<CheckView | null>(null)
-  const { isOwner } = useAuth()
-
-  useEffect(() => {
-    if (data) setForm(toSenetForm(data))
-  }, [data])
-
-  const title = 'SENET'
-  const description = 'Бот узнаёт свободные компьютеры по зонам. Бронирование в SENET пока не выполняется — бот создаёт заявку для администратора.'
-  if (loading && !form) return <Panel title={title} description={description}><Spinner /></Panel>
-  if (error && !form) return <Panel title={title} description={description}><ErrorState message={error.message} onRetry={reload} /></Panel>
-  if (!form) return null
-
-  async function save(): Promise<boolean> {
-    if (!form) return false
-    setSaving(true)
-    try {
-      const payload: SenetSettings = { enabled: form.enabled, orgname: form.orgname.trim() || null, app_key: secretPayload(form.app_key) }
-      const saved = await api.put<SenetSettings>('/api/integrations/senet', payload)
-      setForm(toSenetForm(saved ?? payload))
-      toast.success(ru.common.saved)
-      return true
-    } catch {
-      return false
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function test() {
-    if (!form) return
-    setCheck(null)
-    const key = secretPayload(form.app_key)
-    if (!form.orgname.trim() || !key) {
-      setCheck({ ok: false, message: NOT_CONFIGURED })
-      return
-    }
-    setTesting(true)
-    try {
-      // Core tests the unsaved values (a masked key falls back to the stored one); nothing is saved.
-      const body: SenetTestRequest = { orgname: form.orgname.trim(), app_key: key }
-      const r = await api.post<SenetTestResult>('/api/integrations/senet/test', body)
-      setCheck(
-        r.ok
-          ? { ok: true, message: r.count !== undefined ? `компьютеров в SENET: ${r.count}` : undefined }
-          : { ok: false, message: r.error === 'not_configured' ? NOT_CONFIGURED : r.error },
-      )
-    } catch {
-      /* toast */
-    } finally {
-      setTesting(false)
-    }
-  }
-
-  const org = form.orgname.trim()
-  return (
-    <Panel title={title} description={description}>
-      <form
-        className="grid gap-5"
-        onSubmit={(e) => {
-          e.preventDefault()
-          void save()
-        }}
-      >
-        <Switch checked={form.enabled} onChange={(v) => setForm({ ...form, enabled: v })} label="Использовать SENET" description="Без ключа интеграция не работает, даже если включена." />
-        <div className="grid gap-5 md:grid-cols-2">
-          <Field label="Имя организации" hint={org ? `Адрес API: https://${org}.api.enes.tech/` : 'Часть адреса до .api.enes.tech'}>
-            <Input value={form.orgname} onChange={(e) => setForm({ ...form, orgname: e.target.value.replace(/\s/g, '') })} spellCheck={false} autoComplete="off" placeholder="myclub" />
-          </Field>
-          <SecretInput label="Ключ приложения" value={form.app_key} onChange={(v) => setForm({ ...form, app_key: v })} />
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" variant="primary" loading={saving && !testing} disabled={!isOwner}>
-            {ru.common.save}
-          </Button>
-          <Button onClick={test} loading={testing} disabled={!isOwner} icon={<Zap className="size-4" aria-hidden />}>
-            Проверить подключение
-          </Button>
-          {!isOwner && <span className="text-[13px] text-ink-3">Изменять и проверять SENET может только владелец.</span>}
-          <CheckLine result={check} />
-        </div>
-      </form>
-    </Panel>
   )
 }
 

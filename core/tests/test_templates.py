@@ -53,8 +53,10 @@ def test_optional_fields_leave_no_dangling_labels(tid):
     assert "Дополнительно:" not in out and " ;" not in out
 
 
-def test_computer_club_mentions_senet():
-    assert "senet_free_workstations" in templates_loader.load("computer_club").prompt
+def test_computer_club_books_via_request_without_seat_lookup():
+    t = templates_loader.load("computer_club")
+    assert "create_booking_request" in t.prompt and "администратор подтвердит наличие" in t.prompt
+    assert "free_workstations" not in t.prompt and "свободным местам" not in t.defaults.get("greeting", "")
 
 
 def test_clinic_never_gives_medical_advice():

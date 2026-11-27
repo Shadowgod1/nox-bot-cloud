@@ -8,7 +8,7 @@ from pydantic import BaseModel, SecretStr
 
 from iler import crypto
 from iler.db.pool import get_pool
-from iler.settings_models import AllSettings, BotSettings, LlmSettings, NotifySettings, SenetSettings
+from iler.settings_models import AllSettings, BotSettings, LlmSettings, NotifySettings
 
 T = TypeVar("T", bound=BaseModel)
 ENC = "__enc__"
@@ -86,5 +86,4 @@ async def load_all() -> AllSettings:
         bot=await get("bot", BotSettings),
         llm=await get("llm", LlmSettings),
         notify=await get("notify", NotifySettings),
-        senet=await get("senet", SenetSettings),
     )

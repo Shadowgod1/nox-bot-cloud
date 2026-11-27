@@ -263,17 +263,12 @@ class NotifySettings(BaseModel):
         return v
 
 
-class SenetSettings(BaseModel):
-    enabled: bool = False
-    orgname: str | None = None
-    app_key: SecretStr | None = None
-
-
+# Stored settings rows with other keys (e.g. the removed "senet" section of older installs) are
+# never read: load_all() fetches only these sections by name.
 SETTINGS_KEYS: dict[str, type[BaseModel]] = {
     "bot": BotSettings,
     "llm": LlmSettings,
     "notify": NotifySettings,
-    "senet": SenetSettings,
 }
 
 
@@ -282,4 +277,3 @@ class AllSettings:
     bot: BotSettings
     llm: LlmSettings
     notify: NotifySettings
-    senet: SenetSettings

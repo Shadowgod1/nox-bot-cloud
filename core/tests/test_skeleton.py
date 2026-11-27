@@ -6,7 +6,7 @@ from pydantic import SecretStr
 
 from iler import crypto, settings_store
 from iler.db import migrate
-from iler.settings_models import LlmSettings, SenetSettings
+from iler.settings_models import LlmSettings, NotifySettings
 from iler.tools import registry
 
 SPEC_TABLES = {
@@ -35,11 +35,21 @@ def test_crypto_roundtrip():
 
 
 async def test_settings_secret_encrypted_at_rest(pool):
-    await settings_store.put("senet", SenetSettings(app_key=SecretStr("sk-test-123")))
-    raw = await pool.fetchval("SELECT value::text FROM settings WHERE key='senet'")
+    await settings_store.put("notify", NotifySettings(telegram_bot_token=SecretStr("sk-test-123")))
+    raw = await pool.fetchval("SELECT value::text FROM settings WHERE key='notify'")
     assert "sk-test-123" not in raw
-    loaded = await settings_store.get("senet", SenetSettings)
-    assert loaded.app_key.get_secret_value() == "sk-test-123"
+    loaded = await settings_store.get("notify", NotifySettings)
+    assert loaded.telegram_bot_token.get_secret_value() == "sk-test-123"
+
+
+async def test_legacy_settings_rows_are_ignored(pool):
+    """Older installs may still hold a row for a removed section (the dropped workstation integration
+    stored one under "senet"); loading settings must not trip over it."""
+    payload = {"enabled": True, "orgname": "club", "app_key": {settings_store.ENC: crypto.encrypt("x" * 12)}}
+    await pool.execute("INSERT INTO settings(key, value) VALUES ('senet', $1)", payload)
+    loaded = await settings_store.load_all()
+    assert not hasattr(loaded, "senet")
+    assert loaded.llm == LlmSettings()
 
 
 async def test_settings_default_when_missing(pool):
@@ -70,11 +80,13 @@ async def test_secret_with_foreign_key_is_treated_as_unset(pool, monkeypatch, ca
 
     from iler.config import get_settings
 
-    await settings_store.put("senet", SenetSettings(app_key=SecretStr("sk-test-123"), orgname="club"))
+    await settings_store.put(
+        "notify", NotifySettings(telegram_bot_token=SecretStr("sk-test-123"), admin_url="https://bot.example")
+    )
     monkeypatch.setattr(get_settings(), "secret_key", base64.b64encode(b"z" * 32).decode())
     with caplog.at_level("ERROR"):
-        loaded = await settings_store.get("senet", SenetSettings)
-    assert loaded.app_key is None and loaded.orgname == "club"
+        loaded = await settings_store.get("notify", NotifySettings)
+    assert loaded.telegram_bot_token is None and loaded.admin_url == "https://bot.example"
     assert "secret key mismatch" in caplog.text
 
 

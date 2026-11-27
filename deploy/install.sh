@@ -74,7 +74,7 @@ Usage: sudo bash install.sh [options]
                       a re-install without --brand keeps the value in .env
   --restore FILE      restore a backup archive after installing (databases + WhatsApp session)
   --env FILE          with --restore: take ILER_SECRET_KEY from the ORIGINAL server's .env, so
-                      stored secrets (SMTP password, SENET key) can be decrypted;
+                      stored secrets (SMTP password, Telegram bot token) can be decrypted;
                       LLM keys live only in .env: run set-llm-keys.sh again after a restore
   --uninstall         stop and remove the stack (volumes and backups are kept)
   --purge             with --uninstall: also delete volumes, backups and the install directory
@@ -475,7 +475,7 @@ restore_backup() {
   if [[ -z "$ENV_IMPORT" ]]; then
     printf '%s\n' \
       "${C_RED}${C_BOLD}!!! IMPORTANT !!!${C_RESET}" \
-      "  Stored secrets (LLM API keys, SMTP password, Senet key) are encrypted with ILER_SECRET_KEY" \
+      "  Stored secrets (LLM API keys, SMTP password, Telegram bot token) are encrypted with ILER_SECRET_KEY" \
       "  from the ORIGINAL server's $ILER_DIR_PATH/.env. Without it they cannot be decrypted and must be" \
       "  re-entered in the admin UI. To keep them, re-run with: --restore $RESTORE_FILE --env /path/to/original/.env" >&2
     sleep 5
